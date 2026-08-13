@@ -231,4 +231,28 @@ public struct WorkspaceSnapshot: Codable, Equatable, Sendable {
         self.topology = topology
         self.generation = generation
     }
+
+    /// Replaces one Mac's current displays and removes topology links that can
+    /// no longer be attributed safely. This deliberately drops a legacy link
+    /// when its display ID was also used by another Mac.
+    public mutating func updateDevice(_ device: DeviceDescriptor) {
+        guard let index = devices.firstIndex(where: { $0.id == device.id }) else {
+            devices.append(device)
+            return
+        }
+
+        let retiredDisplayIDs = Set(devices[index].displays.map(\.id))
+            .subtracting(device.displays.map(\.id))
+        topology.links.removeAll {
+            retiredDisplayIDs.contains($0.source.displayID)
+                || retiredDisplayIDs.contains($0.destination.displayID)
+        }
+        devices[index] = device
+
+        let knownDisplayIDs = Set(devices.flatMap { $0.displays.map(\.id) })
+        topology.links.removeAll {
+            !knownDisplayIDs.contains($0.source.displayID)
+                || !knownDisplayIDs.contains($0.destination.displayID)
+        }
+    }
 }

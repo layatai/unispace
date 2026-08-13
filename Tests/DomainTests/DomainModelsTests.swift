@@ -52,6 +52,49 @@ final class DomainModelsTests: XCTestCase {
         XCTAssertEqual(topology.links.count, 2)
     }
 
+    func testUpdatingDeviceDropsTopologyUsingRetiredCrossMacDisplayID() {
+        let localID = DeviceID()
+        let remoteID = DeviceID()
+        let duplicateID = DisplayID()
+        let newLocalDisplayID = DisplayID()
+        let remoteExternalDisplayID = DisplayID()
+        var topology = DisplayTopology()
+        topology.connect(
+            DisplayEndpoint(displayID: duplicateID, edge: .left),
+            to: DisplayEndpoint(displayID: remoteExternalDisplayID, edge: .right)
+        )
+        var workspace = WorkspaceSnapshot(
+            id: WorkspaceID(),
+            name: "Test",
+            localDeviceID: localID,
+            devices: [
+                DeviceDescriptor(
+                    id: localID,
+                    name: "Local",
+                    displays: [display(id: duplicateID, deviceID: localID)]
+                ),
+                DeviceDescriptor(
+                    id: remoteID,
+                    name: "Remote",
+                    displays: [
+                        display(id: duplicateID, deviceID: remoteID),
+                        display(id: remoteExternalDisplayID, deviceID: remoteID, name: "External", isMain: false)
+                    ]
+                )
+            ],
+            topology: topology
+        )
+
+        workspace.updateDevice(DeviceDescriptor(
+            id: localID,
+            name: "Local",
+            displays: [display(id: newLocalDisplayID, deviceID: localID)]
+        ))
+
+        XCTAssertTrue(workspace.topology.links.isEmpty)
+        XCTAssertEqual(Set(workspace.devices.flatMap { $0.displays.map(\.id) }).count, 3)
+    }
+
     func testRemoteInputStateReleasesEveryPressedInput() {
         var state = RemoteInputState()
         state.apply(.key(code: 12, isDown: true, isRepeat: false))
@@ -70,6 +113,22 @@ final class DomainModelsTests: XCTestCase {
         XCTAssertEqual(
             InputActivation(sessionID: SessionID(), epoch: epoch, targetDisplayID: DisplayID(), entryEdge: .left, normalizedPosition: 2).normalizedPosition,
             1
+        )
+    }
+
+    private func display(
+        id: DisplayID,
+        deviceID: DeviceID,
+        name: String = "Built-in Retina Display",
+        isMain: Bool = true
+    ) -> DisplayDescriptor {
+        DisplayDescriptor(
+            id: id,
+            deviceID: deviceID,
+            name: name,
+            frame: DisplayRect(x: 0, y: 0, width: 100, height: 100),
+            scaleFactor: 2,
+            isMain: isMain
         )
     }
 }

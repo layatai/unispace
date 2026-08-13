@@ -438,7 +438,7 @@ final class AppModel: ObservableObject {
                 updated.devices[index].peerAddresses,
                 current.peerAddresses
             )
-            updated.devices[index] = current
+            updated.updateDevice(current)
         }
         if updated != workspace {
             try? workspaceStore.save(updated)
@@ -552,9 +552,14 @@ final class AppModel: ObservableObject {
             }
             workspace.topology = incoming.topology
             workspace.generation = max(workspace.generation, incoming.generation)
-            if !workspace.devices.contains(where: { $0.id == localDeviceID }) {
-                workspace.devices.append(localDevice)
+            var current = localDevice
+            if let persistedLocal = workspace.devices.first(where: { $0.id == localDeviceID }) {
+                current.peerAddresses = Self.mergedAddresses(
+                    persistedLocal.peerAddresses,
+                    current.peerAddresses
+                )
             }
+            workspace.updateDevice(current)
             persistAndBroadcastLocally(workspace)
         case let .controllerClaim(epoch):
             currentEpoch = max(currentEpoch ?? epoch, epoch)
@@ -621,7 +626,7 @@ final class AppModel: ObservableObject {
     private func upsert(_ device: DeviceDescriptor) {
         guard var workspace else { return }
         if let index = workspace.devices.firstIndex(where: { $0.id == device.id }) {
-            workspace.devices[index] = Self.merging(workspace.devices[index], with: device)
+            workspace.updateDevice(Self.merging(workspace.devices[index], with: device))
         } else {
             workspace.devices.append(device)
         }
@@ -650,9 +655,13 @@ final class AppModel: ObservableObject {
 
     private func refreshLocalDisplays() {
         guard var workspace, let index = workspace.devices.firstIndex(where: { $0.id == localDeviceID }) else { return }
-        let current = localDevice
+        var current = localDevice
+        current.peerAddresses = Self.mergedAddresses(
+            workspace.devices[index].peerAddresses,
+            current.peerAddresses
+        )
         guard workspace.devices[index] != current else { return }
-        workspace.devices[index] = current
+        workspace.updateDevice(current)
         persistAndBroadcast(workspace)
     }
 

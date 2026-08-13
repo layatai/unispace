@@ -5,6 +5,50 @@ import UniSpaceApplication
 import UniSpaceDomain
 
 final class InfrastructureTests: XCTestCase {
+    func testDisplayIdentifiersAreStableAndNamespacedByDevice() {
+        let physicalDisplay = UUID(uuidString: "37D8832A-2D66-02CA-B9F7-8F30A301B230")!
+        let firstMac = DeviceID(rawValue: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!)
+        let secondMac = DeviceID(rawValue: UUID(uuidString: "00000000-0000-0000-0000-000000000002")!)
+
+        let first = SystemDisplayCatalog.stableIdentifier(deviceID: firstMac, displayUUID: physicalDisplay)
+
+        XCTAssertEqual(first, SystemDisplayCatalog.stableIdentifier(deviceID: firstMac, displayUUID: physicalDisplay))
+        XCTAssertNotEqual(first, SystemDisplayCatalog.stableIdentifier(deviceID: secondMac, displayUUID: physicalDisplay))
+    }
+
+    func testNamespacedDisplayIdentifiersRouteAcrossMacsWithMatchingPhysicalUUIDs() {
+        let physicalDisplay = UUID(uuidString: "37D8832A-2D66-02CA-B9F7-8F30A301B230")!
+        let localMac = DeviceID()
+        let remoteMac = DeviceID()
+        let localDisplay = display(
+            id: SystemDisplayCatalog.stableIdentifier(deviceID: localMac, displayUUID: physicalDisplay),
+            deviceID: localMac
+        )
+        let remoteDisplay = display(
+            id: SystemDisplayCatalog.stableIdentifier(deviceID: remoteMac, displayUUID: physicalDisplay),
+            deviceID: remoteMac
+        )
+        var topology = DisplayTopology()
+        topology.connect(
+            DisplayEndpoint(displayID: localDisplay.id, edge: .right),
+            to: DisplayEndpoint(displayID: remoteDisplay.id, edge: .left)
+        )
+
+        let transition = EdgeRouter.transition(
+            x: 100,
+            y: 50,
+            localDeviceID: localMac,
+            devices: [
+                DeviceDescriptor(id: localMac, name: "Local", displays: [localDisplay]),
+                DeviceDescriptor(id: remoteMac, name: "Remote", displays: [remoteDisplay])
+            ],
+            topology: topology
+        )
+
+        XCTAssertEqual(transition?.targetDeviceID, remoteMac)
+        XCTAssertEqual(transition?.targetDisplayID, remoteDisplay.id)
+    }
+
     func testTailnetAddressClassificationUsesOfficialAddressRanges() {
         XCTAssertTrue(SystemTailnetAddressProvider.isTailnetAddress("100.64.0.1"))
         XCTAssertTrue(SystemTailnetAddressProvider.isTailnetAddress("100.127.255.254"))
@@ -316,6 +360,17 @@ final class InfrastructureTests: XCTestCase {
         wait(for: [frameReceived], timeout: 3)
         client.cancel()
         listener.cancel()
+    }
+
+    private func display(id: DisplayID, deviceID: DeviceID) -> DisplayDescriptor {
+        DisplayDescriptor(
+            id: id,
+            deviceID: deviceID,
+            name: "Built-in Retina Display",
+            frame: DisplayRect(x: 0, y: 0, width: 100, height: 100),
+            scaleFactor: 2,
+            isMain: true
+        )
     }
 }
 
