@@ -1,0 +1,129 @@
+name: UniSpace
+options:
+  minimumXcodeGenVersion: 2.46.0
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+configs:
+  Debug: debug
+  Release: release
+configFiles:
+  Debug: Config/Base.xcconfig
+  Release: Config/Base.xcconfig
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+    MACOSX_DEPLOYMENT_TARGET: "14.0"
+    GENERATE_INFOPLIST_FILE: false
+targets:
+  UniSpaceDomain:
+    type: framework
+    platform: macOS
+    sources: Sources/Domain
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.layatai.unispace.domain
+        GENERATE_INFOPLIST_FILE: true
+        SKIP_INSTALL: true
+  UniSpaceApplication:
+    type: framework
+    platform: macOS
+    sources: Sources/Application
+    dependencies:
+      - target: UniSpaceDomain
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.layatai.unispace.application
+        GENERATE_INFOPLIST_FILE: true
+        SKIP_INSTALL: true
+  UniSpaceInfrastructure:
+    type: framework
+    platform: macOS
+    sources: Sources/Infrastructure
+    dependencies:
+      - target: UniSpaceDomain
+      - target: UniSpaceApplication
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.layatai.unispace.infrastructure
+        GENERATE_INFOPLIST_FILE: true
+        SKIP_INSTALL: true
+  UniSpace:
+    type: application
+    platform: macOS
+    sources: Sources/App
+    info:
+      path: Resources/Info.plist
+      properties:
+        LSApplicationCategoryType: public.app-category.utilities
+        LSUIElement: true
+    entitlements:
+      path: Resources/UniSpace.entitlements
+      properties:
+        com.apple.security.app-sandbox: true
+        com.apple.security.network.client: true
+        com.apple.security.network.server: true
+    dependencies:
+      - target: UniSpaceDomain
+      - target: UniSpaceApplication
+      - target: UniSpaceInfrastructure
+    settings:
+      base:
+        PRODUCT_NAME: UniSpace
+        PRODUCT_BUNDLE_IDENTIFIER: com.layatai.unispace
+  UniSpaceDomainTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources: Tests/DomainTests
+    dependencies:
+      - target: UniSpaceDomain
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: true
+  UniSpaceApplicationTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources: Tests/ApplicationTests
+    dependencies:
+      - target: UniSpaceDomain
+      - target: UniSpaceApplication
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: true
+  UniSpaceInfrastructureTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources: Tests/InfrastructureTests
+    dependencies:
+      - target: UniSpaceDomain
+      - target: UniSpaceApplication
+      - target: UniSpaceInfrastructure
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: true
+  UniSpaceUITests:
+    type: bundle.ui-testing
+    platform: macOS
+    sources: UITests
+    dependencies:
+      - target: UniSpace
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: true
+schemes:
+  UniSpace:
+    build:
+      targets:
+        UniSpace: all
+        UniSpaceDomainTests: [test]
+        UniSpaceApplicationTests: [test]
+        UniSpaceInfrastructureTests: [test]
+        UniSpaceUITests: [test]
+    test:
+      gatherCoverageData: true
+      targets:
+        - UniSpaceDomainTests
+        - UniSpaceApplicationTests
+        - UniSpaceInfrastructureTests
+        - UniSpaceUITests
