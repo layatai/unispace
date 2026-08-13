@@ -41,6 +41,7 @@ final class AppModel: ObservableObject {
     private var screenChangeSubscription: AnyCancellable?
     private var currentEpoch: ControllerEpoch?
     private var lastBoundaryTime: UInt64 = 0
+    private var entryEdgeHysteresis = EntryEdgeHysteresis()
 
     let localDeviceID: DeviceID
 
@@ -214,6 +215,7 @@ final class AppModel: ObservableObject {
         currentControllerID = nil
         currentEpoch = nil
         lastBoundaryTime = 0
+        entryEdgeHysteresis.reset()
         setupState = .needsWorkspace
         statusMessage = "Not configured"
 
@@ -226,6 +228,7 @@ final class AppModel: ObservableObject {
         Task {
             guard let coordinator else { return }
             let epoch = await coordinator.makeLocalController()
+            entryEdgeHysteresis.reset()
             currentEpoch = epoch
             currentControllerID = localDeviceID
             if var workspace, epoch.generation > workspace.generation {
@@ -399,6 +402,7 @@ final class AppModel: ObservableObject {
     private func startTrustedNetwork(claimControl: Bool) async {
         guard let workspace else { return }
         do {
+            entryEdgeHysteresis.reset()
             guard let key = try trustStore.workspaceKey(for: workspace.id) else { return }
             networkTask?.cancel()
             await transport.stop()
@@ -461,36 +465,45 @@ final class AppModel: ObservableObject {
 
     private func handleCaptured(_ event: InputEvent) async {
         guard let coordinator else { return }
-        if case let .pointerMove(_, _, x, y) = event,
-           isLocalController,
-           case .idle = await coordinator.currentState(),
-           let workspace,
-           let transition = EdgeRouter.transition(
-                x: x,
-                y: y,
-                localDeviceID: localDeviceID,
-                devices: workspace.devices,
-                topology: workspace.topology
-           ), connectedDevices.contains(transition.targetDeviceID) {
-            do {
-                try await coordinator.activate(
-                    target: transition.targetDeviceID,
-                    displayID: transition.targetDisplayID,
-                    entryEdge: transition.entryEdge,
-                    normalizedPosition: transition.normalizedPosition
-                )
-                statusMessage = "Controlling \(deviceName(transition.targetDeviceID))"
-            } catch {
-                lastError = error.localizedDescription
+        if case let .pointerMove(_, _, x, y) = event {
+            entryEdgeHysteresis.observe(x: x, y: y)
+            if isLocalController,
+               case .idle = await coordinator.currentState(),
+               let workspace,
+               let transition = EdgeRouter.transition(
+                    x: x,
+                    y: y,
+                    localDeviceID: localDeviceID,
+                    devices: workspace.devices,
+                    topology: workspace.topology
+               ), entryEdgeHysteresis.allows(transition),
+               connectedDevices.contains(transition.targetDeviceID),
+               let sourceDisplay = workspace.devices.flatMap(\.displays).first(where: {
+                   $0.id == transition.sourceDisplayID
+               }) {
+                entryEdgeHysteresis.arm(display: sourceDisplay, entryEdge: transition.sourceEdge)
+                do {
+                    try await coordinator.activate(
+                        target: transition.targetDeviceID,
+                        displayID: transition.targetDisplayID,
+                        entryEdge: transition.entryEdge,
+                        normalizedPosition: transition.normalizedPosition
+                    )
+                    statusMessage = "Controlling \(deviceName(transition.targetDeviceID))"
+                } catch {
+                    lastError = error.localizedDescription
+                }
             }
         }
-        _ = await coordinator.handleCaptured(event)
+        if await coordinator.handleCaptured(event) == .emergencyStop {
+            statusMessage = "Control returned to this Mac"
+        }
     }
 
     private func handleInjectedPointer(x: Double, y: Double) async {
         let now = DispatchTime.now().uptimeNanoseconds
-        guard now - lastBoundaryTime > 250_000_000,
-              let coordinator,
+        entryEdgeHysteresis.observe(x: x, y: y)
+        guard let coordinator,
               case let .receiving(_, source, sessionID) = await coordinator.currentState(),
               let workspace,
               let transition = EdgeRouter.transition(
@@ -499,7 +512,8 @@ final class AppModel: ObservableObject {
                 localDeviceID: localDeviceID,
                 devices: workspace.devices,
                 topology: workspace.topology
-              ) else { return }
+              ), entryEdgeHysteresis.allows(transition),
+              now - lastBoundaryTime > 250_000_000 else { return }
         lastBoundaryTime = now
         try? await transport.send(
             ControlEnvelope(message: .boundaryCrossed(
@@ -528,7 +542,11 @@ final class AppModel: ObservableObject {
             }
         case let .disconnected(deviceID):
             connectedDevices.remove(deviceID)
+            let previousState = await coordinator?.currentState()
             await coordinator?.peerDisconnected(deviceID)
+            if case let .receiving(_, source, _)? = previousState, source == deviceID {
+                entryEdgeHysteresis.reset()
+            }
         case let .control(source, envelope):
             await handleControl(envelope.message, from: source)
         case let .input(source, frame):
@@ -572,10 +590,20 @@ final class AppModel: ObservableObject {
             statusMessage = currentControllerID == localDeviceID ? "This Mac controls the workspace" : "Receiver ready"
         case let .activate(activation):
             let display = workspace?.devices.flatMap(\.displays).first { $0.id == activation.targetDisplayID }
-            await coordinator?.receiveActivation(activation, from: source, targetDisplay: display)
-            statusMessage = "Controlled by \(deviceName(source))"
+            if await coordinator?.receiveActivation(activation, from: source, targetDisplay: display) == true {
+                if let display {
+                    entryEdgeHysteresis.arm(display: display, entryEdge: activation.entryEdge)
+                } else {
+                    entryEdgeHysteresis.reset()
+                }
+                statusMessage = "Controlled by \(deviceName(source))"
+            }
         case .deactivate, .releaseAll:
+            let previousState = await coordinator?.currentState()
             await coordinator?.deactivateCurrentSession()
+            if case .receiving? = previousState {
+                entryEdgeHysteresis.reset()
+            }
             statusMessage = isLocalController ? "Controller ready" : "Receiver ready"
         case let .boundaryCrossed(sessionID, displayID, edge, normalizedPosition):
             await handleBoundaryCrossed(
@@ -605,15 +633,19 @@ final class AppModel: ObservableObject {
         edge: DisplayEdge,
         normalizedPosition: Double
     ) async {
-        guard isLocalController, let workspace,
+        guard isLocalController, let coordinator,
+              case let .controlling(_, activeTarget, activeSession) = await coordinator.currentState(),
+              activeTarget == source, activeSession == sessionID,
+              let workspace,
               let destination = workspace.topology.destination(from: displayID, edge: edge),
               let targetDisplay = workspace.devices.flatMap(\.displays).first(where: { $0.id == destination.displayID }) else { return }
-        await coordinator?.deactivateCurrentSession()
+        await coordinator.deactivateCurrentSession()
         if targetDisplay.deviceID == localDeviceID {
             injector.activate(on: targetDisplay, enteringFrom: destination.edge, normalizedPosition: normalizedPosition)
+            entryEdgeHysteresis.arm(display: targetDisplay, entryEdge: destination.edge)
             statusMessage = "Controller ready"
         } else {
-            try? await coordinator?.activate(
+            try? await coordinator.activate(
                 target: targetDisplay.deviceID,
                 displayID: targetDisplay.id,
                 entryEdge: destination.edge,

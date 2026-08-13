@@ -2,6 +2,12 @@ import Foundation
 import UniSpaceDomain
 
 public actor ControlSessionCoordinator {
+    public enum CapturedInputDisposition: Equatable, Sendable {
+        case ignored
+        case forwarded
+        case emergencyStop
+    }
+
     public enum State: Equatable, Sendable {
         case idle
         case controlling(epoch: ControllerEpoch, target: DeviceID, session: SessionID)
@@ -91,9 +97,9 @@ public actor ControlSessionCoordinator {
         _ activation: InputActivation,
         from source: DeviceID,
         targetDisplay: DisplayDescriptor?
-    ) async {
+    ) async -> Bool {
         let epoch = activation.epoch
-        guard election.currentEpoch == epoch, epoch.controllerID == source else { return }
+        guard election.currentEpoch == epoch, epoch.controllerID == source else { return false }
         await endCurrentSession(notifyPeer: false)
         if let targetDisplay {
             injector.activate(
@@ -105,16 +111,17 @@ public actor ControlSessionCoordinator {
         state = .receiving(epoch: epoch, source: source, session: activation.sessionID)
         lastHeartbeatNanos = clock.nowNanoseconds()
         startWatchdog(source: source, sessionID: activation.sessionID)
+        return true
     }
 
-    public func handleCaptured(_ event: InputEvent) async -> Bool {
-        guard case .controlling = state else { return false }
+    public func handleCaptured(_ event: InputEvent) async -> CapturedInputDisposition {
+        guard case .controlling = state else { return .ignored }
         if case let .flags(rawValue) = event {
             currentFlags = rawValue
         }
         if Self.isEmergencyStop(event, flags: currentFlags) {
             await endCurrentSession(notifyPeer: true)
-            return true
+            return .emergencyStop
         }
         if case let .pointerMove(deltaX, deltaY, absoluteX, absoluteY) = event {
             if case let .pointerMove(pendingX, pendingY, _, _) = pendingPointerEvent {
@@ -128,11 +135,11 @@ public actor ControlSessionCoordinator {
                 pendingPointerEvent = event
             }
             schedulePointerFlush()
-            return true
+            return .forwarded
         }
         await flushPendingPointer()
         await sendInput(event)
-        return true
+        return .forwarded
     }
 
     public func receiveHeartbeat(sessionID: SessionID, from source: DeviceID) {

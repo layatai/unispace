@@ -1,10 +1,28 @@
 import XCTest
 @testable import UniSpaceInfrastructure
+import CoreGraphics
 import Network
 import UniSpaceApplication
 import UniSpaceDomain
 
 final class InfrastructureTests: XCTestCase {
+    func testCursorSuppressionKeepsItsFirstAnchorUntilReleased() {
+        let firstAnchor = CGPoint(x: 1512, y: 500)
+        var state = CursorSuppressionState()
+
+        state.setEnabled(true, currentPosition: firstAnchor)
+        state.setEnabled(true, currentPosition: CGPoint(x: 1200, y: 400))
+
+        XCTAssertEqual(state.anchor, firstAnchor)
+        XCTAssertEqual(state.restorationPoint(for: .mouseMoved), firstAnchor)
+        XCTAssertEqual(state.restorationPoint(for: .leftMouseDragged), firstAnchor)
+        XCTAssertNil(state.restorationPoint(for: .keyDown))
+
+        state.setEnabled(false, currentPosition: nil)
+        XCTAssertNil(state.anchor)
+        XCTAssertNil(state.restorationPoint(for: .mouseMoved))
+    }
+
     func testDisplayIdentifiersAreStableAndNamespacedByDevice() {
         let physicalDisplay = UUID(uuidString: "37D8832A-2D66-02CA-B9F7-8F30A301B230")!
         let firstMac = DeviceID(rawValue: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!)

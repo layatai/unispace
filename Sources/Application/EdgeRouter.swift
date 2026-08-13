@@ -26,6 +26,55 @@ public struct EdgeTransition: Equatable, Sendable {
     }
 }
 
+public struct EntryEdgeHysteresis: Equatable, Sendable {
+    public static let defaultInwardDistance = 48.0
+
+    private struct GuardedEdge: Equatable, Sendable {
+        let displayID: DisplayID
+        let edge: DisplayEdge
+        let frame: DisplayRect
+    }
+
+    private let minimumInwardDistance: Double
+    private var guardedEdge: GuardedEdge?
+
+    public init(minimumInwardDistance: Double = Self.defaultInwardDistance) {
+        self.minimumInwardDistance = max(minimumInwardDistance, 0)
+    }
+
+    public mutating func arm(display: DisplayDescriptor, entryEdge: DisplayEdge) {
+        guardedEdge = GuardedEdge(displayID: display.id, edge: entryEdge, frame: display.frame)
+    }
+
+    public mutating func reset() {
+        guardedEdge = nil
+    }
+
+    public mutating func observe(x: Double, y: Double) {
+        guard let guardedEdge else { return }
+        let inwardDistance: Double
+        switch guardedEdge.edge {
+        case .left:
+            inwardDistance = x - guardedEdge.frame.minX
+        case .right:
+            inwardDistance = guardedEdge.frame.maxX - x
+        case .bottom:
+            inwardDistance = y - guardedEdge.frame.minY
+        case .top:
+            inwardDistance = guardedEdge.frame.maxY - y
+        }
+        if inwardDistance >= minimumInwardDistance {
+            self.guardedEdge = nil
+        }
+    }
+
+    public func allows(_ transition: EdgeTransition) -> Bool {
+        guard let guardedEdge else { return true }
+        return transition.sourceDisplayID != guardedEdge.displayID
+            || transition.sourceEdge != guardedEdge.edge
+    }
+}
+
 public enum EdgeRouter {
     public static func transition(
         x: Double,

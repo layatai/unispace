@@ -31,6 +31,48 @@ final class ApplicationTests: XCTestCase {
         XCTAssertEqual(transition?.normalizedPosition, 0.25)
     }
 
+    func testEntryEdgeHysteresisRequiresInwardMovementBeforeReturningThroughEntryEdge() {
+        let deviceID = DeviceID()
+        let source = display(device: deviceID, frame: .init(x: 0, y: 0, width: 100, height: 100))
+
+        for edge in DisplayEdge.allCases {
+            var hysteresis = EntryEdgeHysteresis()
+            hysteresis.arm(display: source, entryEdge: edge)
+            let transition = EdgeTransition(
+                sourceDisplayID: source.id,
+                sourceEdge: edge,
+                targetDisplayID: DisplayID(),
+                targetDeviceID: DeviceID(),
+                entryEdge: edge,
+                normalizedPosition: 0.5
+            )
+
+            XCTAssertFalse(hysteresis.allows(transition), "\(edge) should start guarded")
+            let almostInward = inwardPoint(for: edge, distance: 47, frame: source.frame)
+            hysteresis.observe(x: almostInward.x, y: almostInward.y)
+            XCTAssertFalse(hysteresis.allows(transition), "\(edge) should remain guarded before 48 points")
+            let sufficientlyInward = inwardPoint(for: edge, distance: 48, frame: source.frame)
+            hysteresis.observe(x: sufficientlyInward.x, y: sufficientlyInward.y)
+            XCTAssertTrue(hysteresis.allows(transition), "\(edge) should unlock at 48 points")
+        }
+    }
+
+    func testEntryEdgeHysteresisDoesNotBlockAnotherEdge() {
+        let deviceID = DeviceID()
+        let source = display(device: deviceID, frame: .init(x: 0, y: 0, width: 100, height: 100))
+        var hysteresis = EntryEdgeHysteresis()
+        hysteresis.arm(display: source, entryEdge: .right)
+
+        XCTAssertTrue(hysteresis.allows(EdgeTransition(
+            sourceDisplayID: source.id,
+            sourceEdge: .top,
+            targetDisplayID: DisplayID(),
+            targetDeviceID: DeviceID(),
+            entryEdge: .bottom,
+            normalizedPosition: 0.5
+        )))
+    }
+
     func testWireCodecRoundTripsControlAndInputFrames() throws {
         let device = DeviceID()
         let envelope = ControlEnvelope(message: .controllerClaim(.init(generation: 7, controllerID: device)))
@@ -142,6 +184,55 @@ final class ApplicationTests: XCTestCase {
         await coordinator.stop()
     }
 
+    func testEmergencyHotkeyReturnsControlLocallyAndReleasesPeer() async throws {
+        let local = DeviceID()
+        let remote = DeviceID()
+        let capture = CaptureSpy()
+        let transport = TransportSpy()
+        let coordinator = ControlSessionCoordinator(
+            localDeviceID: local,
+            workspaceID: WorkspaceID(),
+            capture: capture,
+            injector: InjectorSpy(),
+            transport: transport
+        )
+        _ = await coordinator.makeLocalController()
+        try await coordinator.activate(
+            target: remote,
+            displayID: DisplayID(),
+            entryEdge: .left,
+            normalizedPosition: 0.5
+        )
+        XCTAssertTrue(capture.suppressed)
+
+        let flagsResult = await coordinator.handleCaptured(.flags(rawValue: ControlSessionCoordinator.emergencyFlags))
+        let escapeResult = await coordinator.handleCaptured(.key(
+            code: ControlSessionCoordinator.emergencyKeyCode,
+            isDown: true,
+            isRepeat: false
+        ))
+        let finalState = await coordinator.currentState()
+
+        XCTAssertEqual(flagsResult, .forwarded)
+        XCTAssertEqual(escapeResult, .emergencyStop)
+        XCTAssertEqual(finalState, .idle)
+        XCTAssertFalse(capture.suppressed)
+        XCTAssertTrue(transport.controlMessages.contains { message in
+            if case .releaseAll = message { return true }
+            return false
+        })
+        XCTAssertTrue(transport.controlMessages.contains { message in
+            if case .deactivate = message { return true }
+            return false
+        })
+        XCTAssertFalse(transport.frames.contains { frame in
+            if case let .key(code, _, _) = frame.event {
+                return code == ControlSessionCoordinator.emergencyKeyCode
+            }
+            return false
+        })
+    }
+
     func testLeaveWorkspaceRemovesPersistentStateThenTrustKey() throws {
         let calls = CallRecorder()
         let workspaceStore = WorkspaceStoreSpy(calls: calls)
@@ -189,6 +280,15 @@ final class ApplicationTests: XCTestCase {
 
     private func display(device: DeviceID, frame: DisplayRect) -> DisplayDescriptor {
         .init(id: DisplayID(), deviceID: device, name: "Display", frame: frame, scaleFactor: 2, isMain: true)
+    }
+
+    private func inwardPoint(for edge: DisplayEdge, distance: Double, frame: DisplayRect) -> (x: Double, y: Double) {
+        switch edge {
+        case .left: (frame.minX + distance, frame.minY + frame.height / 2)
+        case .right: (frame.maxX - distance, frame.minY + frame.height / 2)
+        case .bottom: (frame.minX + frame.width / 2, frame.minY + distance)
+        case .top: (frame.minX + frame.width / 2, frame.maxY - distance)
+        }
     }
 }
 
@@ -263,11 +363,15 @@ private final class TransportSpy: PeerTransport, @unchecked Sendable {
     private let stream = AsyncStream<PeerEvent> { $0.finish() }
     private let lock = NSLock()
     private var storedFrames: [InputFrame] = []
+    private var storedControlMessages: [ControlMessage] = []
     var frames: [InputFrame] { lock.withLock { storedFrames } }
+    var controlMessages: [ControlMessage] { lock.withLock { storedControlMessages } }
     func start(localDevice: DeviceDescriptor, workspace: WorkspaceSnapshot, key: Data) async throws {}
     func stop() async {}
     func events() -> AsyncStream<PeerEvent> { stream }
-    func send(_ envelope: ControlEnvelope, to deviceID: DeviceID) async throws {}
+    func send(_ envelope: ControlEnvelope, to deviceID: DeviceID) async throws {
+        lock.withLock { storedControlMessages.append(envelope.message) }
+    }
     func send(_ frame: InputFrame, to deviceID: DeviceID) async throws {
         lock.withLock { storedFrames.append(frame) }
     }

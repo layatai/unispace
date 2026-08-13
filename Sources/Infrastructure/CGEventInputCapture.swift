@@ -5,6 +5,27 @@ import UniSpaceDomain
 
 let uniSpaceSyntheticEventMarker: Int64 = 0x554E_4953_5041_4345
 
+struct CursorSuppressionState: Equatable {
+    private(set) var anchor: CGPoint?
+
+    mutating func setEnabled(_ enabled: Bool, currentPosition: @autoclosure () -> CGPoint?) {
+        if enabled {
+            if anchor == nil { anchor = currentPosition() }
+        } else {
+            anchor = nil
+        }
+    }
+
+    func restorationPoint(for type: CGEventType) -> CGPoint? {
+        switch type {
+        case .mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged:
+            anchor
+        default:
+            nil
+        }
+    }
+}
+
 public enum InputCaptureError: Error, Equatable {
     case permissionDenied
     case eventTapCreationFailed
@@ -16,6 +37,7 @@ public final class CGEventInputCapture: InputCapture, @unchecked Sendable {
     private var runLoopSource: CFRunLoopSource?
     private var callback: (@Sendable (InputEvent) -> Bool)?
     private var suppressionEnabled = false
+    private var cursorSuppression = CursorSuppressionState()
 
     public init() {}
 
@@ -64,11 +86,13 @@ public final class CGEventInputCapture: InputCapture, @unchecked Sendable {
         eventTap = nil
         callback = nil
         suppressionEnabled = false
+        cursorSuppression.setEnabled(false, currentPosition: nil)
     }
 
     public func setSuppressionEnabled(_ enabled: Bool) {
         lock.lock()
         suppressionEnabled = enabled
+        cursorSuppression.setEnabled(enabled, currentPosition: CGEvent(source: nil)?.location)
         lock.unlock()
     }
 
@@ -86,8 +110,13 @@ public final class CGEventInputCapture: InputCapture, @unchecked Sendable {
         lock.lock()
         let callback = callback
         let suppress = suppressionEnabled
+        let restorationPoint = suppress ? cursorSuppression.restorationPoint(for: type) : nil
         lock.unlock()
-        return (callback?(input) ?? false) || suppress
+        let handled = callback?(input) ?? false
+        if let restorationPoint {
+            CGWarpMouseCursorPosition(restorationPoint)
+        }
+        return handled || suppress
     }
 
     private static func convert(type: CGEventType, event: CGEvent) -> InputEvent? {
