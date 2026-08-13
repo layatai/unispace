@@ -3,6 +3,12 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 identity="${UNISPACE_SIGNING_IDENTITY:-Developer ID Application: TUYEN HO (Y69F3DRK44)}"
+version="$(sed -n 's/^MARKETING_VERSION *= *//p' Config/Base.xcconfig)"
+if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo "Could not read a semantic MARKETING_VERSION from Config/Base.xcconfig." >&2
+  exit 2
+fi
+dmg_path="dist/UniSpace-$version.dmg"
 notary_profile="${UNISPACE_NOTARY_PROFILE:-}"
 notary_arguments=()
 if [[ -n "$notary_profile" ]]; then
@@ -51,18 +57,18 @@ dmg_root="$work_dir/dmg"
 mkdir -p "$dmg_root"
 ditto "$app_path" "$dmg_root/UniSpace.app"
 ln -s /Applications "$dmg_root/Applications"
-rm -f dist/UniSpace.dmg
-hdiutil create -volname UniSpace -srcfolder "$dmg_root" -ov -format UDZO dist/UniSpace.dmg
-codesign --force --sign "$identity" --timestamp dist/UniSpace.dmg
-xcrun notarytool submit dist/UniSpace.dmg "${notary_arguments[@]}" --wait --output-format json > "$work_dir/dmg-notary.json"
+rm -f "$dmg_path"
+hdiutil create -volname UniSpace -srcfolder "$dmg_root" -ov -format UDZO "$dmg_path"
+codesign --force --sign "$identity" --timestamp "$dmg_path"
+xcrun notarytool submit "$dmg_path" "${notary_arguments[@]}" --wait --output-format json > "$work_dir/dmg-notary.json"
 dmg_status="$(plutil -extract status raw -o - "$work_dir/dmg-notary.json")"
 dmg_submission_id="$(plutil -extract id raw -o - "$work_dir/dmg-notary.json")"
 echo "DMG notarization: $dmg_status ($dmg_submission_id)"
 [[ "$dmg_status" == "Accepted" ]]
-xcrun stapler staple dist/UniSpace.dmg
-xcrun stapler validate dist/UniSpace.dmg
+xcrun stapler staple "$dmg_path"
+xcrun stapler validate "$dmg_path"
 codesign --verify --deep --strict --verbose=2 "$app_path"
 spctl --assess --type execute --verbose=4 "$app_path"
-codesign --verify --verbose=2 dist/UniSpace.dmg
-spctl --assess --type open --context context:primary-signature --verbose=4 dist/UniSpace.dmg
-echo "Created notarized dist/UniSpace.dmg"
+codesign --verify --verbose=2 "$dmg_path"
+spctl --assess --type open --context context:primary-signature --verbose=4 "$dmg_path"
+echo "Created notarized $dmg_path"

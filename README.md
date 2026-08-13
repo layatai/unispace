@@ -46,7 +46,7 @@ The script also accepts the same `APPLE_ID`, `APPLE_PASSWORD`, and
 `APPLE_TEAM_ID` environment contract used by the gitui release workflow, or
 the corresponding App Store Connect API-key variables.
 
-The release script creates a universal Developer ID archive and notarized `dist/UniSpace.dmg`, then validates code signing, stapling, and Gatekeeper acceptance. It never accepts credentials on the command line beyond the non-secret Keychain profile name.
+The release script creates a universal Developer ID archive and a versioned notarized DMG such as `dist/UniSpace-1.0.6.dmg`, then validates code signing, stapling, and Gatekeeper acceptance. It never accepts credentials on the command line beyond the non-secret Keychain profile name.
 
 ## Current scope
 
