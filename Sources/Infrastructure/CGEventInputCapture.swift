@@ -1,3 +1,4 @@
+import AppKit
 import CoreGraphics
 import Foundation
 import UniSpaceApplication
@@ -7,13 +8,18 @@ let uniSpaceSyntheticEventMarker: Int64 = 0x554E_4953_5041_4345
 
 struct CursorSuppressionState: Equatable {
     private(set) var anchor: CGPoint?
+    private(set) var isEnabled = false
 
-    mutating func setEnabled(_ enabled: Bool, currentPosition: @autoclosure () -> CGPoint?) {
+    @discardableResult
+    mutating func setEnabled(_ enabled: Bool, currentPosition: @autoclosure () -> CGPoint?) -> Bool {
+        guard enabled != isEnabled else { return false }
+        isEnabled = enabled
         if enabled {
-            if anchor == nil { anchor = currentPosition() }
+            anchor = currentPosition()
         } else {
             anchor = nil
         }
+        return true
     }
 
     func restorationPoint(for type: CGEventType) -> CGPoint? {
@@ -32,14 +38,46 @@ public enum InputCaptureError: Error, Equatable {
 }
 
 public final class CGEventInputCapture: InputCapture, @unchecked Sendable {
+    typealias MouseAssociationHandler = @Sendable (_ connected: Bool) -> Void
+
+    static let gestureEventTypes: [CGEventType] = [
+        NSEvent.EventType.gesture,
+        .magnify,
+        .swipe,
+        .rotate,
+        .beginGesture,
+        .endGesture,
+        .smartMagnify
+    ].compactMap { CGEventType(rawValue: UInt32($0.rawValue)) }
+
+    static let capturedEventTypes: [CGEventType] = [
+        .mouseMoved, .leftMouseDown, .leftMouseUp, .leftMouseDragged,
+        .rightMouseDown, .rightMouseUp, .rightMouseDragged,
+        .otherMouseDown, .otherMouseUp, .otherMouseDragged,
+        .scrollWheel, .keyDown, .keyUp, .flagsChanged
+    ] + gestureEventTypes
+
     private let lock = NSLock()
+    private let mouseAssociationHandler: MouseAssociationHandler
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
     private var callback: (@Sendable (InputEvent) -> Bool)?
     private var suppressionEnabled = false
     private var cursorSuppression = CursorSuppressionState()
 
-    public init() {}
+    public convenience init() {
+        self.init { connected in
+            _ = CGAssociateMouseAndMouseCursorPosition(connected ? 1 : 0)
+        }
+    }
+
+    init(mouseAssociationHandler: @escaping MouseAssociationHandler) {
+        self.mouseAssociationHandler = mouseAssociationHandler
+    }
+
+    deinit {
+        if cursorSuppression.isEnabled { mouseAssociationHandler(true) }
+    }
 
     public var isSuppressionEnabled: Bool {
         lock.lock()
@@ -54,13 +92,9 @@ public final class CGEventInputCapture: InputCapture, @unchecked Sendable {
         if eventTap != nil { return }
         callback = handler
 
-        let types: [CGEventType] = [
-            .mouseMoved, .leftMouseDown, .leftMouseUp, .leftMouseDragged,
-            .rightMouseDown, .rightMouseUp, .rightMouseDragged,
-            .otherMouseDown, .otherMouseUp, .otherMouseDragged,
-            .scrollWheel, .keyDown, .keyUp, .flagsChanged
-        ]
-        let mask = types.reduce(CGEventMask(0)) { $0 | (CGEventMask(1) << $1.rawValue) }
+        let mask = Self.capturedEventTypes.reduce(CGEventMask(0)) {
+            $0 | (CGEventMask(1) << $1.rawValue)
+        }
         guard let tap = CGEvent.tapCreate(
             tap: .cgSessionEventTap,
             place: .headInsertEventTap,
@@ -81,7 +115,6 @@ public final class CGEventInputCapture: InputCapture, @unchecked Sendable {
 
     public func stop() {
         lock.lock()
-        defer { lock.unlock() }
         if let source = runLoopSource {
             CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
         }
@@ -92,13 +125,19 @@ public final class CGEventInputCapture: InputCapture, @unchecked Sendable {
         eventTap = nil
         callback = nil
         suppressionEnabled = false
-        cursorSuppression.setEnabled(false, currentPosition: nil)
+        let associationChanged = cursorSuppression.setEnabled(false, currentPosition: nil)
+        if associationChanged { mouseAssociationHandler(true) }
+        lock.unlock()
     }
 
     public func setSuppressionEnabled(_ enabled: Bool) {
         lock.lock()
         suppressionEnabled = enabled
-        cursorSuppression.setEnabled(enabled, currentPosition: CGEvent(source: nil)?.location)
+        let associationChanged = cursorSuppression.setEnabled(
+            enabled,
+            currentPosition: CGEvent(source: nil)?.location
+        )
+        if associationChanged { mouseAssociationHandler(!enabled) }
         lock.unlock()
     }
 
@@ -125,7 +164,7 @@ public final class CGEventInputCapture: InputCapture, @unchecked Sendable {
         return handled || suppress
     }
 
-    private static func convert(type: CGEventType, event: CGEvent) -> InputEvent? {
+    static func convert(type: CGEventType, event: CGEvent) -> InputEvent? {
         switch type {
         case .mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged:
             return .pointerMove(
@@ -157,7 +196,9 @@ public final class CGEventInputCapture: InputCapture, @unchecked Sendable {
         case .flagsChanged:
             return .flags(rawValue: event.flags.rawValue)
         default:
-            return nil
+            guard gestureEventTypes.contains(where: { $0.rawValue == type.rawValue }),
+                  let serializedEvent = event.data else { return nil }
+            return .gesture(serializedEvent: serializedEvent as Data)
         }
     }
 }

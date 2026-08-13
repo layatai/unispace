@@ -173,6 +173,19 @@ final class ApplicationTests: XCTestCase {
         XCTAssertEqual(inputKind, .inputBinary)
         XCTAssertEqual(try WireFrameCodec.decodeInput(inputPayload), frame)
 
+        let gestureFrame = InputFrame(
+            workspaceID: frame.workspaceID,
+            sessionID: frame.sessionID,
+            controllerID: device,
+            epoch: epoch,
+            sequence: 13,
+            timestampNanos: 100,
+            event: .gesture(serializedEvent: Data([0x47, 0x45, 0x53, 0x54]))
+        )
+        let encodedGesture = try WireFrameCodec.encodeInput(gestureFrame)
+        let (_, gesturePayload) = try WireFrameCodec.decode(encodedGesture)
+        XCTAssertEqual(try WireFrameCodec.decodeInput(gesturePayload), gestureFrame)
+
         let realtime = RealtimePointerFrame(
             workspaceID: frame.workspaceID,
             sessionID: frame.sessionID,
@@ -567,6 +580,32 @@ final class ApplicationTests: XCTestCase {
         XCTAssertEqual(transport.frames.map(\.event), [
             .scroll(deltaX: 4, deltaY: 6, isContinuous: true)
         ])
+        await coordinator.stop()
+    }
+
+    func testCoordinatorForwardsGesturesReliablyWithoutCoalescing() async throws {
+        let local = DeviceID()
+        let remote = DeviceID()
+        let transport = TransportSpy()
+        let coordinator = ControlSessionCoordinator(
+            localDeviceID: local,
+            workspaceID: WorkspaceID(),
+            capture: CaptureSpy(),
+            injector: InjectorSpy(),
+            transport: transport
+        )
+        _ = await coordinator.makeLocalController()
+        try await coordinator.activate(
+            target: remote,
+            displayID: DisplayID(),
+            entryEdge: .left,
+            normalizedPosition: 0.5
+        )
+        let gesture = InputEvent.gesture(serializedEvent: Data([1, 2, 3]))
+
+        _ = await coordinator.handleCaptured(gesture)
+
+        XCTAssertEqual(transport.frames.map(\.event), [gesture])
         await coordinator.stop()
     }
 

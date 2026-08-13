@@ -43,7 +43,7 @@ public struct RemoteInputState: Sendable, Equatable {
             if isDown { pressedKeys.insert(code) } else { pressedKeys.remove(code) }
         case let .mouseButton(button, isDown, _):
             if isDown { pressedButtons.insert(button) } else { pressedButtons.remove(button) }
-        case .pointerMove, .scroll, .flags:
+        case .pointerMove, .scroll, .gesture, .flags:
             break
         }
     }

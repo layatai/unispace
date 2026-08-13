@@ -4,14 +4,24 @@ import UniSpaceApplication
 import UniSpaceDomain
 
 public final class CGEventInputInjector: InputInjector, @unchecked Sendable {
+    typealias DisplayBoundsProvider = @Sendable () -> [CGRect]
+
     public var pointerPositionHandler: (@Sendable (Double, Double) -> Void)?
     private let lock = NSLock()
+    private let displayBoundsProvider: DisplayBoundsProvider
+    private var displayBounds: [CGRect]
     private var cursorPosition = CGPoint.zero
     private var flags = CGEventFlags()
     private var pressedButtons: Set<PointerButton> = []
     private var pressedKeys: Set<UInt16> = []
 
-    public init() {
+    public convenience init() {
+        self.init(displayBoundsProvider: Self.activeDisplayBounds)
+    }
+
+    init(displayBoundsProvider: @escaping DisplayBoundsProvider) {
+        self.displayBoundsProvider = displayBoundsProvider
+        displayBounds = displayBoundsProvider()
         cursorPosition = CGEvent(source: nil)?.location ?? .zero
     }
 
@@ -31,9 +41,11 @@ public final class CGEventInputInjector: InputInjector, @unchecked Sendable {
             point = CGPoint(x: frame.minX + frame.width * value, y: frame.minY + inset)
         }
         lock.lock()
-        cursorPosition = point
+        displayBounds = displayBoundsProvider()
+        cursorPosition = Self.constrainedPosition(point, to: displayBounds)
+        let activationPoint = cursorPosition
         lock.unlock()
-        CGWarpMouseCursorPosition(point)
+        CGWarpMouseCursorPosition(activationPoint)
     }
 
     public func inject(_ event: InputEvent) {
@@ -43,6 +55,7 @@ public final class CGEventInputInjector: InputInjector, @unchecked Sendable {
         case let .pointerMove(deltaX, deltaY, _, _):
             cursorPosition.x += deltaX
             cursorPosition.y += deltaY
+            cursorPosition = Self.constrainedPosition(cursorPosition, to: displayBounds)
             postMouse(type: dragEventType(), button: activeMouseButton(), position: cursorPosition, clickCount: 0)
             pointerPositionHandler?(cursorPosition.x, cursorPosition.y)
         case let .mouseButton(button, isDown, clickCount):
@@ -58,6 +71,9 @@ public final class CGEventInputInjector: InputInjector, @unchecked Sendable {
                 wheel3: 0
             ) else { return }
             post(cgEvent)
+        case let .gesture(serializedEvent):
+            guard let cgEvent = Self.gestureEvent(from: serializedEvent, at: cursorPosition) else { return }
+            post(cgEvent)
         case let .key(code, isDown, _):
             if isDown { pressedKeys.insert(code) } else { pressedKeys.remove(code) }
             guard let cgEvent = CGEvent(keyboardEventSource: nil, virtualKey: CGKeyCode(code), keyDown: isDown) else { return }
@@ -66,6 +82,40 @@ public final class CGEventInputInjector: InputInjector, @unchecked Sendable {
         case let .flags(rawValue):
             flags = CGEventFlags(rawValue: rawValue)
         }
+    }
+
+    static func gestureEvent(from data: Data, at position: CGPoint) -> CGEvent? {
+        guard let event = CGEvent(withDataAllocator: nil, data: data as CFData),
+              CGEventInputCapture.gestureEventTypes.contains(where: {
+                  $0.rawValue == event.type.rawValue
+              }) else { return nil }
+        event.location = position
+        return event
+    }
+
+    static func constrainedPosition(_ position: CGPoint, to displayBounds: [CGRect]) -> CGPoint {
+        guard !displayBounds.isEmpty,
+              !displayBounds.contains(where: { $0.contains(position) }) else { return position }
+
+        return displayBounds
+            .map { bounds -> (CGPoint, CGFloat) in
+                let candidate = CGPoint(
+                    x: min(max(position.x, bounds.minX), bounds.maxX),
+                    y: min(max(position.y, bounds.minY), bounds.maxY)
+                )
+                let distance = pow(candidate.x - position.x, 2) + pow(candidate.y - position.y, 2)
+                return (candidate, distance)
+            }
+            .min(by: { $0.1 < $1.1 })?
+            .0 ?? position
+    }
+
+    private static func activeDisplayBounds() -> [CGRect] {
+        var count: UInt32 = 0
+        guard CGGetActiveDisplayList(0, nil, &count) == .success, count > 0 else { return [] }
+        var displays = [CGDirectDisplayID](repeating: 0, count: Int(count))
+        guard CGGetActiveDisplayList(count, &displays, &count) == .success else { return [] }
+        return displays.prefix(Int(count)).map(CGDisplayBounds)
     }
 
     public func releaseAll() {

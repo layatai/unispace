@@ -28,6 +28,7 @@ public enum InputEvent: Codable, Equatable, Sendable {
     case pointerMove(deltaX: Double, deltaY: Double, absoluteX: Double, absoluteY: Double)
     case mouseButton(button: PointerButton, isDown: Bool, clickCount: Int)
     case scroll(deltaX: Double, deltaY: Double, isContinuous: Bool)
+    case gesture(serializedEvent: Data)
     case key(code: UInt16, isDown: Bool, isRepeat: Bool)
     case flags(rawValue: UInt64)
 }

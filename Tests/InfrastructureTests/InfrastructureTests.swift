@@ -1,5 +1,6 @@
 import XCTest
 @testable import UniSpaceInfrastructure
+import AppKit
 import CoreGraphics
 import Network
 import UniSpaceApplication
@@ -21,6 +22,65 @@ final class InfrastructureTests: XCTestCase {
         state.setEnabled(false, currentPosition: nil)
         XCTAssertNil(state.anchor)
         XCTAssertNil(state.restorationPoint(for: .mouseMoved))
+    }
+
+    func testCursorSuppressionDisconnectsMouseOnlyWhileRemoteControlIsActive() {
+        let recorder = MouseAssociationRecorder()
+        let capture = CGEventInputCapture { recorder.append($0) }
+
+        capture.setSuppressionEnabled(true)
+        capture.setSuppressionEnabled(true)
+        capture.setSuppressionEnabled(false)
+        capture.stop()
+
+        XCTAssertEqual(recorder.values, [false, true])
+    }
+
+    func testGestureCaptureSerializesAndRebuildsPublicAppKitEvent() throws {
+        XCTAssertEqual(
+            Set(CGEventInputCapture.gestureEventTypes.map(\.rawValue)),
+            Set([
+                NSEvent.EventType.gesture,
+                .magnify,
+                .swipe,
+                .rotate,
+                .beginGesture,
+                .endGesture,
+                .smartMagnify
+            ].map { UInt32($0.rawValue) })
+        )
+        let gestureType = try XCTUnwrap(
+            CGEventType(rawValue: UInt32(NSEvent.EventType.magnify.rawValue))
+        )
+        let sourceEvent = try XCTUnwrap(CGEvent(source: nil))
+        sourceEvent.type = gestureType
+
+        let input = try XCTUnwrap(CGEventInputCapture.convert(type: gestureType, event: sourceEvent))
+        guard case let .gesture(serializedEvent) = input else {
+            return XCTFail("Expected a serialized gesture event")
+        }
+
+        let targetPosition = CGPoint(x: 320, y: 240)
+        let rebuilt = try XCTUnwrap(
+            CGEventInputInjector.gestureEvent(from: serializedEvent, at: targetPosition)
+        )
+        XCTAssertEqual(rebuilt.type.rawValue, gestureType.rawValue)
+        XCTAssertEqual(rebuilt.location, targetPosition)
+    }
+
+    func testInjectedCursorCannotAccumulateBeyondAHorizontalDisplayEdge() {
+        let bounds = [CGRect(x: 0, y: 0, width: 100, height: 100)]
+        let atEdge = CGEventInputInjector.constrainedPosition(
+            CGPoint(x: 500, y: 50),
+            to: bounds
+        )
+        let movedBack = CGEventInputInjector.constrainedPosition(
+            CGPoint(x: atEdge.x - 4, y: atEdge.y),
+            to: bounds
+        )
+
+        XCTAssertEqual(atEdge, CGPoint(x: 100, y: 50))
+        XCTAssertEqual(movedBack, CGPoint(x: 96, y: 50))
     }
 
     func testDisplayIdentifiersAreStableAndNamespacedByDevice() {
@@ -706,6 +766,17 @@ final class InfrastructureTests: XCTestCase {
             scaleFactor: 2,
             isMain: true
         )
+    }
+}
+
+private final class MouseAssociationRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storedValues: [Bool] = []
+
+    var values: [Bool] { lock.withLock { storedValues } }
+
+    func append(_ value: Bool) {
+        lock.withLock { storedValues.append(value) }
     }
 }
 
