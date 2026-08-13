@@ -27,7 +27,7 @@ public struct EdgeTransition: Equatable, Sendable {
 }
 
 public struct EntryEdgeHysteresis: Equatable, Sendable {
-    public static let defaultInwardDistance = 48.0
+    public static let defaultInwardDistance = 12.0
 
     private struct GuardedEdge: Equatable, Sendable {
         let displayID: DisplayID
@@ -85,20 +85,58 @@ public enum EdgeRouter {
         tolerance: Double = 1.5
     ) -> EdgeTransition? {
         let displays = devices.flatMap(\.displays)
-        guard let source = displays.first(where: {
-            $0.deviceID == localDeviceID
-                && x >= $0.frame.minX - tolerance && x <= $0.frame.maxX + tolerance
+        let localDisplays = displays.filter { $0.deviceID == localDeviceID }
+        if let source = localDisplays.first(where: {
+            x >= $0.frame.minX - tolerance && x <= $0.frame.maxX + tolerance
                 && y >= $0.frame.minY - tolerance && y <= $0.frame.maxY + tolerance
-        }) else { return nil }
+        }) {
+            let edge: DisplayEdge?
+            if x <= source.frame.minX + tolerance { edge = .left }
+            else if x >= source.frame.maxX - tolerance { edge = .right }
+            else if y <= source.frame.minY + tolerance { edge = .bottom }
+            else if y >= source.frame.maxY - tolerance { edge = .top }
+            else { edge = nil }
+            guard let edge else { return nil }
+            return makeTransition(
+                source: source,
+                edge: edge,
+                x: x,
+                y: y,
+                localDeviceID: localDeviceID,
+                displays: displays,
+                topology: topology
+            )
+        }
 
-        let edge: DisplayEdge?
-        if x <= source.frame.minX + tolerance { edge = .left }
-        else if x >= source.frame.maxX - tolerance { edge = .right }
-        else if y <= source.frame.minY + tolerance { edge = .bottom }
-        else if y >= source.frame.maxY - tolerance { edge = .top }
-        else { edge = nil }
-        guard let edge,
-              let destination = topology.destination(from: source.id, edge: edge),
+        let overshotEdges = localDisplays.flatMap { source in
+            DisplayEdge.allCases.compactMap { edge -> (DisplayDescriptor, DisplayEdge, Double)? in
+                guard topology.destination(from: source.id, edge: edge) != nil,
+                      isBeyond(edge, of: source.frame, x: x, y: y, tolerance: tolerance) else { return nil }
+                return (source, edge, distance(to: edge, of: source.frame, x: x, y: y))
+            }
+        }
+        guard let (source, edge, _) = overshotEdges.min(by: { $0.2 < $1.2 }) else { return nil }
+        return makeTransition(
+            source: source,
+            edge: edge,
+            x: x,
+            y: y,
+            localDeviceID: localDeviceID,
+            displays: displays,
+            topology: topology
+        )
+    }
+
+    private static func makeTransition(
+        source: DisplayDescriptor,
+        edge: DisplayEdge,
+        x: Double,
+        y: Double,
+        localDeviceID: DeviceID,
+        displays: [DisplayDescriptor],
+        topology: DisplayTopology
+    ) -> EdgeTransition? {
+        guard let destination = topology.destination(from: source.id, edge: edge),
               let target = displays.first(where: { $0.id == destination.displayID }),
               target.deviceID != localDeviceID else { return nil }
 
@@ -117,5 +155,38 @@ public enum EdgeRouter {
             entryEdge: destination.edge,
             normalizedPosition: min(max(normalized, 0), 1)
         )
+    }
+
+    private static func isBeyond(
+        _ edge: DisplayEdge,
+        of frame: DisplayRect,
+        x: Double,
+        y: Double,
+        tolerance: Double
+    ) -> Bool {
+        switch edge {
+        case .left:
+            x < frame.minX - tolerance && y >= frame.minY - tolerance && y <= frame.maxY + tolerance
+        case .right:
+            x > frame.maxX + tolerance && y >= frame.minY - tolerance && y <= frame.maxY + tolerance
+        case .bottom:
+            y < frame.minY - tolerance && x >= frame.minX - tolerance && x <= frame.maxX + tolerance
+        case .top:
+            y > frame.maxY + tolerance && x >= frame.minX - tolerance && x <= frame.maxX + tolerance
+        }
+    }
+
+    private static func distance(
+        to edge: DisplayEdge,
+        of frame: DisplayRect,
+        x: Double,
+        y: Double
+    ) -> Double {
+        switch edge {
+        case .left: frame.minX - x
+        case .right: x - frame.maxX
+        case .bottom: frame.minY - y
+        case .top: y - frame.maxY
+        }
     }
 }

@@ -48,12 +48,20 @@ final class ApplicationTests: XCTestCase {
             )
 
             XCTAssertFalse(hysteresis.allows(transition), "\(edge) should start guarded")
-            let almostInward = inwardPoint(for: edge, distance: 47, frame: source.frame)
+            let almostInward = inwardPoint(
+                for: edge,
+                distance: EntryEdgeHysteresis.defaultInwardDistance - 1,
+                frame: source.frame
+            )
             hysteresis.observe(x: almostInward.x, y: almostInward.y)
-            XCTAssertFalse(hysteresis.allows(transition), "\(edge) should remain guarded before 48 points")
-            let sufficientlyInward = inwardPoint(for: edge, distance: 48, frame: source.frame)
+            XCTAssertFalse(hysteresis.allows(transition), "\(edge) should remain guarded before the threshold")
+            let sufficientlyInward = inwardPoint(
+                for: edge,
+                distance: EntryEdgeHysteresis.defaultInwardDistance,
+                frame: source.frame
+            )
             hysteresis.observe(x: sufficientlyInward.x, y: sufficientlyInward.y)
-            XCTAssertTrue(hysteresis.allows(transition), "\(edge) should unlock at 48 points")
+            XCTAssertTrue(hysteresis.allows(transition), "\(edge) should unlock at the threshold")
         }
     }
 
@@ -71,6 +79,75 @@ final class ApplicationTests: XCTestCase {
             entryEdge: .bottom,
             normalizedPosition: 0.5
         )))
+    }
+
+    func testReturnFromLeftMacUnlocksAfterShortInwardMoveAndAllowsPointerOvershoot() throws {
+        let controllerID = DeviceID()
+        let leftMacID = DeviceID()
+        let controllerDisplay = display(
+            device: controllerID,
+            frame: .init(x: 0, y: 0, width: 100, height: 100)
+        )
+        let leftDisplay = display(
+            device: leftMacID,
+            frame: .init(x: 0, y: 0, width: 100, height: 100)
+        )
+        var topology = DisplayTopology()
+        topology.connect(
+            .init(displayID: leftDisplay.id, edge: .right),
+            to: .init(displayID: controllerDisplay.id, edge: .left)
+        )
+        var hysteresis = EntryEdgeHysteresis()
+        hysteresis.arm(display: leftDisplay, entryEdge: .right)
+
+        hysteresis.observe(x: 88, y: 50)
+        let transition = try XCTUnwrap(EdgeRouter.transition(
+            x: 112,
+            y: 50,
+            localDeviceID: leftMacID,
+            devices: [
+                .init(id: controllerID, name: "Controller", displays: [controllerDisplay]),
+                .init(id: leftMacID, name: "Left Mac", displays: [leftDisplay])
+            ],
+            topology: topology
+        ))
+
+        XCTAssertTrue(hysteresis.allows(transition))
+        XCTAssertEqual(transition.sourceEdge, .right)
+        XCTAssertEqual(transition.targetDeviceID, controllerID)
+    }
+
+    func testPointerOnAdjacentLocalDisplayDoesNotTriggerOvershotRemoteEdge() {
+        let localID = DeviceID()
+        let remoteID = DeviceID()
+        let firstLocalDisplay = display(
+            device: localID,
+            frame: .init(x: 0, y: 0, width: 100, height: 100)
+        )
+        let adjacentLocalDisplay = display(
+            device: localID,
+            frame: .init(x: 100, y: 0, width: 100, height: 100)
+        )
+        let remoteDisplay = display(
+            device: remoteID,
+            frame: .init(x: 0, y: 0, width: 100, height: 100)
+        )
+        var topology = DisplayTopology()
+        topology.connect(
+            .init(displayID: firstLocalDisplay.id, edge: .right),
+            to: .init(displayID: remoteDisplay.id, edge: .left)
+        )
+
+        XCTAssertNil(EdgeRouter.transition(
+            x: 112,
+            y: 50,
+            localDeviceID: localID,
+            devices: [
+                .init(id: localID, name: "Local", displays: [firstLocalDisplay, adjacentLocalDisplay]),
+                .init(id: remoteID, name: "Remote", displays: [remoteDisplay])
+            ],
+            topology: topology
+        ))
     }
 
     func testWireCodecRoundTripsControlAndInputFrames() throws {
