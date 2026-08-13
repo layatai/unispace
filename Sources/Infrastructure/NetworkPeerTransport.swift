@@ -32,6 +32,7 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
     private let enableBonjour: Bool
     private let enableQUIC: Bool
     private let enableRealtime: Bool
+    private let authenticationTimeout: TimeInterval
     private let stream: AsyncStream<PeerEvent>
     private let continuation: AsyncStream<PeerEvent>.Continuation
     private var localDevice: DeviceDescriptor?
@@ -62,7 +63,8 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
         directRealtimePort: NWEndpoint.Port = NetworkPeerTransport.realtimePort,
         enableBonjour: Bool = true,
         enableQUIC: Bool = true,
-        enableRealtime: Bool = true
+        enableRealtime: Bool = true,
+        authenticationTimeout: TimeInterval = 8
     ) {
         configuredListenPort = listenPort
         configuredDirectPort = directPort
@@ -73,6 +75,7 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
         self.enableBonjour = enableBonjour
         self.enableQUIC = enableQUIC
         self.enableRealtime = enableRealtime
+        self.authenticationTimeout = authenticationTimeout
         var captured: AsyncStream<PeerEvent>.Continuation?
         self.stream = AsyncStream { captured = $0 }
         self.continuation = captured!
@@ -426,7 +429,8 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
             workspaceKey: configuration.2,
             expectedDeviceID: expectedDeviceID,
             isOutbound: isOutbound,
-            transportKind: transport
+            transportKind: transport,
+            authenticationTimeout: authenticationTimeout
         )
         let objectID = ObjectIdentifier(managed)
         lock.withLock { pendingConnections[objectID] = managed }
@@ -755,7 +759,8 @@ final class SecurePeerConnection: @unchecked Sendable {
         expectedDeviceID: DeviceID?,
         isOutbound: Bool = false,
         transportKind: TransportKind = .tcp,
-        isDatagram: Bool = false
+        isDatagram: Bool = false,
+        authenticationTimeout: TimeInterval = 8
     ) {
         self.connection = connection
         self.localDeviceID = localDeviceID
@@ -778,6 +783,10 @@ final class SecurePeerConnection: @unchecked Sendable {
         }
         connection.betterPathUpdateHandler = { [weak self] available in
             self?.betterPathHandler?(available)
+        }
+        DispatchQueue.global(qos: .userInteractive).asyncAfter(deadline: .now() + authenticationTimeout) { [weak self] in
+            guard let self, self.deviceID == nil else { return }
+            self.cancel()
         }
     }
 

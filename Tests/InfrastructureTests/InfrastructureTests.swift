@@ -460,6 +460,151 @@ final class InfrastructureTests: XCTestCase {
         clientEvents.cancel()
     }
 
+    func testQUICTransportReconnectsAfterPeerRestarts() async throws {
+        let workspaceID = WorkspaceID()
+        let key = PairingCryptoSession.randomData(count: 32)
+        let serverID = DeviceID()
+        let clientID = DeviceID()
+        let serverDevice = DeviceDescriptor(id: serverID, name: "Server")
+        let clientDevice = DeviceDescriptor(id: clientID, name: "Client")
+        let serverWorkspace = WorkspaceSnapshot(
+            id: workspaceID,
+            name: "QUIC Reconnect",
+            localDeviceID: serverID,
+            devices: [serverDevice, clientDevice]
+        )
+        let firstServer = NetworkPeerTransport(
+            listenPort: .any,
+            directPort: .any,
+            quicListenPort: .any,
+            directQUICPort: .any,
+            enableBonjour: false,
+            enableRealtime: false
+        )
+        try await firstServer.start(localDevice: serverDevice, workspace: serverWorkspace, key: key)
+        let quicPort = try await waitForQUICPort(of: firstServer)
+
+        let routedServer = DeviceDescriptor(
+            id: serverID,
+            name: "Server",
+            peerAddresses: [try PeerAddress("127.0.0.1")]
+        )
+        let clientWorkspace = WorkspaceSnapshot(
+            id: workspaceID,
+            name: "QUIC Reconnect",
+            localDeviceID: clientID,
+            devices: [routedServer, clientDevice]
+        )
+        let client = NetworkPeerTransport(
+            listenPort: .any,
+            directPort: .any,
+            quicListenPort: .any,
+            directQUICPort: quicPort,
+            enableBonjour: false,
+            enableRealtime: false
+        )
+        let tracker = ConnectionExpectationTracker()
+        let firstConnection = expectation(description: "initial QUIC connection")
+        let disconnected = expectation(description: "QUIC connection lost")
+        let reconnected = expectation(description: "QUIC connection restored")
+        let clientEvents = Task {
+            for await event in client.events() {
+                switch event {
+                case .connected(let id) where id == serverID:
+                    if tracker.recordConnection() == 1 { firstConnection.fulfill() }
+                    else if tracker.connectionCount == 2 { reconnected.fulfill() }
+                case .disconnected(let id) where id == serverID:
+                    if tracker.recordDisconnection() == 1 { disconnected.fulfill() }
+                default:
+                    break
+                }
+            }
+        }
+
+        try await client.start(localDevice: clientDevice, workspace: clientWorkspace, key: key)
+        await fulfillment(of: [firstConnection], timeout: 8)
+        await firstServer.stop()
+        await fulfillment(of: [disconnected], timeout: 5)
+
+        let replacementServer = NetworkPeerTransport(
+            listenPort: .any,
+            directPort: .any,
+            quicListenPort: quicPort,
+            directQUICPort: .any,
+            enableBonjour: false,
+            enableRealtime: false
+        )
+        try await replacementServer.start(localDevice: serverDevice, workspace: serverWorkspace, key: key)
+        await fulfillment(of: [reconnected], timeout: 12)
+
+        await client.stop()
+        await replacementServer.stop()
+        clientEvents.cancel()
+    }
+
+    func testTrustedTransportRetriesWhenReachablePeerNeverAuthenticates() async throws {
+        let queue = DispatchQueue(label: "UniSpaceInfrastructureTests.UnresponsivePeer")
+        let acceptedConnections = NWConnectionRetainer()
+        let listener = try NWListener(using: NetworkPeerTransport.makeParameters(), on: .any)
+        let listenerReady = expectation(description: "unresponsive peer listening")
+        listener.stateUpdateHandler = { state in
+            if case .ready = state { listenerReady.fulfill() }
+        }
+        listener.newConnectionHandler = { connection in
+            acceptedConnections.append(connection)
+            connection.start(queue: queue)
+        }
+        listener.start(queue: queue)
+        await fulfillment(of: [listenerReady], timeout: 3)
+        let port = try XCTUnwrap(listener.port)
+
+        let workspaceID = WorkspaceID()
+        let localID = DeviceID()
+        let peerID = DeviceID()
+        let localDevice = DeviceDescriptor(id: localID, name: "Local")
+        let peerDevice = DeviceDescriptor(
+            id: peerID,
+            name: "Unresponsive Peer",
+            peerAddresses: [try PeerAddress("127.0.0.1")]
+        )
+        let workspace = WorkspaceSnapshot(
+            id: workspaceID,
+            name: "Authentication timeout",
+            localDeviceID: localID,
+            devices: [localDevice, peerDevice]
+        )
+        let transport = NetworkPeerTransport(
+            listenPort: .any,
+            directPort: port,
+            enableBonjour: false,
+            enableQUIC: false,
+            authenticationTimeout: 0.2
+        )
+        let retried = expectation(description: "connection retried after authentication timeout")
+        retried.expectedFulfillmentCount = 2
+        retried.assertForOverFulfill = false
+        let events = Task {
+            for await event in transport.events() {
+                if case let .health(id, snapshot) = event,
+                   id == peerID, snapshot.health == .connecting {
+                    retried.fulfill()
+                }
+            }
+        }
+
+        try await transport.start(
+            localDevice: localDevice,
+            workspace: workspace,
+            key: PairingCryptoSession.randomData(count: 32)
+        )
+        await fulfillment(of: [retried], timeout: 3)
+
+        await transport.stop()
+        listener.cancel()
+        acceptedConnections.cancelAll()
+        events.cancel()
+    }
+
     func testWorkspaceStoreRoundTripsAtomically() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -622,5 +767,22 @@ private final class SecureConnectionRetainer: @unchecked Sendable {
     var connection: SecurePeerConnection? {
         get { lock.withLock { stored } }
         set { lock.withLock { stored = newValue } }
+    }
+}
+
+private final class NWConnectionRetainer: @unchecked Sendable {
+    private let lock = NSLock()
+    private var connections: [NWConnection] = []
+
+    func append(_ connection: NWConnection) {
+        lock.withLock { connections.append(connection) }
+    }
+
+    func cancelAll() {
+        let retained = lock.withLock {
+            defer { connections.removeAll() }
+            return connections
+        }
+        retained.forEach { $0.cancel() }
     }
 }
