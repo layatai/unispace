@@ -136,6 +136,44 @@ final class InfrastructureTests: XCTestCase {
         XCTAssertFalse(SystemTailnetAddressProvider.isTailnetAddress("fd00::1"))
     }
 
+    func testSystemAdaptersReportCurrentStateWithoutMutation() {
+        let addresses = SystemTailnetAddressProvider().currentAddresses()
+        XCTAssertEqual(addresses, Array(Set(addresses)).sorted { $0.host < $1.host })
+        XCTAssertTrue(addresses.allSatisfy { SystemTailnetAddressProvider.isTailnetAddress($0.host) })
+
+        let permissions = SystemPermissionService()
+        XCTAssertTrue([PermissionState.granted, .denied].contains(permissions.state(for: .inputMonitoring)))
+        XCTAssertTrue([PermissionState.granted, .denied].contains(permissions.state(for: .postEvents)))
+        XCTAssertEqual(permissions.state(for: .localNetwork), .unknown)
+        XCTAssertFalse(permissions.request(.localNetwork))
+
+        _ = SystemLoginItemController().isEnabled
+    }
+
+    func testPairingPublicModelsAndErrorsExposeDiagnosticValues() {
+        let id = DeviceID()
+        let offer = PairingCryptoSession().offer
+        let candidate = PairingCandidate(
+            id: id,
+            name: "Remote Mac",
+            endpoint: .hostPort(host: "127.0.0.1", port: 61_337),
+            offer: offer
+        )
+        XCTAssertEqual(candidate.id, id)
+        XCTAssertEqual(candidate.name, "Remote Mac")
+
+        let errors: [(PairingServiceError, String)] = [
+            (.notReady, "Pairing is not ready."),
+            (.malformedMessage, "The pairing message was invalid."),
+            (.peerRejected, "The other Mac rejected pairing."),
+            (.workspaceFull, "A UniSpace workspace supports up to four Macs."),
+            (.network("offline"), "offline")
+        ]
+        for (error, description) in errors {
+            XCTAssertEqual(error.errorDescription, description)
+        }
+    }
+
     func testApplicationDeclaresEveryBonjourServiceAndLocalNetworkPurpose() throws {
         let repositoryRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -357,6 +395,7 @@ final class InfrastructureTests: XCTestCase {
         let serverConnected = expectation(description: "server accepted QUIC")
         let clientConnected = expectation(description: "client authenticated QUIC")
         let controlReceived = expectation(description: "control transferred over QUIC")
+        let connectionStartedAt = DispatchTime.now().uptimeNanoseconds
         serverConnected.assertForOverFulfill = false
         clientConnected.assertForOverFulfill = false
         let serverEvents = Task {
@@ -364,6 +403,11 @@ final class InfrastructureTests: XCTestCase {
                 switch event {
                 case .health(let id, let snapshot) where id == clientID &&
                     snapshot.health == .healthy && snapshot.transport == .quic:
+                    XCTAssertGreaterThanOrEqual(
+                        DispatchTime.now().uptimeNanoseconds - connectionStartedAt,
+                        100_000_000,
+                        "QUIC must survive its cold-start stability window before being announced"
+                    )
                     serverConnected.fulfill()
                 case .control(let id, let envelope) where id == clientID:
                     if case .controllerClaim = envelope.message { controlReceived.fulfill() }
@@ -376,6 +420,11 @@ final class InfrastructureTests: XCTestCase {
             for await event in client.events() {
                 if case .health(let id, let snapshot) = event,
                    id == serverID, snapshot.health == .healthy, snapshot.transport == .quic {
+                    XCTAssertGreaterThanOrEqual(
+                        DispatchTime.now().uptimeNanoseconds - connectionStartedAt,
+                        100_000_000,
+                        "QUIC must survive its cold-start stability window before being announced"
+                    )
                     clientConnected.fulfill()
                 }
             }

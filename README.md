@@ -93,9 +93,12 @@ UniSpace forwards standard pointer movement and buttons, scrolling, keyboard key
 
 ```sh
 ./Scripts/test.sh          # full suite, including the signed UI launch test
-./Scripts/test.sh --unit   # domain, application, and infrastructure tests
+./Scripts/test.sh --unit   # deterministic unit, protocol, transport, and simulated E2E tests
+./Scripts/test.sh --input-smoke # signed TCC/event-tap check; requires both input permissions
 ./Scripts/build.sh --universal
 ```
+
+The full and unit modes write an `.xcresult` bundle under `.build/test-results` and enforce the coverage floors in `Config/Coverage.json`. The native input smoke test is opt-in because macOS grants Input Monitoring and Accessibility to the signed test process separately.
 
 The generated Xcode project is derived from `project.yml`; edit the YAML and regenerate instead of hand-editing `project.pbxproj`.
 

@@ -5,10 +5,14 @@ import UniSpaceDomain
 
 public final class CGEventInputInjector: InputInjector, @unchecked Sendable {
     typealias DisplayBoundsProvider = @Sendable () -> [CGRect]
+    typealias EventPoster = @Sendable (CGEvent) -> Void
+    typealias CursorWarpHandler = @Sendable (CGPoint) -> Void
 
     public var pointerPositionHandler: (@Sendable (Double, Double) -> Void)?
     private let lock = NSLock()
     private let displayBoundsProvider: DisplayBoundsProvider
+    private let eventPoster: EventPoster
+    private let cursorWarpHandler: CursorWarpHandler
     private var displayBounds: [CGRect]
     private var cursorPosition = CGPoint.zero
     private var flags = CGEventFlags()
@@ -16,13 +20,25 @@ public final class CGEventInputInjector: InputInjector, @unchecked Sendable {
     private var pressedKeys: Set<UInt16> = []
 
     public convenience init() {
-        self.init(displayBoundsProvider: Self.activeDisplayBounds)
+        self.init(
+            displayBoundsProvider: Self.activeDisplayBounds,
+            initialCursorPosition: CGEvent(source: nil)?.location ?? .zero,
+            eventPoster: { $0.post(tap: .cgSessionEventTap) },
+            cursorWarpHandler: { _ = CGWarpMouseCursorPosition($0) }
+        )
     }
 
-    init(displayBoundsProvider: @escaping DisplayBoundsProvider) {
+    init(
+        displayBoundsProvider: @escaping DisplayBoundsProvider,
+        initialCursorPosition: CGPoint = CGEvent(source: nil)?.location ?? .zero,
+        eventPoster: @escaping EventPoster = { $0.post(tap: .cgSessionEventTap) },
+        cursorWarpHandler: @escaping CursorWarpHandler = { _ = CGWarpMouseCursorPosition($0) }
+    ) {
         self.displayBoundsProvider = displayBoundsProvider
+        self.eventPoster = eventPoster
+        self.cursorWarpHandler = cursorWarpHandler
         displayBounds = displayBoundsProvider()
-        cursorPosition = CGEvent(source: nil)?.location ?? .zero
+        cursorPosition = initialCursorPosition
     }
 
     public func activate(on display: DisplayDescriptor, enteringFrom edge: DisplayEdge, normalizedPosition: Double) {
@@ -45,7 +61,7 @@ public final class CGEventInputInjector: InputInjector, @unchecked Sendable {
         cursorPosition = Self.constrainedPosition(point, to: displayBounds)
         let activationPoint = cursorPosition
         lock.unlock()
-        CGWarpMouseCursorPosition(activationPoint)
+        cursorWarpHandler(activationPoint)
     }
 
     public func inject(_ event: InputEvent) {
@@ -142,7 +158,7 @@ public final class CGEventInputInjector: InputInjector, @unchecked Sendable {
 
     private func post(_ event: CGEvent) {
         event.setIntegerValueField(.eventSourceUserData, value: uniSpaceSyntheticEventMarker)
-        event.post(tap: .cgSessionEventTap)
+        eventPoster(event)
     }
 
     private func activeMouseButton() -> CGMouseButton {

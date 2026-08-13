@@ -1,0 +1,74 @@
+{
+  "targetThresholds": {
+    "UniSpaceDomain.framework": 0.95,
+    "UniSpaceApplication.framework": 0.95,
+    "UniSpaceInfrastructure.framework": 0.77
+  },
+  "scopeThresholds": [
+    {
+      "name": "Infrastructure deterministic core",
+      "target": "UniSpaceInfrastructure.framework",
+      "minimum": 0.85,
+      "files": [
+        "Sources/Infrastructure/CGEventInputInjector.swift",
+        "Sources/Infrastructure/FileWorkspaceStore.swift",
+        "Sources/Infrastructure/PairingCrypto.swift",
+        "Sources/Infrastructure/QUICIdentityProvider.swift",
+        "Sources/Infrastructure/SystemDisplayCatalog.swift"
+      ]
+    }
+  ],
+  "fileThresholds": {
+    "Sources/Domain/ControlProtocol.swift": 1.0,
+    "Sources/Domain/ControllerStateMachine.swift": 1.0,
+    "Sources/Application/FrameCodec.swift": 1.0,
+    "Sources/Application/EdgeRouter.swift": 1.0
+  },
+  "functionThresholds": [
+    {
+      "file": "Sources/Infrastructure/CGEventInputCapture.swift",
+      "name": "CursorSuppressionState.setEnabled(_:currentPosition:)",
+      "minimum": 1.0
+    },
+    {
+      "file": "Sources/Infrastructure/CGEventInputCapture.swift",
+      "name": "CursorSuppressionState.restorationPoint(for:)",
+      "minimum": 1.0
+    },
+    {
+      "file": "Sources/Infrastructure/CGEventInputCapture.swift",
+      "name": "static CGEventInputCapture.convert(type:event:)",
+      "minimum": 1.0
+    },
+    {
+      "file": "Sources/Infrastructure/CGEventInputInjector.swift",
+      "name": "CGEventInputInjector.activate(on:enteringFrom:normalizedPosition:)",
+      "minimum": 1.0
+    },
+    {
+      "file": "Sources/Infrastructure/CGEventInputInjector.swift",
+      "name": "CGEventInputInjector.inject(_:)",
+      "minimum": 1.0
+    },
+    {
+      "file": "Sources/Infrastructure/CGEventInputInjector.swift",
+      "name": "static CGEventInputInjector.gestureEvent(from:at:)",
+      "minimum": 1.0
+    },
+    {
+      "file": "Sources/Infrastructure/CGEventInputInjector.swift",
+      "name": "static CGEventInputInjector.constrainedPosition(_:to:)",
+      "minimum": 1.0
+    },
+    {
+      "file": "Sources/Infrastructure/CGEventInputInjector.swift",
+      "name": "CGEventInputInjector.cgButton(_:)",
+      "minimum": 1.0
+    },
+    {
+      "file": "Sources/Infrastructure/CGEventInputInjector.swift",
+      "name": "CGEventInputInjector.mouseEventType(button:isDown:)",
+      "minimum": 1.0
+    }
+  ]
+}

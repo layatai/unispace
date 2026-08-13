@@ -542,8 +542,17 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
             return
         }
         replaced?.cancel()
-        emit(.health(deviceID, .init(health: .healthy, transport: managed.transportKind)))
-        if shouldEmitConnected { emit(.connected(deviceID)) }
+        let announcementDelay: TimeInterval = managed.transportKind == .quic ? 0.15 : 0
+        queue.asyncAfter(deadline: .now() + announcementDelay) { [weak self, weak managed] in
+            guard let self, let managed else { return }
+            let isCurrent = self.lock.withLock {
+                self.stabilityTokens[deviceID] == stabilityToken &&
+                    self.connections[deviceID] === managed
+            }
+            guard isCurrent else { return }
+            self.emit(.health(deviceID, .init(health: .healthy, transport: managed.transportKind)))
+            if shouldEmitConnected { self.emit(.connected(deviceID)) }
+        }
         queue.asyncAfter(deadline: .now() + 10) { [weak self, weak managed] in
             guard let self, let managed else { return }
             self.lock.withLock {

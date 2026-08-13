@@ -331,7 +331,7 @@ final class ApplicationTests: XCTestCase {
     func testReceiverDoesNotAbandonSessionAfterFourSecondSlowLinkDelay() async throws {
         let local = DeviceID()
         let remote = DeviceID()
-        let clock = MutableClock()
+        let clock = ManualMonotonicClock()
         let coordinator = ControlSessionCoordinator(
             localDeviceID: local,
             workspaceID: WorkspaceID(),
@@ -352,8 +352,15 @@ final class ApplicationTests: XCTestCase {
         let accepted = await coordinator.receiveActivation(activation, from: remote, targetDisplay: nil)
         XCTAssertTrue(accepted)
 
+        for _ in 0..<500 where clock.pendingSleepCount == 0 {
+            await Task.yield()
+        }
+        XCTAssertGreaterThanOrEqual(clock.pendingSleepCount, 1)
         clock.advance(by: 4_000_000_000)
-        try await Task.sleep(for: .milliseconds(1_100))
+        for _ in 0..<500 where clock.pendingSleepCount == 0 {
+            await Task.yield()
+        }
+        XCTAssertGreaterThanOrEqual(clock.pendingSleepCount, 1)
 
         guard case let .receiving(_, source, session) = await coordinator.currentState() else {
             return XCTFail("A slow but viable link must not expire after the old three-second watchdog")
@@ -427,6 +434,7 @@ final class ApplicationTests: XCTestCase {
             absoluteX: 17,
             absoluteY: 11
         ))
+        await coordinator.flushPendingInput()
 
         XCTAssertEqual(transport.realtimeFrames.count, 1)
         XCTAssertEqual(transport.realtimeFrames.first?.cumulativeDeltaX, 2)
@@ -440,7 +448,7 @@ final class ApplicationTests: XCTestCase {
     func testHeartbeatEchoReportsSmoothedRoundTripLatency() async throws {
         let local = DeviceID()
         let remote = DeviceID()
-        let clock = MutableClock()
+        let clock = ManualMonotonicClock()
         let coordinator = ControlSessionCoordinator(
             localDeviceID: local,
             workspaceID: WorkspaceID(),
@@ -516,6 +524,7 @@ final class ApplicationTests: XCTestCase {
 
         let resumed = await coordinator.peerConnected(remote)
         XCTAssertTrue(resumed)
+        await coordinator.flushPendingInput()
         guard case let .controlling(_, resumedTarget, _) = await coordinator.currentState() else {
             return XCTFail("The controller must resume after the peer reconnects")
         }
@@ -605,6 +614,7 @@ final class ApplicationTests: XCTestCase {
         let gesture = InputEvent.gesture(serializedEvent: Data([1, 2, 3]))
 
         _ = await coordinator.handleCaptured(gesture)
+        await coordinator.flushPendingInput()
 
         XCTAssertEqual(transport.frames.map(\.event), [gesture])
         await coordinator.stop()
@@ -631,6 +641,7 @@ final class ApplicationTests: XCTestCase {
 
         _ = await coordinator.handleCaptured(.gesture(serializedEvent: Data([1, 2, 3])))
         _ = await coordinator.handleCaptured(.key(code: 12, isDown: true, isRepeat: false))
+        await coordinator.flushPendingInput()
 
         XCTAssertEqual(transport.frames.map(\.event), [
             .key(code: 12, isDown: true, isRepeat: false)
@@ -919,14 +930,6 @@ private final class InjectorSpy: InputInjector, @unchecked Sendable {
     func activate(on display: DisplayDescriptor, enteringFrom edge: DisplayEdge, normalizedPosition: Double) {}
     func inject(_ event: InputEvent) { lock.withLock { storedEvents.append(event) } }
     func releaseAll() { lock.withLock { storedReleaseCount += 1 } }
-}
-
-private final class MutableClock: MonotonicClock, @unchecked Sendable {
-    private let lock = NSLock()
-    private var value: UInt64 = 0
-
-    func nowNanoseconds() -> UInt64 { lock.withLock { value } }
-    func advance(by nanoseconds: UInt64) { lock.withLock { value &+= nanoseconds } }
 }
 
 private final class TransportSpy: PeerTransport, @unchecked Sendable {

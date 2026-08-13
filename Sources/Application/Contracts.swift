@@ -120,6 +120,13 @@ public extension PeerTransport {
 
 public protocol MonotonicClock: Sendable {
     func nowNanoseconds() -> UInt64
+    func sleep(for duration: Duration) async throws
+}
+
+public extension MonotonicClock {
+    func sleep(for duration: Duration) async throws {
+        try await Task.sleep(for: duration)
+    }
 }
 
 public struct SystemMonotonicClock: MonotonicClock {
@@ -127,5 +134,9 @@ public struct SystemMonotonicClock: MonotonicClock {
 
     public func nowNanoseconds() -> UInt64 {
         DispatchTime.now().uptimeNanoseconds
+    }
+
+    public func sleep(for duration: Duration) async throws {
+        try await Task.sleep(for: duration)
     }
 }

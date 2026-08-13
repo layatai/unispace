@@ -39,6 +39,9 @@ public enum InputCaptureError: Error, Equatable {
 
 public final class CGEventInputCapture: InputCapture, @unchecked Sendable {
     typealias MouseAssociationHandler = @Sendable (_ connected: Bool) -> Void
+    typealias CursorWarpHandler = @Sendable (CGPoint) -> Void
+    typealias PermissionChecker = @Sendable () -> Bool
+    typealias EventTapFactory = @Sendable (CGEventMask, UnsafeMutableRawPointer) -> CFMachPort?
 
     static let gestureEventTypes: [CGEventType] = [
         NSEvent.EventType.gesture,
@@ -59,6 +62,9 @@ public final class CGEventInputCapture: InputCapture, @unchecked Sendable {
 
     private let lock = NSLock()
     private let mouseAssociationHandler: MouseAssociationHandler
+    private let cursorWarpHandler: CursorWarpHandler
+    private let permissionChecker: PermissionChecker
+    private let eventTapFactory: EventTapFactory
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
     private var callback: (@Sendable (InputEvent) -> Bool)?
@@ -66,13 +72,28 @@ public final class CGEventInputCapture: InputCapture, @unchecked Sendable {
     private var cursorSuppression = CursorSuppressionState()
 
     public convenience init() {
-        self.init { connected in
-            _ = CGAssociateMouseAndMouseCursorPosition(connected ? 1 : 0)
-        }
+        self.init(
+            mouseAssociationHandler: { connected in
+                _ = CGAssociateMouseAndMouseCursorPosition(connected ? 1 : 0)
+            },
+            cursorWarpHandler: { _ = CGWarpMouseCursorPosition($0) },
+            permissionChecker: CGPreflightListenEventAccess,
+            eventTapFactory: Self.makeEventTap
+        )
     }
 
-    init(mouseAssociationHandler: @escaping MouseAssociationHandler) {
+    init(
+        mouseAssociationHandler: @escaping MouseAssociationHandler,
+        cursorWarpHandler: @escaping CursorWarpHandler = { _ = CGWarpMouseCursorPosition($0) },
+        permissionChecker: @escaping PermissionChecker = CGPreflightListenEventAccess,
+        eventTapFactory: @escaping EventTapFactory = CGEventInputCapture.makeEventTap,
+        handler: (@Sendable (InputEvent) -> Bool)? = nil
+    ) {
         self.mouseAssociationHandler = mouseAssociationHandler
+        self.cursorWarpHandler = cursorWarpHandler
+        self.permissionChecker = permissionChecker
+        self.eventTapFactory = eventTapFactory
+        callback = handler
     }
 
     deinit {
@@ -86,7 +107,7 @@ public final class CGEventInputCapture: InputCapture, @unchecked Sendable {
     }
 
     public func start(handler: @escaping @Sendable (InputEvent) -> Bool) throws {
-        guard CGPreflightListenEventAccess() else { throw InputCaptureError.permissionDenied }
+        guard permissionChecker() else { throw InputCaptureError.permissionDenied }
         lock.lock()
         defer { lock.unlock() }
         if eventTap != nil { return }
@@ -95,14 +116,7 @@ public final class CGEventInputCapture: InputCapture, @unchecked Sendable {
         let mask = Self.capturedEventTypes.reduce(CGEventMask(0)) {
             $0 | (CGEventMask(1) << $1.rawValue)
         }
-        guard let tap = CGEvent.tapCreate(
-            tap: .cgSessionEventTap,
-            place: .headInsertEventTap,
-            options: .defaultTap,
-            eventsOfInterest: mask,
-            callback: uniSpaceEventTapCallback,
-            userInfo: Unmanaged.passUnretained(self).toOpaque()
-        ) else {
+        guard let tap = eventTapFactory(mask, Unmanaged.passUnretained(self).toOpaque()) else {
             callback = nil
             throw InputCaptureError.eventTapCreationFailed
         }
@@ -111,6 +125,17 @@ public final class CGEventInputCapture: InputCapture, @unchecked Sendable {
         runLoopSource = source
         CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
         CGEvent.tapEnable(tap: tap, enable: true)
+    }
+
+    private static func makeEventTap(mask: CGEventMask, userInfo: UnsafeMutableRawPointer) -> CFMachPort? {
+        CGEvent.tapCreate(
+            tap: .cgSessionEventTap,
+            place: .headInsertEventTap,
+            options: .defaultTap,
+            eventsOfInterest: mask,
+            callback: uniSpaceEventTapCallback,
+            userInfo: userInfo
+        )
     }
 
     public func stop() {
@@ -141,7 +166,7 @@ public final class CGEventInputCapture: InputCapture, @unchecked Sendable {
         lock.unlock()
     }
 
-    fileprivate func handle(type: CGEventType, event: CGEvent) -> Bool {
+    func handle(type: CGEventType, event: CGEvent) -> Bool {
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
             lock.lock()
             if let eventTap { CGEvent.tapEnable(tap: eventTap, enable: true) }
@@ -159,7 +184,7 @@ public final class CGEventInputCapture: InputCapture, @unchecked Sendable {
         lock.unlock()
         let handled = callback?(input) ?? false
         if let restorationPoint {
-            CGWarpMouseCursorPosition(restorationPoint)
+            cursorWarpHandler(restorationPoint)
         }
         return handled || suppress
     }

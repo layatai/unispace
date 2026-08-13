@@ -33,6 +33,7 @@ public actor ControlSessionCoordinator {
     private let capture: InputCapture
     private let injector: InputInjector
     private let transport: PeerTransport
+    private let inputSender: OrderedInputSender
     private let clock: MonotonicClock
     private let reconnectGrace: Duration
     private var election: ControllerStateMachine
@@ -76,6 +77,7 @@ public actor ControlSessionCoordinator {
         self.capture = capture
         self.injector = injector
         self.transport = transport
+        self.inputSender = OrderedInputSender(transport: transport)
         self.clock = clock
         self.reconnectGrace = reconnectGrace
         self.election = election
@@ -263,7 +265,7 @@ public actor ControlSessionCoordinator {
             event: event
         )
         sequence &+= 1
-        try? await transport.send(frame, to: target)
+        await inputSender.enqueue(frame, to: target)
     }
 
     public func handleIncoming(_ frame: InputFrame, from source: DeviceID) async {
@@ -309,7 +311,7 @@ public actor ControlSessionCoordinator {
     public func peerDisconnected(_ deviceID: DeviceID) async {
         switch state {
         case let .controlling(_, target, _) where target == deviceID:
-            interruptConnection(to: target)
+            await interruptConnection(to: target)
             startReconnectGrace(target: target)
         case let .receiving(_, source, _) where source == deviceID:
             await endCurrentSession(notifyPeer: false)
@@ -354,7 +356,16 @@ public actor ControlSessionCoordinator {
     }
 
     public func deactivateCurrentSession() async {
+        await flushPendingMotion()
+        await inputSender.drain()
         await endCurrentSession(notifyPeer: true)
+    }
+
+    /// Waits until input already accepted by the coordinator has reached the
+    /// transport. This is primarily useful at explicit session boundaries.
+    func flushPendingInput() async {
+        await flushPendingMotion()
+        await inputSender.drain()
     }
 
     public func stop() async {
@@ -385,18 +396,21 @@ public actor ControlSessionCoordinator {
         resetRealtimeReceiver()
         capture.setSuppressionEnabled(false)
 
+        if case .receiving = previous {
+            for event in remoteInputState.releaseEvents() {
+                injector.inject(event)
+            }
+            injector.releaseAll()
+        }
+        await inputSender.cancelPending()
+
         switch previous {
         case let .controlling(_, target, sessionID):
             if notifyPeer {
                 try? await transport.send(ControlEnvelope(message: .releaseAll(sessionID)), to: target)
                 try? await transport.send(ControlEnvelope(message: .deactivate(sessionID)), to: target)
             }
-        case .receiving:
-            for event in remoteInputState.releaseEvents() {
-                injector.inject(event)
-            }
-            injector.releaseAll()
-        case .idle:
+        case .receiving, .idle:
             break
         }
     }
@@ -406,10 +420,11 @@ public actor ControlSessionCoordinator {
         return (flags & emergencyFlags) == emergencyFlags
     }
 
-    private func interruptConnection(to target: DeviceID) {
+    private func interruptConnection(to target: DeviceID) async {
         guard case let .controlling(_, expectedTarget, _) = state,
               target == expectedTarget else { return }
         isConnectionInterrupted = true
+        await inputSender.cancelPending()
         pointerFlushTask?.cancel()
         pointerFlushTask = nil
         pendingPointerEvent = nil
@@ -420,8 +435,9 @@ public actor ControlSessionCoordinator {
 
     private func schedulePointerFlush() {
         guard pointerFlushTask == nil else { return }
-        pointerFlushTask = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(16))
+        pointerFlushTask = Task { [weak self, clock] in
+            try? await clock.sleep(for: .milliseconds(16))
+            guard !Task.isCancelled else { return }
             await self?.flushPendingMotion()
         }
     }
@@ -484,9 +500,9 @@ public actor ControlSessionCoordinator {
 
     private func startHeartbeat(target: DeviceID, sessionID: SessionID) {
         heartbeatTask?.cancel()
-        heartbeatTask = Task { [weak self] in
+        heartbeatTask = Task { [weak self, clock] in
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(1))
+                try? await clock.sleep(for: .seconds(1))
                 guard !Task.isCancelled, let self else { return }
                 await self.sendHeartbeat(target: target, sessionID: sessionID)
             }
@@ -504,9 +520,9 @@ public actor ControlSessionCoordinator {
 
     private func startWatchdog(source: DeviceID, sessionID: SessionID) {
         watchdogTask?.cancel()
-        watchdogTask = Task { [weak self] in
+        watchdogTask = Task { [weak self, clock] in
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(1))
+                try? await clock.sleep(for: .seconds(1))
                 guard !Task.isCancelled, let self else { return }
                 let expired = await self.isHeartbeatExpired(source: source, sessionID: sessionID)
                 if expired {
@@ -535,8 +551,8 @@ public actor ControlSessionCoordinator {
 
     private func startReconnectGrace(target: DeviceID) {
         reconnectGraceTask?.cancel()
-        reconnectGraceTask = Task { [weak self, reconnectGrace] in
-            try? await Task.sleep(for: reconnectGrace)
+        reconnectGraceTask = Task { [weak self, reconnectGrace, clock] in
+            try? await clock.sleep(for: reconnectGrace)
             guard !Task.isCancelled, let self else { return }
             await self.finishInterruptedSession(target: target)
         }
@@ -547,5 +563,78 @@ public actor ControlSessionCoordinator {
               case let .controlling(_, expectedTarget, _) = state,
               expectedTarget == target else { return }
         await endCurrentSession(notifyPeer: false)
+    }
+}
+
+/// Preserves reliable input ordering without letting a slow network send block
+/// the coordinator's heartbeat and reconnect state machine.
+private actor OrderedInputSender {
+    private struct PendingFrame: Sendable {
+        let frame: InputFrame
+        let target: DeviceID
+    }
+
+    private let transport: PeerTransport
+    private var pending: [PendingFrame] = []
+    private var nextIndex = 0
+    private var generation: UInt64 = 0
+    private var worker: Task<Void, Never>?
+    private var drainWaiters: [CheckedContinuation<Void, Never>] = []
+
+    init(transport: PeerTransport) {
+        self.transport = transport
+    }
+
+    func enqueue(_ frame: InputFrame, to target: DeviceID) {
+        pending.append(PendingFrame(frame: frame, target: target))
+        guard worker == nil else { return }
+        let activeGeneration = generation
+        worker = Task { [weak self] in
+            await self?.sendPendingFrames(generation: activeGeneration)
+        }
+    }
+
+    func cancelPending() {
+        generation &+= 1
+        pending.removeAll(keepingCapacity: true)
+        nextIndex = 0
+        worker?.cancel()
+        worker = nil
+        resumeDrainWaiters()
+    }
+
+    func drain() async {
+        guard worker != nil || nextIndex < pending.count else { return }
+        await withCheckedContinuation { drainWaiters.append($0) }
+    }
+
+    private func sendPendingFrames(generation activeGeneration: UInt64) async {
+        while !Task.isCancelled, generation == activeGeneration {
+            guard nextIndex < pending.count else {
+                pending.removeAll(keepingCapacity: true)
+                nextIndex = 0
+                if generation == activeGeneration {
+                    worker = nil
+                    resumeDrainWaiters()
+                }
+                return
+            }
+
+            let item = pending[nextIndex]
+            nextIndex += 1
+            try? await transport.send(item.frame, to: item.target)
+            guard !Task.isCancelled, generation == activeGeneration else { return }
+
+            if nextIndex >= 64, nextIndex * 2 >= pending.count {
+                pending.removeFirst(nextIndex)
+                nextIndex = 0
+            }
+        }
+    }
+
+    private func resumeDrainWaiters() {
+        let waiters = drainWaiters
+        drainWaiters.removeAll(keepingCapacity: true)
+        waiters.forEach { $0.resume() }
     }
 }

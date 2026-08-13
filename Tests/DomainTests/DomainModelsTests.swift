@@ -145,6 +145,64 @@ final class DomainModelsTests: XCTestCase {
         )
     }
 
+    func testIdentifierAndPeerAddressDescriptionsExposeCanonicalValues() throws {
+        let uuid = UUID(uuidString: "00000000-0000-0000-0000-0000000000AA")!
+        let address = try PeerAddress(" MacBook.tailnet.ts.net ")
+
+        XCTAssertEqual(DeviceID(rawValue: uuid).description, uuid.uuidString)
+        XCTAssertEqual(address.description, "macbook.tailnet.ts.net")
+        XCTAssertEqual(try JSONDecoder().decode(PeerAddress.self, from: JSONEncoder().encode(address)), address)
+        XCTAssertEqual(PeerAddressError.empty.errorDescription, "Enter a Tailscale hostname or IP address.")
+        XCTAssertEqual(
+            PeerAddressError.invalidFormat.errorDescription,
+            "Enter a hostname or IP address without a URL, path, or port."
+        )
+    }
+
+    func testEveryDisplayEdgeHasSymmetricOpposite() {
+        let pairs: [(DisplayEdge, DisplayEdge)] = [
+            (.left, .right),
+            (.right, .left),
+            (.top, .bottom),
+            (.bottom, .top)
+        ]
+
+        for (edge, opposite) in pairs {
+            XCTAssertEqual(edge.opposite, opposite)
+            XCTAssertEqual(opposite.opposite, edge)
+        }
+    }
+
+    func testEdgeLinkIdentityIncludesBothDirectedEndpoints() {
+        let first = DisplayEndpoint(displayID: DisplayID(), edge: .left)
+        let second = DisplayEndpoint(displayID: DisplayID(), edge: .right)
+        let link = EdgeLink(source: first, destination: second)
+
+        XCTAssertEqual(
+            link.id,
+            "\(first.displayID)-left-\(second.displayID)-right"
+        )
+    }
+
+    func testWorkspaceUpdateReplacesKnownDeviceAndAppendsNewDevice() {
+        let localID = DeviceID()
+        let remoteID = DeviceID()
+        let localDisplay = display(id: DisplayID(), deviceID: localID)
+        var workspace = WorkspaceSnapshot(
+            id: WorkspaceID(),
+            name: "Test",
+            localDeviceID: localID,
+            devices: [DeviceDescriptor(id: localID, name: "Before", displays: [localDisplay])]
+        )
+
+        workspace.updateDevice(DeviceDescriptor(id: localID, name: "After", displays: [localDisplay]))
+        workspace.updateDevice(DeviceDescriptor(id: remoteID, name: "Remote"))
+
+        XCTAssertEqual(workspace.devices.count, 2)
+        XCTAssertEqual(workspace.devices.first { $0.id == localID }?.name, "After")
+        XCTAssertEqual(workspace.devices.first { $0.id == remoteID }?.name, "Remote")
+    }
+
     private func display(
         id: DisplayID,
         deviceID: DeviceID,
