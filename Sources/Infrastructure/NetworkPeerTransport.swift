@@ -752,6 +752,10 @@ final class SecurePeerConnection: @unchecked Sendable {
     private let workspaceKey: SymmetricKey
     private let localNonce: Data
     private let lock = NSLock()
+    private let sendQueue = DispatchQueue(
+        label: "com.layatai.unispace.secure-peer-send",
+        qos: .userInteractive
+    )
     private var buffer = Data()
     private var sessionKey: SymmetricKey?
     private var authenticatedDeviceID: DeviceID?
@@ -812,17 +816,19 @@ final class SecurePeerConnection: @unchecked Sendable {
     }
 
     func send(_ data: Data, completion: (@Sendable (NWError?) -> Void)?) {
-        do {
-            let outer = try seal(data)
-            connection.send(
-                content: outer,
-                contentContext: isDatagram ? .defaultMessage : .defaultStream,
-                isComplete: isDatagram,
-                completion: .contentProcessed { error in completion?(error) }
-            )
-        } catch {
-            completion?(NWError.posix(.EAUTH))
-            cancel()
+        sendQueue.async { [self] in
+            do {
+                let outer = try seal(data)
+                connection.send(
+                    content: outer,
+                    contentContext: isDatagram ? .defaultMessage : .defaultStream,
+                    isComplete: isDatagram,
+                    completion: .contentProcessed { error in completion?(error) }
+                )
+            } catch {
+                completion?(NWError.posix(.EAUTH))
+                cancel()
+            }
         }
     }
 

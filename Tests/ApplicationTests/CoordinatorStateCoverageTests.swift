@@ -329,6 +329,57 @@ final class CoordinatorStateCoverageTests: XCTestCase {
         await coordinator.stop()
     }
 
+    func testStopRemoteControlDoesNotWaitForBlockedInputSend() async throws {
+        let localID = DeviceID()
+        let remoteID = DeviceID()
+        let transport = BlockingInputTransport()
+        let capture = CoordinatorCaptureSpy()
+        let coordinator = ControlSessionCoordinator(
+            localDeviceID: localID,
+            workspaceID: WorkspaceID(),
+            capture: capture,
+            injector: CoordinatorInjectorSpy(),
+            transport: transport
+        )
+        _ = await coordinator.makeLocalController()
+        try await coordinator.activate(
+            target: remoteID,
+            displayID: DisplayID(),
+            entryEdge: .left,
+            normalizedPosition: 0.5,
+            targetCapabilities: [.publicTrackpadGestures]
+        )
+        _ = await coordinator.handleCaptured(.gesture(serializedEvent: Data([1, 2, 3])))
+        let inputSendStarted = await waitUntil { transport.inputSendStarted }
+        XCTAssertTrue(inputSendStarted)
+
+        let stopReturned = SendableFlag()
+        let stopCompleted = expectation(description: "remote control stopped")
+        let stopTask = Task {
+            await coordinator.deactivateCurrentSession()
+            stopReturned.set()
+            stopCompleted.fulfill()
+        }
+
+        await fulfillment(of: [stopCompleted], timeout: 0.25)
+        let didStop = stopReturned.value
+        XCTAssertTrue(
+            didStop,
+            "Stopping remote control must cancel queued input instead of waiting for the network"
+        )
+        let state = await coordinator.currentState()
+        XCTAssertEqual(state, .idle)
+        XCTAssertFalse(capture.isSuppressionEnabled)
+        XCTAssertTrue(transport.controlMessages.contains {
+            if case .deactivate = $0 { return true }
+            return false
+        })
+
+        transport.resumeInputSend()
+        await stopTask.value
+        await coordinator.stop()
+    }
+
     func testHeartbeatValidationAndActivationFailureLeaveCoordinatorIdle() async throws {
         let localID = DeviceID()
         let remoteID = DeviceID()

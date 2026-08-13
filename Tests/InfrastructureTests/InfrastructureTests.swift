@@ -751,7 +751,7 @@ final class InfrastructureTests: XCTestCase {
         XCTAssertEqual(Set(displays.map(\.id)).count, displays.count)
     }
 
-    func testAuthenticatedEncryptedChannelCompletesLoopbackHandshakeAndTransfersFrame() throws {
+    func testAuthenticatedEncryptedChannelSerializesConcurrentTransfers() throws {
         let workspaceID = WorkspaceID()
         let key = PairingCryptoSession.randomData(count: 32)
         let serverDevice = DeviceID()
@@ -760,7 +760,9 @@ final class InfrastructureTests: XCTestCase {
         let listenerReady = expectation(description: "listener ready")
         let serverAuthenticated = expectation(description: "server authenticated client")
         let clientAuthenticated = expectation(description: "client authenticated server")
-        let frameReceived = expectation(description: "encrypted frame received")
+        let transferCount = 256
+        let framesReceived = expectation(description: "encrypted frames received")
+        framesReceived.expectedFulfillmentCount = transferCount
         let queue = DispatchQueue(label: "UniSpaceInfrastructureTests.SecureChannel")
         let retainer = SecureConnectionRetainer()
         listener.stateUpdateHandler = { state in
@@ -785,7 +787,7 @@ final class InfrastructureTests: XCTestCase {
                 } catch {
                     XCTFail("Unable to decode encrypted control frame: \(error)")
                 }
-                frameReceived.fulfill()
+                framesReceived.fulfill()
             }
             retainer.connection = secure
             connection.start(queue: queue)
@@ -811,9 +813,16 @@ final class InfrastructureTests: XCTestCase {
         }
         rawClient.start(queue: queue)
         wait(for: [serverAuthenticated, clientAuthenticated], timeout: 5)
-        let envelope = ControlEnvelope(message: .hello(.init(id: clientDevice, name: "Client")))
-        client.send(try WireFrameCodec.encodeControl(envelope), completion: nil)
-        wait(for: [frameReceived], timeout: 3)
+        let payloads = try (0..<transferCount).map { index in
+            try WireFrameCodec.encodeControl(ControlEnvelope(message: .controllerClaim(.init(
+                generation: UInt64(index + 1),
+                controllerID: clientDevice
+            ))))
+        }
+        DispatchQueue.concurrentPerform(iterations: transferCount) { index in
+            client.send(payloads[index], completion: nil)
+        }
+        wait(for: [framesReceived], timeout: 5)
         client.cancel()
         listener.cancel()
     }

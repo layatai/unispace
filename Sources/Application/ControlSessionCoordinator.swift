@@ -357,7 +357,7 @@ public actor ControlSessionCoordinator {
 
     public func deactivateCurrentSession() async {
         await flushPendingMotion()
-        await inputSender.drain()
+        await inputSender.drainOrCancel(after: .milliseconds(50))
         await endCurrentSession(notifyPeer: true)
     }
 
@@ -608,6 +608,21 @@ private actor OrderedInputSender {
         await withCheckedContinuation { drainWaiters.append($0) }
     }
 
+    func drainOrCancel(after timeout: Duration) async {
+        guard worker != nil || nextIndex < pending.count else { return }
+        let activeGeneration = generation
+        let timeoutTask = Task { [weak self] in
+            do {
+                try await Task.sleep(for: timeout)
+            } catch {
+                return
+            }
+            await self?.cancelPending(generation: activeGeneration)
+        }
+        await drain()
+        timeoutTask.cancel()
+    }
+
     private func sendPendingFrames(generation activeGeneration: UInt64) async {
         while !Task.isCancelled, generation == activeGeneration {
             guard nextIndex < pending.count else {
@@ -636,5 +651,10 @@ private actor OrderedInputSender {
         let waiters = drainWaiters
         drainWaiters.removeAll(keepingCapacity: true)
         waiters.forEach { $0.resume() }
+    }
+
+    private func cancelPending(generation expectedGeneration: UInt64) {
+        guard generation == expectedGeneration else { return }
+        cancelPending()
     }
 }
