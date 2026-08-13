@@ -41,6 +41,12 @@ public final class CGEventInputCapture: InputCapture, @unchecked Sendable {
 
     public init() {}
 
+    public var isSuppressionEnabled: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return suppressionEnabled
+    }
+
     public func start(handler: @escaping @Sendable (InputEvent) -> Bool) throws {
         guard CGPreflightListenEventAccess() else { throw InputCaptureError.permissionDenied }
         lock.lock()

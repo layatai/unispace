@@ -42,6 +42,7 @@ final class AppModel: ObservableObject {
     private var currentEpoch: ControllerEpoch?
     private var lastBoundaryTime: UInt64 = 0
     private var entryEdgeHysteresis = EntryEdgeHysteresis()
+    private var pendingActivationEvents: [InputEvent]?
 
     let localDeviceID: DeviceID
 
@@ -455,20 +456,30 @@ final class AppModel: ObservableObject {
         guard inputMonitoringPermission == .granted else { return }
         do {
             try capture.start { [weak self] event in
-                Task { @MainActor [weak self] in await self?.handleCaptured(event) }
-                return false
+                guard Thread.isMainThread else {
+                    Task { @MainActor [weak self] in self?.captureSynchronously(event) }
+                    return false
+                }
+                return MainActor.assumeIsolated {
+                    self?.captureSynchronously(event) ?? false
+                }
             }
         } catch {
             lastError = error.localizedDescription
         }
     }
 
-    private func handleCaptured(_ event: InputEvent) async {
-        guard let coordinator else { return }
+    @discardableResult
+    private func captureSynchronously(_ event: InputEvent) -> Bool {
+        if pendingActivationEvents != nil {
+            pendingActivationEvents?.append(event)
+            return true
+        }
         if case let .pointerMove(_, _, x, y) = event {
             entryEdgeHysteresis.observe(x: x, y: y)
-            if isLocalController,
-               case .idle = await coordinator.currentState(),
+            if !capture.isSuppressionEnabled,
+               isLocalController,
+               coordinator != nil,
                let workspace,
                let transition = EdgeRouter.transition(
                     x: x,
@@ -482,19 +493,48 @@ final class AppModel: ObservableObject {
                    $0.id == transition.sourceDisplayID
                }) {
                 entryEdgeHysteresis.arm(display: sourceDisplay, entryEdge: transition.sourceEdge)
-                do {
-                    try await coordinator.activate(
-                        target: transition.targetDeviceID,
-                        displayID: transition.targetDisplayID,
-                        entryEdge: transition.entryEdge,
-                        normalizedPosition: transition.normalizedPosition
-                    )
-                    statusMessage = "Controlling \(deviceName(transition.targetDeviceID))"
-                } catch {
-                    lastError = error.localizedDescription
-                }
+                pendingActivationEvents = [event]
+                capture.setSuppressionEnabled(true)
+                Task { @MainActor [weak self] in await self?.completeActivation(transition) }
+                return true
             }
         }
+        Task { @MainActor [weak self] in await self?.forwardCaptured(event) }
+        return false
+    }
+
+    private func completeActivation(_ transition: EdgeTransition) async {
+        guard let coordinator else {
+            pendingActivationEvents = nil
+            capture.setSuppressionEnabled(false)
+            return
+        }
+        do {
+            try await coordinator.activate(
+                target: transition.targetDeviceID,
+                displayID: transition.targetDisplayID,
+                entryEdge: transition.entryEdge,
+                normalizedPosition: transition.normalizedPosition
+            )
+            guard case .controlling = await coordinator.currentState() else {
+                pendingActivationEvents = nil
+                capture.setSuppressionEnabled(false)
+                return
+            }
+            let events = pendingActivationEvents ?? []
+            pendingActivationEvents = nil
+            for event in events {
+                _ = await coordinator.handleCaptured(event)
+            }
+            statusMessage = "Controlling \(deviceName(transition.targetDeviceID))"
+        } catch {
+            pendingActivationEvents = nil
+            lastError = error.localizedDescription
+        }
+    }
+
+    private func forwardCaptured(_ event: InputEvent) async {
+        guard let coordinator else { return }
         if await coordinator.handleCaptured(event) == .emergencyStop {
             statusMessage = "Control returned to this Mac"
         }

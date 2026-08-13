@@ -346,6 +346,33 @@ final class ApplicationTests: XCTestCase {
         await coordinator.stop()
     }
 
+    func testActivationDoesNotDisablePrearmedInputSuppression() async throws {
+        let local = DeviceID()
+        let remote = DeviceID()
+        let capture = CaptureSpy()
+        let coordinator = ControlSessionCoordinator(
+            localDeviceID: local,
+            workspaceID: WorkspaceID(),
+            capture: capture,
+            injector: InjectorSpy(),
+            transport: TransportSpy()
+        )
+        _ = await coordinator.makeLocalController()
+        capture.setSuppressionEnabled(true)
+        let historyStart = capture.suppressionHistory.count
+
+        try await coordinator.activate(
+            target: remote,
+            displayID: DisplayID(),
+            entryEdge: .left,
+            normalizedPosition: 0.5
+        )
+
+        XCTAssertEqual(Array(capture.suppressionHistory.dropFirst(historyStart)), [true])
+        XCTAssertTrue(capture.suppressed)
+        await coordinator.stop()
+    }
+
     func testEmergencyHotkeyReturnsControlDuringNetworkInterruption() async throws {
         let local = DeviceID()
         let remote = DeviceID()
@@ -545,9 +572,14 @@ private final class TrustStoreSpy: TrustStore, @unchecked Sendable {
 
 private final class CaptureSpy: InputCapture, @unchecked Sendable {
     private(set) var suppressed = false
+    private(set) var suppressionHistory: [Bool] = []
+    var isSuppressionEnabled: Bool { suppressed }
     func start(handler: @escaping @Sendable (InputEvent) -> Bool) throws {}
     func stop() {}
-    func setSuppressionEnabled(_ enabled: Bool) { suppressed = enabled }
+    func setSuppressionEnabled(_ enabled: Bool) {
+        suppressed = enabled
+        suppressionHistory.append(enabled)
+    }
 }
 
 private final class InjectorSpy: InputInjector, @unchecked Sendable {

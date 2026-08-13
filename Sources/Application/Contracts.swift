@@ -27,6 +27,7 @@ public protocol TailnetAddressProviding: Sendable {
 }
 
 public protocol InputCapture: Sendable {
+    var isSuppressionEnabled: Bool { get }
     func start(handler: @escaping @Sendable (InputEvent) -> Bool) throws
     func stop()
     func setSuppressionEnabled(_ enabled: Bool)

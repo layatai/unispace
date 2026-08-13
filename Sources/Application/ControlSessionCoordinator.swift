@@ -80,7 +80,11 @@ public actor ControlSessionCoordinator {
 
     public func activate(target: DeviceID, displayID: DisplayID, entryEdge: DisplayEdge, normalizedPosition: Double) async throws {
         guard let epoch = election.currentEpoch, epoch.controllerID == localDeviceID else { return }
-        await endCurrentSession(notifyPeer: true)
+        if case .idle = state {
+            // Input capture may already be synchronously pre-armed by the edge event tap.
+        } else {
+            await endCurrentSession(notifyPeer: true)
+        }
         let sessionID = SessionID()
         state = .controlling(epoch: epoch, target: target, session: sessionID)
         activeControlRoute = ActiveControlRoute(
