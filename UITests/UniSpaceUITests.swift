@@ -27,4 +27,14 @@ final class UniSpaceUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Connect through Tailscale"].exists)
         app.terminate()
     }
+
+    @MainActor
+    func testConfiguredWorkspaceOffersLeaveAction() {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing-configured"]
+        app.launch()
+
+        XCTAssertTrue(app.buttons["leave-workspace"].waitForExistence(timeout: 5))
+        app.terminate()
+    }
 }

@@ -32,6 +32,8 @@ UniSpace uses Bonjour for automatic LAN discovery. Across Tailscale, enter the h
 
 Use `Control-Option-Command-Escape` to stop a remote-control session and return control locally.
 
+To join a different workspace, open **General → Workspace**, choose **Leave Workspace…**, and confirm. This removes only this Mac’s local workspace membership and Keychain key, preserves macOS permissions, and returns to the setup screen where **Join Workspace** is available.
+
 ## Signed release
 
 Store notarization credentials in a notarytool Keychain profile, then run:

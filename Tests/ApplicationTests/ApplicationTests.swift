@@ -142,8 +142,102 @@ final class ApplicationTests: XCTestCase {
         await coordinator.stop()
     }
 
+    func testLeaveWorkspaceRemovesPersistentStateThenTrustKey() throws {
+        let calls = CallRecorder()
+        let workspaceStore = WorkspaceStoreSpy(calls: calls)
+        let trustStore = TrustStoreSpy(calls: calls)
+        let workspaceID = WorkspaceID()
+
+        let result = try WorkspaceLifecycle(
+            workspaceStore: workspaceStore,
+            trustStore: trustStore
+        ).leave(workspaceID: workspaceID)
+
+        XCTAssertEqual(result, .complete)
+        XCTAssertEqual(calls.values, ["workspace.remove", "trust.remove"])
+        XCTAssertEqual(trustStore.removedWorkspaceID, workspaceID)
+    }
+
+    func testLeaveWorkspaceDoesNotRemoveTrustKeyWhenPersistentStateCannotBeRemoved() {
+        let calls = CallRecorder()
+        let workspaceStore = WorkspaceStoreSpy(calls: calls, removeError: SpyError.failure)
+        let trustStore = TrustStoreSpy(calls: calls)
+
+        XCTAssertThrowsError(
+            try WorkspaceLifecycle(
+                workspaceStore: workspaceStore,
+                trustStore: trustStore
+            ).leave(workspaceID: WorkspaceID())
+        )
+        XCTAssertEqual(calls.values, ["workspace.remove"])
+        XCTAssertNil(trustStore.removedWorkspaceID)
+    }
+
+    func testLeaveWorkspaceReturnsWarningAfterTrustKeyCleanupFailure() throws {
+        let calls = CallRecorder()
+        let workspaceStore = WorkspaceStoreSpy(calls: calls)
+        let trustStore = TrustStoreSpy(calls: calls, removeError: SpyError.failure)
+
+        let result = try WorkspaceLifecycle(
+            workspaceStore: workspaceStore,
+            trustStore: trustStore
+        ).leave(workspaceID: WorkspaceID())
+
+        XCTAssertEqual(result, .trustKeyCleanupFailed)
+        XCTAssertEqual(calls.values, ["workspace.remove", "trust.remove"])
+    }
+
     private func display(device: DeviceID, frame: DisplayRect) -> DisplayDescriptor {
         .init(id: DisplayID(), deviceID: device, name: "Display", frame: frame, scaleFactor: 2, isMain: true)
+    }
+}
+
+private enum SpyError: Error {
+    case failure
+}
+
+private final class CallRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storedValues: [String] = []
+    var values: [String] { lock.withLock { storedValues } }
+    func append(_ value: String) { lock.withLock { storedValues.append(value) } }
+}
+
+private final class WorkspaceStoreSpy: WorkspaceStore, @unchecked Sendable {
+    private let calls: CallRecorder
+    private let removeError: Error?
+
+    init(calls: CallRecorder, removeError: Error? = nil) {
+        self.calls = calls
+        self.removeError = removeError
+    }
+
+    func load() throws -> WorkspaceSnapshot? { nil }
+    func save(_ workspace: WorkspaceSnapshot) throws {}
+    func remove() throws {
+        calls.append("workspace.remove")
+        if let removeError { throw removeError }
+    }
+}
+
+private final class TrustStoreSpy: TrustStore, @unchecked Sendable {
+    private let lock = NSLock()
+    private let calls: CallRecorder
+    private let removeError: Error?
+    private var storedRemovedWorkspaceID: WorkspaceID?
+    var removedWorkspaceID: WorkspaceID? { lock.withLock { storedRemovedWorkspaceID } }
+
+    init(calls: CallRecorder, removeError: Error? = nil) {
+        self.calls = calls
+        self.removeError = removeError
+    }
+
+    func workspaceKey(for workspaceID: WorkspaceID) throws -> Data? { nil }
+    func storeWorkspaceKey(_ key: Data, for workspaceID: WorkspaceID) throws {}
+    func removeWorkspaceKey(for workspaceID: WorkspaceID) throws {
+        calls.append("trust.remove")
+        lock.withLock { storedRemovedWorkspaceID = workspaceID }
+        if let removeError { throw removeError }
     }
 }
 

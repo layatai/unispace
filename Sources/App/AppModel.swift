@@ -58,6 +58,18 @@ final class AppModel: ObservableObject {
         if ProcessInfo.processInfo.arguments.contains("--ui-testing-onboarding") {
             return
         }
+        if ProcessInfo.processInfo.arguments.contains("--ui-testing-configured") {
+            let device = localDevice
+            workspace = WorkspaceSnapshot(
+                id: WorkspaceID(),
+                name: "My UniSpace",
+                localDeviceID: localDeviceID,
+                devices: [device]
+            )
+            setupState = .ready
+            statusMessage = "Ready on your private network"
+            return
+        }
         do {
             workspace = try workspaceStore.load()
             if workspace != nil {
@@ -169,6 +181,45 @@ final class AppModel: ObservableObject {
         pairing.reject()
         candidates = []
         setupState = workspace == nil ? .needsWorkspace : .ready
+    }
+
+    func leaveWorkspace() async {
+        guard let workspace else { return }
+        let wasLocalController = isLocalController
+
+        pairing.stop()
+        candidates = []
+        networkTask?.cancel()
+        networkTask = nil
+        await coordinator?.stop()
+        coordinator = nil
+        await transport.stop()
+        injector.releaseAll()
+
+        let result: LeaveWorkspaceResult
+        do {
+            result = try WorkspaceLifecycle(
+                workspaceStore: workspaceStore,
+                trustStore: trustStore
+            ).leave(workspaceID: workspace.id)
+        } catch {
+            let message = "UniSpace could not remove this Mac’s local workspace: \(error.localizedDescription)"
+            await startTrustedNetwork(claimControl: wasLocalController)
+            lastError = message
+            return
+        }
+
+        self.workspace = nil
+        connectedDevices = []
+        currentControllerID = nil
+        currentEpoch = nil
+        lastBoundaryTime = 0
+        setupState = .needsWorkspace
+        statusMessage = "Not configured"
+
+        if result == .trustKeyCleanupFailed {
+            lastError = "This Mac left the workspace, but UniSpace could not remove its old encryption key from Keychain."
+        }
     }
 
     func makeThisMacController() {

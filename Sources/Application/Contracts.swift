@@ -41,6 +41,7 @@ public protocol InputInjector: Sendable {
 public protocol WorkspaceStore: Sendable {
     func load() throws -> WorkspaceSnapshot?
     func save(_ workspace: WorkspaceSnapshot) throws
+    func remove() throws
 }
 
 public protocol TrustStore: Sendable {

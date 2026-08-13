@@ -121,6 +121,7 @@ struct WorkspaceView: View {
 
 struct GeneralView: View {
     @ObservedObject var model: AppModel
+    @State private var isConfirmingLeave = false
 
     var body: some View {
         ScrollView {
@@ -129,12 +130,25 @@ struct GeneralView: View {
                 permissionsSection
                 startupSection
                 shortcutTip
+                workspaceSection
             }
             .frame(maxWidth: Metrics.contentWidth)
             .padding(Metrics.pageInset)
             .frame(maxWidth: .infinity, alignment: .top)
         }
         .scrollBounceBehavior(.basedOnSize)
+        .confirmationDialog(
+            "Leave “\(model.workspace?.name ?? "this workspace")”?",
+            isPresented: $isConfirmingLeave,
+            titleVisibility: .visible
+        ) {
+            Button("Leave Workspace", role: .destructive) {
+                Task { await model.leaveWorkspace() }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This Mac will forget the workspace and return to setup. Other Macs and macOS permissions are unchanged.")
+        }
     }
 
     // MARK: Hero
@@ -266,6 +280,31 @@ struct GeneralView: View {
             Spacer(minLength: 0)
         }
         .card()
+    }
+
+    private var workspaceSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            sectionLabel("Workspace", systemImage: "rectangle.portrait.and.arrow.right")
+
+            HStack(spacing: 16) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Join a different workspace")
+                        .font(.body.weight(.medium))
+                    Text("Leave this workspace to return to setup. This only removes UniSpace data for this Mac.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Spacer(minLength: 12)
+
+                Button("Leave Workspace…", role: .destructive) {
+                    isConfirmingLeave = true
+                }
+                .accessibilityIdentifier("leave-workspace")
+            }
+            .card()
+        }
     }
 
     private func sectionLabel(_ title: String, systemImage: String) -> some View {

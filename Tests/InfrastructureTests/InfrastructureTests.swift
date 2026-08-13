@@ -239,6 +239,9 @@ final class InfrastructureTests: XCTestCase {
         )
         try store.save(snapshot)
         XCTAssertEqual(try store.load(), snapshot)
+        try store.remove()
+        XCTAssertNil(try store.load())
+        XCTAssertNoThrow(try store.remove())
     }
 
     @MainActor
