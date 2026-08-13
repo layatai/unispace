@@ -53,6 +53,7 @@
 		E41FB56FC55B098152423FCC /* UniSpaceDomain.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = D0CF733F292C646448A74827 /* UniSpaceDomain.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		ED9CA3D74CCE2E9164599E73 /* UniSpaceApplication.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = CD69866EFD7AE9229BB70567 /* UniSpaceApplication.framework */; };
 		F74B32ADBD01F401851A3406 /* ControlSessionCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 895B8982AB6DAE8ACF98E4F0 /* ControlSessionCoordinator.swift */; };
+		F927C0089DC72AEE62AA8608 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 161694A87BE723803EFBD6DC /* Assets.xcassets */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -205,6 +206,7 @@
 		01A1425648D0C5F8712AC268 /* FrameCodec.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameCodec.swift; sourceTree = "<group>"; };
 		0BEEFF85ADC6073F10990C58 /* SystemDisplayCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemDisplayCatalog.swift; sourceTree = "<group>"; };
 		0D53BFBE80B81BD15ADE9567 /* WorkspaceModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceModels.swift; sourceTree = "<group>"; };
+		161694A87BE723803EFBD6DC /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		1EFF200775381B9BA7CE0515 /* InfrastructureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InfrastructureTests.swift; sourceTree = "<group>"; };
 		25E8100835AABC1FFE4EC018 /* UniSpaceUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = UniSpaceUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		3705E48046B8D56DACF3CF21 /* PairingNetworkService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingNetworkService.swift; sourceTree = "<group>"; };
@@ -300,6 +302,7 @@
 			isa = PBXGroup;
 			children = (
 				8CC04306656EB29DAF689440 /* Config */,
+				A6E6E83EE27C4C2E389D8F56 /* Resources */,
 				2AA7658BA6D16F65325D57A4 /* Sources */,
 				2877A0CFA8D6CABBA7DD13CD /* Tests */,
 				B312CA3EFC87D52C02EBC409 /* UITests */,
@@ -396,6 +399,14 @@
 				C9BC99509AFF12E2820267B0 /* SystemPermissionService.swift */,
 			);
 			path = Infrastructure;
+			sourceTree = "<group>";
+		};
+		A6E6E83EE27C4C2E389D8F56 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				161694A87BE723803EFBD6DC /* Assets.xcassets */,
+			);
+			path = Resources;
 			sourceTree = "<group>";
 		};
 		B1166FFF1B2E25FCDC947C80 /* Application */ = {
@@ -501,6 +512,7 @@
 			buildConfigurationList = 9CAC75B638F3782614434F78 /* Build configuration list for PBXNativeTarget "UniSpace" */;
 			buildPhases = (
 				8561C9A6AE7BD403FE02D603 /* Sources */,
+				4F43E27B4DC22F664CAAAB29 /* Resources */,
 				456475C357DD51561857DD30 /* Frameworks */,
 				4C7BCFA09C487B08A37214AB /* Embed Frameworks */,
 			);
@@ -663,6 +675,17 @@
 			);
 		};
 /* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		4F43E27B4DC22F664CAAAB29 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				F927C0089DC72AEE62AA8608 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		2D3E9110E4B3FDEE4F4E8466 /* Sources */ = {

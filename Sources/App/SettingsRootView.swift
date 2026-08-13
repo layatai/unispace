@@ -1,10 +1,18 @@
+import AppKit
 import SwiftUI
 import UniSpaceApplication
 import UniSpaceDomain
 import UniSpaceInfrastructure
 
 struct SettingsRootView: View {
+    private enum Section: Hashable {
+        case general
+        case displays
+        case devices
+    }
+
     @ObservedObject var model: AppModel
+    @State private var selectedSection: Section = .general
 
     var body: some View {
         Group {
@@ -21,7 +29,7 @@ struct SettingsRootView: View {
                 readyView
             }
         }
-        .padding(24)
+        .accessibilityIdentifier("unispace-main-view")
         .alert("UniSpace Error", isPresented: Binding(
             get: { model.lastError != nil },
             set: { if !$0 { model.dismissError() } }
@@ -51,6 +59,7 @@ struct SettingsRootView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(32)
     }
 
     private var candidateList: some View {
@@ -73,6 +82,7 @@ struct SettingsRootView: View {
             }
             Button("Cancel") { model.cancelPairing() }
         }
+        .padding(24)
     }
 
     private func pairingConfirmation(_ prompt: PairingPrompt) -> some View {
@@ -92,6 +102,7 @@ struct SettingsRootView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(32)
     }
 
     private var waitingForPeer: some View {
@@ -103,79 +114,202 @@ struct SettingsRootView: View {
             Button("Cancel") { model.cancelPairing() }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(32)
     }
 
     private var readyView: some View {
+        TabView(selection: $selectedSection) {
+            generalSection
+                .tabItem { Label("General", systemImage: "gearshape") }
+                .tag(Section.general)
+            displaysSection
+                .tabItem { Label("Displays", systemImage: "rectangle.3.group") }
+                .tag(Section.displays)
+            devicesSection
+                .tabItem { Label("Macs", systemImage: "laptopcomputer.and.iphone") }
+                .tag(Section.devices)
+        }
+        .padding(.top, 8)
+    }
+
+    private var generalSection: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
-                header
+                statusCard
                 PermissionPanel(model: model)
-                Divider()
-                HStack {
-                    Text("Display Topology").font(.title2.bold())
-                    Spacer()
-                    Text("Drag displays near each other to connect their closest edges.")
-                        .font(.caption).foregroundStyle(.secondary)
+                GroupBox {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("Launch at login")
+                                .font(.headline)
+                            Text("Keep UniSpace ready after signing in to this Mac.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Toggle("", isOn: Binding(
+                            get: { model.launchAtLogin },
+                            set: { model.setLaunchAtLogin($0) }
+                        ))
+                        .labelsHidden()
+                    }
+                    .padding(4)
+                } label: {
+                    Label("Startup", systemImage: "power")
                 }
-                TopologyEditor(model: model)
-                    .frame(height: 250)
-                Divider()
-                devicesPanel
-                Divider()
-                Toggle("Launch UniSpace at login", isOn: Binding(
-                    get: { model.launchAtLogin },
-                    set: { model.setLaunchAtLogin($0) }
-                ))
             }
+            .frame(maxWidth: 650)
+            .padding(28)
+            .frame(maxWidth: .infinity, alignment: .top)
         }
     }
 
-    private var header: some View {
-        HStack(alignment: .top) {
+    private var statusCard: some View {
+        HStack(spacing: 16) {
+            Image(nsImage: NSApplication.shared.applicationIconImage)
+                .resizable()
+                .frame(width: 68, height: 68)
+                .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 5) {
-                Text(model.workspace?.name ?? "UniSpace").font(.largeTitle.bold())
-                Label(model.statusMessage, systemImage: model.isLocalController ? "cursorarrow.motionlines" : "display")
-                    .foregroundStyle(.secondary)
+                Text(model.workspace?.name ?? "UniSpace")
+                    .font(.title.bold())
+                Label(
+                    model.statusMessage,
+                    systemImage: model.isLocalController ? "cursorarrow.motionlines" : "display"
+                )
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
             }
             Spacer()
             if model.isLocalController {
-                Button("Pair New Mac") { model.startHostingPairing() }
-                    .buttonStyle(.borderedProminent)
+                Label("Controller", systemImage: "cursorarrow.motionlines")
+                    .font(.caption.weight(.semibold))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(Color.accentColor.opacity(0.12), in: Capsule())
+                    .foregroundStyle(.tint)
             } else {
-                Button("Make This Mac Controller") { model.makeThisMacController() }
-                    .buttonStyle(.borderedProminent)
+                Button("Make This Mac Controller") {
+                    model.makeThisMacController()
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
             }
+        }
+        .padding(18)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 14))
+        .overlay(RoundedRectangle(cornerRadius: 14).stroke(.separator.opacity(0.7)))
+    }
+
+    private var displaysSection: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            pageHeader(
+                title: "Display Topology",
+                detail: "Arrange how the pointer moves between displays on your Macs."
+            )
+            TopologyEditor(model: model)
+                .frame(minHeight: 320)
+            HStack(spacing: 8) {
+                Image(systemName: "hand.draw")
+                    .foregroundStyle(.tint)
+                Text("Drag a display next to one on another Mac. UniSpace connects their nearest edges.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(28)
+    }
+
+    private var devicesSection: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(alignment: .top) {
+                pageHeader(
+                    title: "Macs",
+                    detail: "\(model.devices.count) of 4 Macs in this workspace"
+                )
+                Spacer()
+                if model.isLocalController {
+                    Button("Pair New Mac") { model.startHostingPairing() }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.large)
+                } else {
+                    Button("Make This Mac Controller") { model.makeThisMacController() }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.large)
+                }
+            }
+            ScrollView {
+                LazyVStack(spacing: 10) {
+                    ForEach(model.devices) { device in
+                        deviceCard(device)
+                    }
+                }
+            }
+        }
+        .padding(28)
+    }
+
+    private func pageHeader(title: String, detail: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.title.bold())
+            Text(detail)
+                .foregroundStyle(.secondary)
         }
     }
 
-    private var devicesPanel: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Macs").font(.title2.bold())
-            ForEach(model.devices) { device in
-                HStack {
-                    Circle()
-                        .fill(device.id == model.localDeviceID || model.connectedDevices.contains(device.id) ? .green : .gray)
-                        .frame(width: 8, height: 8)
-                    VStack(alignment: .leading) {
-                        Text(device.name)
-                        Text(device.id == model.localDeviceID ? "This Mac" : "\(device.displays.count) display(s)")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    if device.id == model.currentControllerID {
-                        Label("Controller", systemImage: "cursorarrow.motionlines").font(.caption)
-                    }
-                    if device.id != model.localDeviceID {
-                        Button(role: .destructive) { model.removeDevice(device.id) } label: {
-                            Image(systemName: "trash")
-                        }
-                        .buttonStyle(.borderless)
-                        .help("Forget this Mac and rotate the workspace key")
+    private func deviceCard(_ device: DeviceDescriptor) -> some View {
+        let isLocal = device.id == model.localDeviceID
+        let isOnline = isLocal || model.connectedDevices.contains(device.id)
+        return HStack(spacing: 14) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(isLocal ? Color.accentColor.opacity(0.14) : Color.secondary.opacity(0.08))
+                Image(systemName: "laptopcomputer")
+                    .font(.title2)
+                    .foregroundStyle(isLocal ? Color.accentColor : Color.secondary)
+            }
+            .frame(width: 48, height: 48)
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 7) {
+                    Text(device.name)
+                        .font(.headline)
+                    if isLocal {
+                        Text("THIS MAC")
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundStyle(.secondary)
                     }
                 }
-                .padding(.vertical, 4)
+                HStack(spacing: 5) {
+                    Circle()
+                        .fill(isOnline ? .green : .gray)
+                        .frame(width: 7, height: 7)
+                    Text(isOnline ? "Available" : "Offline")
+                    Text("•")
+                    Text("\(device.displays.count) \(device.displays.count == 1 ? "display" : "displays")")
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+            Spacer()
+            if device.id == model.currentControllerID {
+                Label("Controller", systemImage: "cursorarrow.motionlines")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.tint)
+            }
+            if !isLocal {
+                Button(role: .destructive) {
+                    model.removeDevice(device.id)
+                } label: {
+                    Image(systemName: "trash")
+                }
+                .buttonStyle(.borderless)
+                .help("Forget this Mac and rotate the workspace key")
             }
         }
+        .padding(14)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(.separator.opacity(0.65)))
     }
 }
 
@@ -183,43 +317,60 @@ private struct PermissionPanel: View {
     @ObservedObject var model: AppModel
 
     var body: some View {
-        HStack(spacing: 12) {
-            permissionCard(
-                title: "Input Monitoring",
-                detail: "Captures this Mac’s keyboard and pointer.",
-                state: model.inputMonitoringPermission,
-                permission: .inputMonitoring
-            )
-            permissionCard(
-                title: "Post Events",
-                detail: "Controls the pointer and keyboard on this Mac.",
-                state: model.postEventsPermission,
-                permission: .postEvents
-            )
+        GroupBox {
+            VStack(spacing: 0) {
+                permissionRow(
+                    title: "Input Monitoring",
+                    detail: "Captures this Mac’s keyboard and pointer.",
+                    state: model.inputMonitoringPermission,
+                    permission: .inputMonitoring
+                )
+                Divider()
+                    .padding(.leading, 38)
+                permissionRow(
+                    title: "Post Events",
+                    detail: "Controls the pointer and keyboard on this Mac.",
+                    state: model.postEventsPermission,
+                    permission: .postEvents
+                )
+            }
+        } label: {
+            Label("Permissions", systemImage: "hand.raised")
         }
     }
 
-    private func permissionCard(
+    private func permissionRow(
         title: String,
         detail: String,
         state: PermissionState,
         permission: PermissionKind
     ) -> some View {
-        VStack(alignment: .leading, spacing: 7) {
-            HStack {
-                Image(systemName: state == .granted ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-                    .foregroundStyle(state == .granted ? .green : .orange)
-                Text(title).font(.headline)
+        HStack(spacing: 12) {
+            Image(systemName: state == .granted ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                .font(.title3)
+                .foregroundStyle(state == .granted ? .green : .orange)
+                .frame(width: 26)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.headline)
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
-            Text(detail).font(.caption).foregroundStyle(.secondary)
-            if state != .granted {
-                Button("Grant Permission") { model.request(permission) }
-                    .buttonStyle(.bordered)
+            Spacer()
+            if state == .granted {
+                Text("Allowed")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.green)
+            } else {
+                Button("Grant Permission") {
+                    model.request(permission)
+                }
+                .buttonStyle(.bordered)
             }
         }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 10))
+        .padding(.vertical, 12)
+        .padding(.horizontal, 4)
     }
 }
 
@@ -232,7 +383,7 @@ private struct TopologyEditor: View {
         GeometryReader { proxy in
             ZStack {
                 RoundedRectangle(cornerRadius: 12)
-                    .fill(.quaternary.opacity(0.35))
+                    .fill(Color(nsColor: .controlBackgroundColor))
                 Canvas { context, _ in
                     for link in uniqueLinks {
                         guard let source = position(for: link.source.displayID, in: proxy.size),
@@ -251,9 +402,22 @@ private struct TopologyEditor: View {
                             .onChanged { value in
                                 let origin = dragOrigins[display.id] ?? offsets[display.id] ?? .zero
                                 dragOrigins[display.id] = origin
+                                let base = basePosition(
+                                    index: index,
+                                    total: model.allDisplays.count,
+                                    size: proxy.size
+                                )
+                                let proposed = CGPoint(
+                                    x: base.x + origin.width + value.translation.width,
+                                    y: base.y + origin.height + value.translation.height
+                                )
+                                let clamped = CGPoint(
+                                    x: min(max(proposed.x, 78), proxy.size.width - 78),
+                                    y: min(max(proposed.y, 48), proxy.size.height - 48)
+                                )
                                 offsets[display.id] = CGSize(
-                                    width: origin.width + value.translation.width,
-                                    height: origin.height + value.translation.height
+                                    width: clamped.x - base.x,
+                                    height: clamped.y - base.y
                                 )
                             }
                             .onEnded { _ in
@@ -262,7 +426,17 @@ private struct TopologyEditor: View {
                             }
                         )
                 }
+                if model.devices.count < 2 {
+                    VStack {
+                        Spacer()
+                        Label("Pair another Mac to connect displays.", systemImage: "plus.circle")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .padding(.bottom, 14)
+                    }
+                }
             }
+            .overlay(RoundedRectangle(cornerRadius: 12).stroke(.separator.opacity(0.7)))
         }
     }
 
@@ -274,19 +448,20 @@ private struct TopologyEditor: View {
     private func displayCard(_ display: DisplayDescriptor) -> some View {
         VStack(spacing: 3) {
             Image(systemName: "display")
+                .font(.title3)
             Text(deviceName(display.deviceID)).font(.caption.bold()).lineLimit(1)
             Text(display.name).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
         }
-        .frame(width: 118, height: 70)
+        .frame(width: 138, height: 78)
         .background(display.deviceID == model.localDeviceID ? Color.accentColor.opacity(0.18) : Color(nsColor: .controlBackgroundColor))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(.separator))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(.separator))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
         .shadow(radius: 2, y: 1)
         .accessibilityElement(children: .combine)
     }
 
     private func basePosition(index: Int, total: Int, size: CGSize) -> CGPoint {
-        let spacing = min(150.0, max(90.0, (size.width - 140) / Double(max(total - 1, 1))))
+        let spacing = min(175.0, max(105.0, (size.width - 170) / Double(max(total - 1, 1))))
         let start = size.width / 2 - spacing * Double(total - 1) / 2
         return CGPoint(x: start + Double(index) * spacing, y: size.height / 2)
     }

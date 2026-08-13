@@ -1,6 +1,6 @@
 # UniSpace
 
-UniSpace is a native macOS menu-bar app for controlling up to four personal Macs with one keyboard and pointer over a trusted local network.
+UniSpace is a native macOS Dock and menu-bar app for controlling up to four personal Macs with one keyboard and pointer over a trusted local network.
 
 ## Requirements
 

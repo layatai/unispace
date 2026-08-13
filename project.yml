@@ -52,12 +52,14 @@ targets:
   UniSpace:
     type: application
     platform: macOS
-    sources: Sources/App
+    sources:
+      - Sources/App
+      - Resources/Assets.xcassets
     info:
       path: Resources/Info.plist
       properties:
         LSApplicationCategoryType: public.app-category.utilities
-        LSUIElement: true
+        LSUIElement: false
     entitlements:
       path: Resources/UniSpace.entitlements
       properties:
@@ -72,6 +74,7 @@ targets:
       base:
         PRODUCT_NAME: UniSpace
         PRODUCT_BUNDLE_IDENTIFIER: com.layatai.unispace
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
   UniSpaceDomainTests:
     type: bundle.unit-test
     platform: macOS
