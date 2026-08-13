@@ -8,7 +8,7 @@ final class UniSpaceUITests: XCTestCase {
         app.launch()
         XCTAssertTrue(app.windows["UniSpace"].waitForExistence(timeout: 5))
         XCTAssertEqual(app.state, .runningForeground)
-        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        let screenshot = XCTAttachment(screenshot: app.windows["UniSpace"].screenshot())
         screenshot.name = "UniSpace main window"
         screenshot.lifetime = .keepAlways
         add(screenshot)
