@@ -7,6 +7,7 @@ public actor ControlSessionCoordinator {
         let displayID: DisplayID
         let entryEdge: DisplayEdge
         let normalizedPosition: Double
+        let targetCapabilities: Set<DeviceCapability>
     }
 
     public enum CapturedInputDisposition: Equatable, Sendable {
@@ -97,7 +98,13 @@ public actor ControlSessionCoordinator {
         }
     }
 
-    public func activate(target: DeviceID, displayID: DisplayID, entryEdge: DisplayEdge, normalizedPosition: Double) async throws {
+    public func activate(
+        target: DeviceID,
+        displayID: DisplayID,
+        entryEdge: DisplayEdge,
+        normalizedPosition: Double,
+        targetCapabilities: Set<DeviceCapability> = []
+    ) async throws {
         guard let epoch = election.currentEpoch, epoch.controllerID == localDeviceID else { return }
         if case .idle = state {
             // Input capture may already be synchronously pre-armed by the edge event tap.
@@ -111,7 +118,8 @@ public actor ControlSessionCoordinator {
             target: target,
             displayID: displayID,
             entryEdge: entryEdge,
-            normalizedPosition: normalizedPosition
+            normalizedPosition: normalizedPosition,
+            targetCapabilities: targetCapabilities
         )
         capture.setSuppressionEnabled(true)
         do {
@@ -155,6 +163,10 @@ public actor ControlSessionCoordinator {
 
     public func handleCaptured(_ event: InputEvent) async -> CapturedInputDisposition {
         guard case .controlling = state else { return .ignored }
+        if case .gesture = event,
+           activeControlRoute?.targetCapabilities.contains(.publicTrackpadGestures) != true {
+            return .forwarded
+        }
         if case let .flags(rawValue) = event {
             currentFlags = rawValue
         }

@@ -79,7 +79,7 @@ Allow these ports through any host or tailnet firewall between participating Mac
 
 ## Current scope
 
-UniSpace forwards standard pointer movement and buttons, scrolling, keyboard keys, modifiers, shortcuts, and public macOS trackpad gestures such as pinch, rotate, swipe, and smart magnify. It intentionally does not provide screen sharing, clipboard or file transfer, an internet relay, Touch ID or power-button forwarding, login-window control, Secure Input bypasses, or OS-reserved Mission Control and desktop gestures.
+UniSpace forwards standard pointer movement and buttons, scrolling, keyboard keys, modifiers, and shortcuts. When both Macs advertise gesture support, it also forwards public macOS trackpad gestures such as pinch, rotate, swipe, and smart magnify; mixed versions keep normal input working without sending incompatible gesture frames. It intentionally does not provide screen sharing, clipboard or file transfer, an internet relay, Touch ID or power-button forwarding, login-window control, Secure Input bypasses, or OS-reserved Mission Control and desktop gestures.
 
 <details>
 <summary><strong>Build and test from source</strong></summary>

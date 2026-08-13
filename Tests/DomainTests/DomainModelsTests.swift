@@ -22,6 +22,35 @@ final class DomainModelsTests: XCTestCase {
 
         XCTAssertEqual(device.id, id)
         XCTAssertEqual(device.peerAddresses, [])
+        XCTAssertEqual(device.capabilities, [])
+    }
+
+    func testDeviceCapabilitiesRoundTripAndPreserveUnknownValues() throws {
+        let futureCapability = DeviceCapability(rawValue: "future-input-v2")
+        let device = DeviceDescriptor(
+            id: DeviceID(),
+            name: "Modern Mac",
+            capabilities: [.publicTrackpadGestures, futureCapability]
+        )
+
+        let data = try JSONEncoder().encode(device)
+        let decoded = try JSONDecoder().decode(DeviceDescriptor.self, from: data)
+
+        XCTAssertEqual(decoded, device)
+    }
+
+    func testLegacyDecoderIgnoresNewDeviceCapabilities() throws {
+        let device = DeviceDescriptor(
+            id: DeviceID(),
+            name: "Modern Mac",
+            capabilities: [.publicTrackpadGestures]
+        )
+
+        let data = try JSONEncoder().encode(device)
+        let decoded = try JSONDecoder().decode(LegacyDeviceDescriptor.self, from: data)
+
+        XCTAssertEqual(decoded.id, device.id)
+        XCTAssertEqual(decoded.name, device.name)
     }
 
     func testControllerElectionUsesGenerationThenDeviceID() {
@@ -131,4 +160,9 @@ final class DomainModelsTests: XCTestCase {
             isMain: isMain
         )
     }
+}
+
+private struct LegacyDeviceDescriptor: Decodable {
+    let id: DeviceID
+    let name: String
 }

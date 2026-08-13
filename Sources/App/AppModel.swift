@@ -95,7 +95,8 @@ final class AppModel: ObservableObject {
             id: localDeviceID,
             name: Host.current().localizedName ?? "Mac",
             displays: displayCatalog.currentDisplays(for: localDeviceID),
-            peerAddresses: tailnetAddressProvider.currentAddresses()
+            peerAddresses: tailnetAddressProvider.currentAddresses(),
+            capabilities: [.publicTrackpadGestures]
         )
     }
 
@@ -519,7 +520,8 @@ final class AppModel: ObservableObject {
                 target: transition.targetDeviceID,
                 displayID: transition.targetDisplayID,
                 entryEdge: transition.entryEdge,
-                normalizedPosition: transition.normalizedPosition
+                normalizedPosition: transition.normalizedPosition,
+                targetCapabilities: capabilities(of: transition.targetDeviceID)
             )
             guard case .controlling = await coordinator.currentState() else {
                 pendingActivationEvents = nil
@@ -574,7 +576,7 @@ final class AppModel: ObservableObject {
     private func handlePeerEvent(_ event: PeerEvent) async {
         switch event {
         case let .discovered(device):
-            upsert(device)
+            upsert(device, capabilitiesAreAuthoritative: false)
         case .lost:
             break
         case let .connected(deviceID):
@@ -636,14 +638,18 @@ final class AppModel: ObservableObject {
     private func handleControl(_ message: ControlMessage, from source: DeviceID) async {
         switch message {
         case let .hello(device):
-            upsert(device)
+            upsert(device, capabilitiesAreAuthoritative: true)
         case let .workspace(incoming):
             guard var workspace, incoming.id == workspace.id else { return }
             workspace.devices = incoming.devices.map { incomingDevice in
                 guard let current = workspace.devices.first(where: { $0.id == incomingDevice.id }) else {
                     return incomingDevice
                 }
-                return Self.merging(current, with: incomingDevice)
+                return Self.merging(
+                    current,
+                    with: incomingDevice,
+                    capabilitiesAreAuthoritative: false
+                )
             }
             workspace.topology = incoming.topology
             workspace.generation = max(workspace.generation, incoming.generation)
@@ -750,16 +756,24 @@ final class AppModel: ObservableObject {
                 target: targetDisplay.deviceID,
                 displayID: targetDisplay.id,
                 entryEdge: destination.edge,
-                normalizedPosition: normalizedPosition
+                normalizedPosition: normalizedPosition,
+                targetCapabilities: capabilities(of: targetDisplay.deviceID)
             )
             statusMessage = "Controlling \(deviceName(targetDisplay.deviceID))"
         }
     }
 
-    private func upsert(_ device: DeviceDescriptor) {
+    private func upsert(
+        _ device: DeviceDescriptor,
+        capabilitiesAreAuthoritative: Bool
+    ) {
         guard var workspace else { return }
         if let index = workspace.devices.firstIndex(where: { $0.id == device.id }) {
-            workspace.updateDevice(Self.merging(workspace.devices[index], with: device))
+            workspace.updateDevice(Self.merging(
+                workspace.devices[index],
+                with: device,
+                capabilitiesAreAuthoritative: capabilitiesAreAuthoritative
+            ))
         } else {
             workspace.devices.append(device)
         }
@@ -786,6 +800,10 @@ final class AppModel: ObservableObject {
         workspace?.devices.first(where: { $0.id == id })?.name ?? "Mac"
     }
 
+    private func capabilities(of id: DeviceID) -> Set<DeviceCapability> {
+        workspace?.devices.first(where: { $0.id == id })?.capabilities ?? []
+    }
+
     private func refreshLocalDisplays() {
         guard var workspace, let index = workspace.devices.firstIndex(where: { $0.id == localDeviceID }) else { return }
         var current = localDevice
@@ -798,10 +816,15 @@ final class AppModel: ObservableObject {
         persistAndBroadcast(workspace)
     }
 
-    private static func merging(_ current: DeviceDescriptor, with incoming: DeviceDescriptor) -> DeviceDescriptor {
+    private static func merging(
+        _ current: DeviceDescriptor,
+        with incoming: DeviceDescriptor,
+        capabilitiesAreAuthoritative: Bool
+    ) -> DeviceDescriptor {
         var merged = incoming
         if merged.displays.isEmpty { merged.displays = current.displays }
         merged.peerAddresses = mergedAddresses(current.peerAddresses, incoming.peerAddresses)
+        if !capabilitiesAreAuthoritative { merged.capabilities = current.capabilities }
         return merged
     }
 

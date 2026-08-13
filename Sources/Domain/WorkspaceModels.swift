@@ -109,22 +109,35 @@ public struct DisplayDescriptor: Codable, Hashable, Identifiable, Sendable {
     }
 }
 
+public struct DeviceCapability: RawRepresentable, Codable, Hashable, Sendable {
+    public let rawValue: String
+
+    public init(rawValue: String) {
+        self.rawValue = rawValue
+    }
+
+    public static let publicTrackpadGestures = Self(rawValue: "public-trackpad-gestures-v1")
+}
+
 public struct DeviceDescriptor: Codable, Hashable, Identifiable, Sendable {
     public let id: DeviceID
     public var name: String
     public var displays: [DisplayDescriptor]
     public var peerAddresses: [PeerAddress]
+    public var capabilities: Set<DeviceCapability>
 
     public init(
         id: DeviceID,
         name: String,
         displays: [DisplayDescriptor] = [],
-        peerAddresses: [PeerAddress] = []
+        peerAddresses: [PeerAddress] = [],
+        capabilities: Set<DeviceCapability> = []
     ) {
         self.id = id
         self.name = name
         self.displays = displays
         self.peerAddresses = peerAddresses
+        self.capabilities = capabilities
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -132,6 +145,7 @@ public struct DeviceDescriptor: Codable, Hashable, Identifiable, Sendable {
         case name
         case displays
         case peerAddresses
+        case capabilities
     }
 
     public init(from decoder: Decoder) throws {
@@ -140,6 +154,7 @@ public struct DeviceDescriptor: Codable, Hashable, Identifiable, Sendable {
         name = try container.decode(String.self, forKey: .name)
         displays = try container.decodeIfPresent([DisplayDescriptor].self, forKey: .displays) ?? []
         peerAddresses = try container.decodeIfPresent([PeerAddress].self, forKey: .peerAddresses) ?? []
+        capabilities = try container.decodeIfPresent(Set<DeviceCapability>.self, forKey: .capabilities) ?? []
     }
 }
 

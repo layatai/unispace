@@ -236,7 +236,11 @@ final class InfrastructureTests: XCTestCase {
         let serverID = DeviceID()
         let clientID = DeviceID()
         let serverDevice = DeviceDescriptor(id: serverID, name: "Server")
-        let clientDevice = DeviceDescriptor(id: clientID, name: "Client")
+        let clientDevice = DeviceDescriptor(
+            id: clientID,
+            name: "Client",
+            capabilities: [.publicTrackpadGestures]
+        )
         let serverWorkspace = WorkspaceSnapshot(
             id: workspaceID,
             name: "Direct",
@@ -268,6 +272,7 @@ final class InfrastructureTests: XCTestCase {
         )
         let serverConnected = expectation(description: "server connected directly")
         let clientConnected = expectation(description: "client connected directly")
+        let capabilitiesReceived = expectation(description: "peer capabilities received")
         let controlReceived = expectation(description: "control transferred")
         let serverEvents = Task {
             for await event in server.events() {
@@ -275,7 +280,14 @@ final class InfrastructureTests: XCTestCase {
                 case .connected(let id) where id == clientID:
                     serverConnected.fulfill()
                 case .control(let id, let envelope) where id == clientID:
-                    if case .controllerClaim = envelope.message { controlReceived.fulfill() }
+                    switch envelope.message {
+                    case let .hello(device) where device.capabilities.contains(.publicTrackpadGestures):
+                        capabilitiesReceived.fulfill()
+                    case .controllerClaim:
+                        controlReceived.fulfill()
+                    default:
+                        break
+                    }
                 default:
                     break
                 }
@@ -287,7 +299,7 @@ final class InfrastructureTests: XCTestCase {
             }
         }
         try await client.start(localDevice: clientDevice, workspace: clientWorkspace, key: key)
-        await fulfillment(of: [serverConnected, clientConnected], timeout: 8)
+        await fulfillment(of: [serverConnected, clientConnected, capabilitiesReceived], timeout: 8)
         try await client.send(
             ControlEnvelope(message: .controllerClaim(.init(generation: 1, controllerID: clientID))),
             to: serverID

@@ -599,13 +599,42 @@ final class ApplicationTests: XCTestCase {
             target: remote,
             displayID: DisplayID(),
             entryEdge: .left,
-            normalizedPosition: 0.5
+            normalizedPosition: 0.5,
+            targetCapabilities: [.publicTrackpadGestures]
         )
         let gesture = InputEvent.gesture(serializedEvent: Data([1, 2, 3]))
 
         _ = await coordinator.handleCaptured(gesture)
 
         XCTAssertEqual(transport.frames.map(\.event), [gesture])
+        await coordinator.stop()
+    }
+
+    func testCoordinatorSkipsGesturesForLegacyPeerAndKeepsForwardingInput() async throws {
+        let local = DeviceID()
+        let remote = DeviceID()
+        let transport = TransportSpy()
+        let coordinator = ControlSessionCoordinator(
+            localDeviceID: local,
+            workspaceID: WorkspaceID(),
+            capture: CaptureSpy(),
+            injector: InjectorSpy(),
+            transport: transport
+        )
+        _ = await coordinator.makeLocalController()
+        try await coordinator.activate(
+            target: remote,
+            displayID: DisplayID(),
+            entryEdge: .left,
+            normalizedPosition: 0.5
+        )
+
+        _ = await coordinator.handleCaptured(.gesture(serializedEvent: Data([1, 2, 3])))
+        _ = await coordinator.handleCaptured(.key(code: 12, isDown: true, isRepeat: false))
+
+        XCTAssertEqual(transport.frames.map(\.event), [
+            .key(code: 12, isDown: true, isRepeat: false)
+        ])
         await coordinator.stop()
     }
 
