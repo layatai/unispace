@@ -540,12 +540,17 @@ final class AppModel: ObservableObject {
             if let currentEpoch {
                 try? await transport.send(ControlEnvelope(message: .controllerClaim(currentEpoch)), to: deviceID)
             }
+            if await coordinator?.peerConnected(deviceID) == true {
+                statusMessage = "Controlling \(deviceName(deviceID))"
+            }
         case let .disconnected(deviceID):
             connectedDevices.remove(deviceID)
             let previousState = await coordinator?.currentState()
             await coordinator?.peerDisconnected(deviceID)
             if case let .receiving(_, source, _)? = previousState, source == deviceID {
                 entryEdgeHysteresis.reset()
+            } else if case let .controlling(_, target, _)? = previousState, target == deviceID {
+                statusMessage = "Reconnecting to \(deviceName(deviceID)) — use Control-Option-Command-Escape to return"
             }
         case let .control(source, envelope):
             await handleControl(envelope.message, from: source)

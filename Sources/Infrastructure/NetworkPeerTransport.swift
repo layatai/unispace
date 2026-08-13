@@ -438,8 +438,11 @@ final class SecurePeerConnection: @unchecked Sendable {
 
     func send(_ data: Data) async throws {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
-            send(data) { error in
-                if let error { continuation.resume(throwing: PeerTransportError.sendFailed(error.localizedDescription)) }
+            send(data) { [weak self] error in
+                if let error {
+                    self?.cancel()
+                    continuation.resume(throwing: PeerTransportError.sendFailed(error.localizedDescription))
+                }
                 else { continuation.resume(returning: ()) }
             }
         }

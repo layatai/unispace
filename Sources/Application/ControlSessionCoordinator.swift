@@ -2,6 +2,13 @@ import Foundation
 import UniSpaceDomain
 
 public actor ControlSessionCoordinator {
+    private struct ActiveControlRoute: Sendable {
+        let target: DeviceID
+        let displayID: DisplayID
+        let entryEdge: DisplayEdge
+        let normalizedPosition: Double
+    }
+
     public enum CapturedInputDisposition: Equatable, Sendable {
         case ignored
         case forwarded
@@ -33,6 +40,8 @@ public actor ControlSessionCoordinator {
     private var heartbeatTask: Task<Void, Never>?
     private var watchdogTask: Task<Void, Never>?
     private var lastHeartbeatNanos: UInt64 = 0
+    private var activeControlRoute: ActiveControlRoute?
+    private var isConnectionInterrupted = false
 
     public init(
         localDeviceID: DeviceID,
@@ -74,6 +83,12 @@ public actor ControlSessionCoordinator {
         await endCurrentSession(notifyPeer: true)
         let sessionID = SessionID()
         state = .controlling(epoch: epoch, target: target, session: sessionID)
+        activeControlRoute = ActiveControlRoute(
+            target: target,
+            displayID: displayID,
+            entryEdge: entryEdge,
+            normalizedPosition: normalizedPosition
+        )
         capture.setSuppressionEnabled(true)
         do {
             try await transport.send(
@@ -123,6 +138,7 @@ public actor ControlSessionCoordinator {
             await endCurrentSession(notifyPeer: true)
             return .emergencyStop
         }
+        guard !isConnectionInterrupted else { return .forwarded }
         if case let .pointerMove(deltaX, deltaY, absoluteX, absoluteY) = event {
             if case let .pointerMove(pendingX, pendingY, _, _) = pendingPointerEvent {
                 pendingPointerEvent = .pointerMove(
@@ -160,11 +176,7 @@ public actor ControlSessionCoordinator {
             event: event
         )
         sequence &+= 1
-        do {
-            try await transport.send(frame, to: target)
-        } catch {
-            await endCurrentSession(notifyPeer: false)
-        }
+        try? await transport.send(frame, to: target)
     }
 
     public func handleIncoming(_ frame: InputFrame, from source: DeviceID) async {
@@ -180,11 +192,42 @@ public actor ControlSessionCoordinator {
     public func peerDisconnected(_ deviceID: DeviceID) async {
         switch state {
         case let .controlling(_, target, _) where target == deviceID:
-            await endCurrentSession(notifyPeer: false)
+            interruptConnection(to: target)
         case let .receiving(_, source, _) where source == deviceID:
             await endCurrentSession(notifyPeer: false)
         default:
             break
+        }
+    }
+
+    @discardableResult
+    public func peerConnected(_ deviceID: DeviceID) async -> Bool {
+        guard isConnectionInterrupted,
+              let route = activeControlRoute,
+              route.target == deviceID,
+              case let .controlling(epoch, target, _) = state,
+              target == deviceID else { return false }
+
+        let sessionID = SessionID()
+        do {
+            try await transport.send(
+                ControlEnvelope(message: .activate(.init(
+                    sessionID: sessionID,
+                    epoch: epoch,
+                    targetDisplayID: route.displayID,
+                    entryEdge: route.entryEdge,
+                    normalizedPosition: route.normalizedPosition
+                ))),
+                to: target
+            )
+            state = .controlling(epoch: epoch, target: target, session: sessionID)
+            sequence = 0
+            isConnectionInterrupted = false
+            await sendInput(.flags(rawValue: currentFlags))
+            startHeartbeat(target: target, sessionID: sessionID)
+            return true
+        } catch {
+            return false
         }
     }
 
@@ -207,6 +250,9 @@ public actor ControlSessionCoordinator {
         heartbeatTask = nil
         watchdogTask?.cancel()
         watchdogTask = nil
+        activeControlRoute = nil
+        isConnectionInterrupted = false
+        currentFlags = 0
         capture.setSuppressionEnabled(false)
 
         switch previous {
@@ -228,6 +274,17 @@ public actor ControlSessionCoordinator {
     private static func isEmergencyStop(_ event: InputEvent, flags: UInt64) -> Bool {
         guard case let .key(code, isDown, _) = event, isDown, code == emergencyKeyCode else { return false }
         return (flags & emergencyFlags) == emergencyFlags
+    }
+
+    private func interruptConnection(to target: DeviceID) {
+        guard case let .controlling(_, expectedTarget, _) = state,
+              target == expectedTarget else { return }
+        isConnectionInterrupted = true
+        pointerFlushTask?.cancel()
+        pointerFlushTask = nil
+        pendingPointerEvent = nil
+        heartbeatTask?.cancel()
+        heartbeatTask = nil
     }
 
     private func schedulePointerFlush() {
@@ -260,14 +317,10 @@ public actor ControlSessionCoordinator {
     private func sendHeartbeat(target: DeviceID, sessionID: SessionID) async {
         guard case let .controlling(_, expectedTarget, expectedSession) = state,
               target == expectedTarget, sessionID == expectedSession else { return }
-        do {
-            try await transport.send(
-                ControlEnvelope(message: .heartbeat(sessionID: sessionID, timestampNanos: clock.nowNanoseconds())),
-                to: target
-            )
-        } catch {
-            await endCurrentSession(notifyPeer: false)
-        }
+        try? await transport.send(
+            ControlEnvelope(message: .heartbeat(sessionID: sessionID, timestampNanos: clock.nowNanoseconds())),
+            to: target
+        )
     }
 
     private func startWatchdog(source: DeviceID, sessionID: SessionID) {

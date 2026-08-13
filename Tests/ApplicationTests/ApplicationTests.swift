@@ -261,6 +261,124 @@ final class ApplicationTests: XCTestCase {
         await coordinator.stop()
     }
 
+    func testControllerKeepsPointerSuppressedAndReactivatesAfterTransientDisconnect() async throws {
+        let local = DeviceID()
+        let remote = DeviceID()
+        let capture = CaptureSpy()
+        let transport = TransportSpy()
+        let coordinator = ControlSessionCoordinator(
+            localDeviceID: local,
+            workspaceID: WorkspaceID(),
+            capture: capture,
+            injector: InjectorSpy(),
+            transport: transport
+        )
+        _ = await coordinator.makeLocalController()
+        try await coordinator.activate(
+            target: remote,
+            displayID: DisplayID(),
+            entryEdge: .left,
+            normalizedPosition: 0.5
+        )
+
+        await coordinator.peerDisconnected(remote)
+
+        guard case let .controlling(_, target, _) = await coordinator.currentState() else {
+            return XCTFail("A transient network interruption must not return control locally")
+        }
+        XCTAssertEqual(target, remote)
+        XCTAssertTrue(capture.suppressed)
+
+        _ = await coordinator.handleCaptured(.pointerMove(
+            deltaX: 20,
+            deltaY: 0,
+            absoluteX: 40,
+            absoluteY: 20
+        ))
+        try await Task.sleep(for: .milliseconds(20))
+        XCTAssertTrue(transport.frames.isEmpty)
+
+        let resumed = await coordinator.peerConnected(remote)
+        XCTAssertTrue(resumed)
+        guard case let .controlling(_, resumedTarget, _) = await coordinator.currentState() else {
+            return XCTFail("The controller must resume after the peer reconnects")
+        }
+        XCTAssertEqual(resumedTarget, remote)
+        XCTAssertTrue(capture.suppressed)
+        XCTAssertEqual(transport.controlMessages.filter(\.isActivation).count, 2)
+        XCTAssertEqual(transport.frames.map(\.event), [.flags(rawValue: 0)])
+        await coordinator.stop()
+    }
+
+    func testControllerDoesNotReturnLocallyAfterSingleInputSendFailure() async throws {
+        let local = DeviceID()
+        let remote = DeviceID()
+        let capture = CaptureSpy()
+        let transport = TransportSpy(frameSendError: SpyError.failure)
+        let coordinator = ControlSessionCoordinator(
+            localDeviceID: local,
+            workspaceID: WorkspaceID(),
+            capture: capture,
+            injector: InjectorSpy(),
+            transport: transport
+        )
+        _ = await coordinator.makeLocalController()
+        try await coordinator.activate(
+            target: remote,
+            displayID: DisplayID(),
+            entryEdge: .left,
+            normalizedPosition: 0.5
+        )
+
+        _ = await coordinator.handleCaptured(.pointerMove(
+            deltaX: 4,
+            deltaY: 0,
+            absoluteX: 10,
+            absoluteY: 10
+        ))
+        try await Task.sleep(for: .milliseconds(30))
+
+        guard case let .controlling(_, target, _) = await coordinator.currentState() else {
+            return XCTFail("A send failure must wait for confirmed transport disconnection")
+        }
+        XCTAssertEqual(target, remote)
+        XCTAssertTrue(capture.suppressed)
+        await coordinator.stop()
+    }
+
+    func testEmergencyHotkeyReturnsControlDuringNetworkInterruption() async throws {
+        let local = DeviceID()
+        let remote = DeviceID()
+        let capture = CaptureSpy()
+        let coordinator = ControlSessionCoordinator(
+            localDeviceID: local,
+            workspaceID: WorkspaceID(),
+            capture: capture,
+            injector: InjectorSpy(),
+            transport: TransportSpy()
+        )
+        _ = await coordinator.makeLocalController()
+        try await coordinator.activate(
+            target: remote,
+            displayID: DisplayID(),
+            entryEdge: .left,
+            normalizedPosition: 0.5
+        )
+        await coordinator.peerDisconnected(remote)
+
+        _ = await coordinator.handleCaptured(.flags(rawValue: ControlSessionCoordinator.emergencyFlags))
+        let result = await coordinator.handleCaptured(.key(
+            code: ControlSessionCoordinator.emergencyKeyCode,
+            isDown: true,
+            isRepeat: false
+        ))
+        let finalState = await coordinator.currentState()
+
+        XCTAssertEqual(result, .emergencyStop)
+        XCTAssertEqual(finalState, .idle)
+        XCTAssertFalse(capture.suppressed)
+    }
+
     func testEmergencyHotkeyReturnsControlLocallyAndReleasesPeer() async throws {
         let local = DeviceID()
         let remote = DeviceID()
@@ -373,6 +491,13 @@ private enum SpyError: Error {
     case failure
 }
 
+private extension ControlMessage {
+    var isActivation: Bool {
+        if case .activate = self { return true }
+        return false
+    }
+}
+
 private final class CallRecorder: @unchecked Sendable {
     private let lock = NSLock()
     private var storedValues: [String] = []
@@ -439,10 +564,14 @@ private final class InjectorSpy: InputInjector, @unchecked Sendable {
 private final class TransportSpy: PeerTransport, @unchecked Sendable {
     private let stream = AsyncStream<PeerEvent> { $0.finish() }
     private let lock = NSLock()
+    private let frameSendError: Error?
     private var storedFrames: [InputFrame] = []
     private var storedControlMessages: [ControlMessage] = []
     var frames: [InputFrame] { lock.withLock { storedFrames } }
     var controlMessages: [ControlMessage] { lock.withLock { storedControlMessages } }
+    init(frameSendError: Error? = nil) {
+        self.frameSendError = frameSendError
+    }
     func start(localDevice: DeviceDescriptor, workspace: WorkspaceSnapshot, key: Data) async throws {}
     func stop() async {}
     func events() -> AsyncStream<PeerEvent> { stream }
@@ -450,6 +579,7 @@ private final class TransportSpy: PeerTransport, @unchecked Sendable {
         lock.withLock { storedControlMessages.append(envelope.message) }
     }
     func send(_ frame: InputFrame, to deviceID: DeviceID) async throws {
+        if let frameSendError { throw frameSendError }
         lock.withLock { storedFrames.append(frame) }
     }
 }

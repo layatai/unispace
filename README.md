@@ -31,6 +31,9 @@ The generated Xcode project is derived from `project.yml`; edit the YAML and reg
 UniSpace uses Bonjour for automatic LAN discovery. Across Tailscale, enter the host Mac’s MagicDNS name or Tailscale IP; UniSpace uses TCP `61337` for pairing and TCP `61338` for trusted control sessions. Pairing transfers a random workspace key only after an ephemeral key exchange and two-sided code confirmation. Peer sessions use per-connection keys derived from that workspace key, HMAC-authenticated handshakes, ChaCha20-Poly1305 encryption, and replay sequencing. Workspace secrets are stored in Keychain. Raw keyboard and pointer events are never logged.
 
 Use `Control-Option-Command-Escape` to stop a remote-control session and return control locally.
+If the LAN or Tailscale connection is interrupted, UniSpace keeps the controller pointer anchored,
+drops input while offline, and resumes the remote session after reconnection. The emergency hotkey
+remains available while reconnecting.
 
 To join a different workspace, open **General → Workspace**, choose **Leave Workspace…**, and confirm. This removes only this Mac’s local workspace membership and Keychain key, preserves macOS permissions, and returns to the setup screen where **Join Workspace** is available.
 
