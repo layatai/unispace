@@ -2,6 +2,28 @@ import XCTest
 @testable import UniSpaceDomain
 
 final class DomainModelsTests: XCTestCase {
+    func testPeerAddressNormalizesSupportedHostFormats() throws {
+        XCTAssertEqual(try PeerAddress(" MacBook-Pro.tailnet.ts.net ").host, "macbook-pro.tailnet.ts.net")
+        XCTAssertEqual(try PeerAddress("100.93.172.58").host, "100.93.172.58")
+        XCTAssertEqual(try PeerAddress("[fd7a:115c:a1e0::1]").host, "fd7a:115c:a1e0::1")
+    }
+
+    func testPeerAddressRejectsURLsPathsAndPorts() {
+        for invalid in ["", "https://mac.tailnet.ts.net", "mac.tailnet.ts.net/path", "mac:61337", "-mac"] {
+            XCTAssertThrowsError(try PeerAddress(invalid), "Expected \(invalid) to be rejected")
+        }
+    }
+
+    func testLegacyDeviceDescriptorDecodesWithoutPeerAddresses() throws {
+        let id = DeviceID()
+        let data = Data("{\"id\":{\"rawValue\":\"\(id.rawValue.uuidString)\"},\"name\":\"Legacy Mac\",\"displays\":[]}".utf8)
+
+        let device = try JSONDecoder().decode(DeviceDescriptor.self, from: data)
+
+        XCTAssertEqual(device.id, id)
+        XCTAssertEqual(device.peerAddresses, [])
+    }
+
     func testControllerElectionUsesGenerationThenDeviceID() {
         let low = DeviceID(rawValue: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!)
         let high = DeviceID(rawValue: UUID(uuidString: "00000000-0000-0000-0000-000000000002")!)

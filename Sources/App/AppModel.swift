@@ -30,6 +30,7 @@ final class AppModel: ObservableObject {
     private let trustStore = KeychainTrustStore()
     private let permissionService = SystemPermissionService()
     private let displayCatalog = SystemDisplayCatalog()
+    private let tailnetAddressProvider = SystemTailnetAddressProvider()
     private let loginItemController = SystemLoginItemController()
     private let transport = NetworkPeerTransport()
     private let pairing = PairingNetworkService()
@@ -54,6 +55,9 @@ final class AppModel: ObservableObject {
         screenChangeSubscription = NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.refreshLocalDisplays() }
+        if ProcessInfo.processInfo.arguments.contains("--ui-testing-onboarding") {
+            return
+        }
         do {
             workspace = try workspaceStore.load()
             if workspace != nil {
@@ -73,9 +77,12 @@ final class AppModel: ObservableObject {
         DeviceDescriptor(
             id: localDeviceID,
             name: Host.current().localizedName ?? "Mac",
-            displays: displayCatalog.currentDisplays(for: localDeviceID)
+            displays: displayCatalog.currentDisplays(for: localDeviceID),
+            peerAddresses: tailnetAddressProvider.currentAddresses()
         )
     }
+
+    var tailnetAddresses: [PeerAddress] { tailnetAddressProvider.currentAddresses() }
 
     var devices: [DeviceDescriptor] { workspace?.devices ?? [] }
     var allDisplays: [DisplayDescriptor] { devices.flatMap(\.displays) }
@@ -126,6 +133,31 @@ final class AppModel: ObservableObject {
     func join(_ candidate: PairingCandidate) {
         do {
             try pairing.join(candidate, localDevice: localDevice)
+        } catch {
+            lastError = error.localizedDescription
+        }
+    }
+
+    func joinDirectly(address rawAddress: String) {
+        do {
+            let address = try PeerAddress(rawAddress)
+            try pairing.join(address, localDevice: localDevice)
+            statusMessage = "Connecting to \(address.host) through Tailscale"
+        } catch {
+            lastError = error.localizedDescription
+        }
+    }
+
+    func setConnectionAddress(_ rawAddress: String, for deviceID: DeviceID) {
+        guard deviceID != localDeviceID, var workspace,
+              let index = workspace.devices.firstIndex(where: { $0.id == deviceID }) else { return }
+        do {
+            let address = try PeerAddress(rawAddress)
+            workspace.devices[index].peerAddresses = [address]
+            try workspaceStore.save(workspace)
+            self.workspace = workspace
+            statusMessage = "Connecting to \(workspace.devices[index].name) through Tailscale"
+            Task { await startTrustedNetwork(claimControl: isLocalController) }
         } catch {
             lastError = error.localizedDescription
         }
@@ -320,7 +352,8 @@ final class AppModel: ObservableObject {
             networkTask?.cancel()
             await transport.stop()
             let local = refreshedLocalDevice(in: workspace)
-            try await transport.start(localDevice: local, workspaceID: workspace.id, key: key)
+            guard let refreshedWorkspace = self.workspace else { return }
+            try await transport.start(localDevice: local, workspace: refreshedWorkspace, key: key)
             coordinator = ControlSessionCoordinator(
                 localDeviceID: localDeviceID,
                 workspaceID: workspace.id,
@@ -338,7 +371,7 @@ final class AppModel: ObservableObject {
                 }
             }
             setupState = .ready
-            statusMessage = "Ready on the local network"
+            statusMessage = "Ready on your private network"
             if claimControl { makeThisMacController() }
         } catch {
             lastError = error.localizedDescription
@@ -347,9 +380,13 @@ final class AppModel: ObservableObject {
     }
 
     private func refreshedLocalDevice(in snapshot: WorkspaceSnapshot) -> DeviceDescriptor {
-        let current = localDevice
+        var current = localDevice
         var updated = snapshot
         if let index = updated.devices.firstIndex(where: { $0.id == localDeviceID }) {
+            current.peerAddresses = Self.mergedAddresses(
+                updated.devices[index].peerAddresses,
+                current.peerAddresses
+            )
             updated.devices[index] = current
         }
         if updated != workspace {
@@ -428,8 +465,8 @@ final class AppModel: ObservableObject {
         switch event {
         case let .discovered(device):
             upsert(device)
-        case let .lost(deviceID):
-            connectedDevices.remove(deviceID)
+        case .lost:
+            break
         case let .connected(deviceID):
             connectedDevices.insert(deviceID)
             if let workspace {
@@ -456,7 +493,12 @@ final class AppModel: ObservableObject {
             upsert(device)
         case let .workspace(incoming):
             guard var workspace, incoming.id == workspace.id else { return }
-            workspace.devices = incoming.devices
+            workspace.devices = incoming.devices.map { incomingDevice in
+                guard let current = workspace.devices.first(where: { $0.id == incomingDevice.id }) else {
+                    return incomingDevice
+                }
+                return Self.merging(current, with: incomingDevice)
+            }
             workspace.topology = incoming.topology
             workspace.generation = max(workspace.generation, incoming.generation)
             if !workspace.devices.contains(where: { $0.id == localDeviceID }) {
@@ -528,7 +570,7 @@ final class AppModel: ObservableObject {
     private func upsert(_ device: DeviceDescriptor) {
         guard var workspace else { return }
         if let index = workspace.devices.firstIndex(where: { $0.id == device.id }) {
-            if !device.displays.isEmpty { workspace.devices[index] = device }
+            workspace.devices[index] = Self.merging(workspace.devices[index], with: device)
         } else {
             workspace.devices.append(device)
         }
@@ -561,6 +603,17 @@ final class AppModel: ObservableObject {
         guard workspace.devices[index] != current else { return }
         workspace.devices[index] = current
         persistAndBroadcast(workspace)
+    }
+
+    private static func merging(_ current: DeviceDescriptor, with incoming: DeviceDescriptor) -> DeviceDescriptor {
+        var merged = incoming
+        if merged.displays.isEmpty { merged.displays = current.displays }
+        merged.peerAddresses = mergedAddresses(current.peerAddresses, incoming.peerAddresses)
+        return merged
+    }
+
+    private static func mergedAddresses(_ first: [PeerAddress], _ second: [PeerAddress]) -> [PeerAddress] {
+        Array(Set(first + second)).sorted { $0.host < $1.host }
     }
 
     private static func loadDeviceID() -> DeviceID {

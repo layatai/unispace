@@ -22,6 +22,10 @@ public protocol DisplayCatalog: Sendable {
     func currentDisplays(for deviceID: DeviceID) -> [DisplayDescriptor]
 }
 
+public protocol TailnetAddressProviding: Sendable {
+    func currentAddresses() -> [PeerAddress]
+}
+
 public protocol InputCapture: Sendable {
     func start(handler: @escaping @Sendable (InputEvent) -> Bool) throws
     func stop()
@@ -61,7 +65,7 @@ public enum PeerEvent: Sendable, Equatable {
 }
 
 public protocol PeerTransport: Sendable {
-    func start(localDevice: DeviceDescriptor, workspaceID: WorkspaceID, key: Data) async throws
+    func start(localDevice: DeviceDescriptor, workspace: WorkspaceSnapshot, key: Data) async throws
     func stop() async
     func events() -> AsyncStream<PeerEvent>
     func send(_ envelope: ControlEnvelope, to deviceID: DeviceID) async throws

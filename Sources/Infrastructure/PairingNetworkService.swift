@@ -52,6 +52,7 @@ public enum PairingNetworkStatus: Equatable, Sendable {
 
 public final class PairingNetworkService: @unchecked Sendable {
     public static let serviceType = "_unispace-pair._tcp"
+    public static let directPort = NWEndpoint.Port(rawValue: 61_337)!
 
     public var candidatesHandler: (@Sendable ([PairingCandidate]) -> Void)?
     public var promptHandler: (@Sendable (PairingPrompt) -> Void)?
@@ -62,7 +63,11 @@ public final class PairingNetworkService: @unchecked Sendable {
 
     private let queue = DispatchQueue(label: "com.layatai.unispace.pairing", qos: .userInitiated)
     private let lock = NSLock()
+    private let configuredListenPort: NWEndpoint.Port
+    private let configuredDirectPort: NWEndpoint.Port
     private var listener: NWListener?
+    private var directListener: NWListener?
+    private var directReadyPort: NWEndpoint.Port?
     private var browser: NWBrowser?
     private var crypto: PairingCryptoSession?
     private var channel: PairingChannel?
@@ -74,14 +79,27 @@ public final class PairingNetworkService: @unchecked Sendable {
     private var localConfirmed = false
     private var peerConfirmed = false
     private var isHost = false
+    private var directHostAddress: PeerAddress?
+    private var acceptedPeerAddress: PeerAddress?
 
-    public init() {}
+    public init(
+        listenPort: NWEndpoint.Port = PairingNetworkService.directPort,
+        directPort: NWEndpoint.Port = PairingNetworkService.directPort
+    ) {
+        configuredListenPort = listenPort
+        configuredDirectPort = directPort
+    }
+
+    public var activeDirectPort: NWEndpoint.Port? {
+        lock.withLock { directReadyPort }
+    }
 
     public func startHosting(workspace: WorkspaceSnapshot, key: Data, localDevice: DeviceDescriptor) throws {
         guard workspace.devices.count < 4 else { throw PairingServiceError.workspaceFull }
         stop()
         let crypto = PairingCryptoSession()
         let listener = try NWListener(using: .tcp, on: .any)
+        let directListener = try NWListener(using: .tcp, on: configuredListenPort)
         let record = NWTXTRecord([
             "device": localDevice.id.rawValue.uuidString,
             "name": localDevice.name,
@@ -90,17 +108,23 @@ public final class PairingNetworkService: @unchecked Sendable {
             "version": "1"
         ])
         listener.service = NWListener.Service(name: localDevice.name, type: Self.serviceType, txtRecord: record)
-        listener.newConnectionHandler = { [weak self] connection in self?.accept(connection) }
+        listener.newConnectionHandler = { [weak self] connection in self?.accept(connection, sendsOffer: false) }
         listener.stateUpdateHandler = { [weak self] state in self?.handleListenerState(state) }
+        directListener.newConnectionHandler = { [weak self] connection in self?.accept(connection, sendsOffer: true) }
+        directListener.stateUpdateHandler = { [weak self, weak directListener] state in
+            self?.handleDirectListenerState(state, listener: directListener)
+        }
         lock.lock()
         self.crypto = crypto
         self.listener = listener
+        self.directListener = directListener
         self.workspace = workspace
         self.workspaceKey = key
         self.localDevice = localDevice
         self.isHost = true
         lock.unlock()
         listener.start(queue: queue)
+        directListener.start(queue: queue)
     }
 
     public func startBrowsing() {
@@ -137,6 +161,37 @@ public final class PairingNetworkService: @unchecked Sendable {
         channel.send(.join(device: localDevice, offer: crypto.offer))
     }
 
+    public func join(_ address: PeerAddress, localDevice: DeviceDescriptor) throws {
+        lock.lock()
+        guard !isHost, channel == nil else { lock.unlock(); throw PairingServiceError.notReady }
+        let crypto = PairingCryptoSession()
+        self.crypto = crypto
+        self.localDevice = localDevice
+        directHostAddress = address
+        let connection = NWConnection(
+            host: NWEndpoint.Host(address.host),
+            port: configuredDirectPort,
+            using: .tcp
+        )
+        let channel = PairingChannel(connection: connection)
+        self.channel = channel
+        lock.unlock()
+
+        channel.messageHandler = { [weak self] message in self?.handle(message) }
+        channel.stateHandler = { [weak self] state in
+            switch state {
+            case .ready:
+                self?.statusHandler?(.waiting("Connected. Waiting for the pairing code."))
+            case let .failed(error):
+                self?.fail("Could not connect to \(address.host): \(error.localizedDescription)")
+            default:
+                break
+            }
+        }
+        statusHandler?(.waiting("Connecting to \(address.host) through Tailscale"))
+        connection.start(queue: queue)
+    }
+
     public func confirm() {
         lock.lock()
         localConfirmed = true
@@ -158,9 +213,12 @@ public final class PairingNetworkService: @unchecked Sendable {
     public func stop() {
         lock.lock()
         let listener = listener
+        let directListener = directListener
         let browser = browser
         let channel = channel
         self.listener = nil
+        self.directListener = nil
+        directReadyPort = nil
         self.browser = nil
         self.channel = nil
         crypto = nil
@@ -172,25 +230,36 @@ public final class PairingNetworkService: @unchecked Sendable {
         localConfirmed = false
         peerConfirmed = false
         isHost = false
+        directHostAddress = nil
+        acceptedPeerAddress = nil
         lock.unlock()
         listener?.cancel()
+        directListener?.cancel()
         browser?.cancel()
         channel?.cancel()
     }
 
-    private func accept(_ connection: NWConnection) {
+    private func accept(_ connection: NWConnection, sendsOffer: Bool) {
         lock.lock()
-        guard isHost, channel == nil else {
+        guard isHost, channel == nil, let localDevice, let crypto else {
             lock.unlock()
             connection.cancel()
             return
         }
         let channel = PairingChannel(connection: connection)
         self.channel = channel
+        acceptedPeerAddress = sendsOffer ? Self.peerAddress(from: connection.endpoint) : nil
         lock.unlock()
         channel.messageHandler = { [weak self] message in self?.handle(message) }
         channel.stateHandler = { [weak self] state in
-            if case let .failed(error) = state { self?.fail(error.localizedDescription) }
+            switch state {
+            case .ready where sendsOffer:
+                channel.send(.offer(device: localDevice, offer: crypto.offer))
+            case let .failed(error):
+                self?.fail(error.localizedDescription)
+            default:
+                break
+            }
         }
         connection.start(queue: queue)
     }
@@ -213,15 +282,40 @@ public final class PairingNetworkService: @unchecked Sendable {
 
     private func handle(_ message: PairingMessage) {
         switch message {
-        case let .join(device, offer):
+        case let .offer(device, offer):
             lock.lock()
-            guard isHost, let crypto else { lock.unlock(); fail(PairingServiceError.notReady.localizedDescription); return }
-            peerDevice = device
+            guard !isHost, let crypto, let localDevice, let channel else {
+                lock.unlock()
+                fail(PairingServiceError.notReady.localizedDescription)
+                return
+            }
+            var hostDevice = device
+            if let directHostAddress, !hostDevice.peerAddresses.contains(directHostAddress) {
+                hostDevice.peerAddresses.append(directHostAddress)
+            }
+            peerDevice = hostDevice
             peerOffer = offer
             lock.unlock()
             do {
                 let code = try crypto.shortAuthenticationCode(peerOffer: offer)
-                promptHandler?(PairingPrompt(peer: device, code: code))
+                promptHandler?(PairingPrompt(peer: hostDevice, code: code))
+                channel.send(.join(device: localDevice, offer: crypto.offer))
+            } catch {
+                fail(error.localizedDescription)
+            }
+        case let .join(device, offer):
+            lock.lock()
+            guard isHost, let crypto else { lock.unlock(); fail(PairingServiceError.notReady.localizedDescription); return }
+            var routedDevice = device
+            if let acceptedPeerAddress, !routedDevice.peerAddresses.contains(acceptedPeerAddress) {
+                routedDevice.peerAddresses.append(acceptedPeerAddress)
+            }
+            peerDevice = routedDevice
+            peerOffer = offer
+            lock.unlock()
+            do {
+                let code = try crypto.shortAuthenticationCode(peerOffer: offer)
+                promptHandler?(PairingPrompt(peer: routedDevice, code: code))
             } catch {
                 fail(error.localizedDescription)
             }
@@ -243,6 +337,10 @@ public final class PairingNetworkService: @unchecked Sendable {
                 let key = try crypto.openWorkspaceKey(sealed, peerOffer: offer)
                 var localSnapshot = snapshot
                 localSnapshot.localDeviceID = localDevice.id
+                if let peerDevice,
+                   let index = localSnapshot.devices.firstIndex(where: { $0.id == peerDevice.id }) {
+                    localSnapshot.devices[index] = Self.merging(localSnapshot.devices[index], with: peerDevice)
+                }
                 joinedHandler?(localSnapshot, key)
                 stop()
             } catch {
@@ -303,6 +401,13 @@ public final class PairingNetworkService: @unchecked Sendable {
         }
     }
 
+    private func handleDirectListenerState(_ state: NWListener.State, listener: NWListener?) {
+        if case .ready = state, let port = listener?.port {
+            lock.withLock { directReadyPort = port }
+        }
+        handleListenerState(state)
+    }
+
     private func handleBrowserState(_ state: NWBrowser.State) {
         switch state {
         case .ready:
@@ -315,9 +420,23 @@ public final class PairingNetworkService: @unchecked Sendable {
             break
         }
     }
+
+    private static func peerAddress(from endpoint: NWEndpoint) -> PeerAddress? {
+        guard case let .hostPort(host, _) = endpoint else { return nil }
+        return try? PeerAddress(String(describing: host))
+    }
+
+    private static func merging(_ current: DeviceDescriptor, with incoming: DeviceDescriptor) -> DeviceDescriptor {
+        var merged = incoming
+        if merged.displays.isEmpty { merged.displays = current.displays }
+        merged.peerAddresses = Array(Set(current.peerAddresses + incoming.peerAddresses))
+            .sorted { $0.host < $1.host }
+        return merged
+    }
 }
 
 private enum PairingMessage: Codable, Sendable {
+    case offer(device: DeviceDescriptor, offer: PairingOffer)
     case join(device: DeviceDescriptor, offer: PairingOffer)
     case confirmation
     case credential(workspace: WorkspaceSnapshot, sealed: SealedWorkspaceCredential)

@@ -15,21 +15,37 @@ public enum PeerTransportError: Error, Equatable {
 
 public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
     public static let serviceType = "_unispace._tcp"
+    public static let controlPort = NWEndpoint.Port(rawValue: 61_338)!
 
     private let queue = DispatchQueue(label: "com.layatai.unispace.network", qos: .userInteractive)
     private let lock = NSLock()
+    private let configuredListenPort: NWEndpoint.Port
+    private let configuredDirectPort: NWEndpoint.Port
+    private let enableBonjour: Bool
     private let stream: AsyncStream<PeerEvent>
     private let continuation: AsyncStream<PeerEvent>.Continuation
     private var localDevice: DeviceDescriptor?
     private var workspaceID: WorkspaceID?
     private var key: Data?
+    private var knownPeers: [DeviceID: DeviceDescriptor] = [:]
     private var listener: NWListener?
+    private var readyControlPort: NWEndpoint.Port?
     private var browser: NWBrowser?
     private var connections: [DeviceID: SecurePeerConnection] = [:]
     private var pendingConnections: [ObjectIdentifier: SecurePeerConnection] = [:]
     private var discoveredDevices: [DeviceID: DeviceDescriptor] = [:]
+    private var retryAttempts: [DeviceID: Int] = [:]
+    private var retryTokens: [DeviceID: UUID] = [:]
+    private var running = false
 
-    public init() {
+    public init(
+        listenPort: NWEndpoint.Port = NetworkPeerTransport.controlPort,
+        directPort: NWEndpoint.Port = NetworkPeerTransport.controlPort,
+        enableBonjour: Bool = true
+    ) {
+        configuredListenPort = listenPort
+        configuredDirectPort = directPort
+        self.enableBonjour = enableBonjour
         var captured: AsyncStream<PeerEvent>.Continuation?
         self.stream = AsyncStream { captured = $0 }
         self.continuation = captured!
@@ -39,42 +55,63 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
 
     public func events() -> AsyncStream<PeerEvent> { stream }
 
-    public func start(localDevice: DeviceDescriptor, workspaceID: WorkspaceID, key: Data) async throws {
+    public var activeControlPort: NWEndpoint.Port? { lock.withLock { readyControlPort } }
+
+    public func start(localDevice: DeviceDescriptor, workspace: WorkspaceSnapshot, key: Data) async throws {
         guard key.count >= 32 else { throw PeerTransportError.invalidConfiguration }
         stopSynchronously()
         lock.withLock {
             self.localDevice = localDevice
-            self.workspaceID = workspaceID
+            workspaceID = workspace.id
             self.key = key
+            knownPeers = Dictionary(
+                uniqueKeysWithValues: workspace.devices
+                    .filter { $0.id != localDevice.id }
+                    .map { ($0.id, $0) }
+            )
+            running = true
         }
 
         let parameters = Self.makeParameters()
-        let listener = try NWListener(using: parameters, on: .any)
+        let listener = try NWListener(using: parameters, on: configuredListenPort)
         let record = NWTXTRecord([
             "device": localDevice.id.rawValue.uuidString,
             "name": localDevice.name,
-            "workspace": workspaceID.rawValue.uuidString,
+            "workspace": workspace.id.rawValue.uuidString,
             "version": String(ControlEnvelope.protocolVersion)
         ])
-        listener.service = NWListener.Service(name: localDevice.name, type: Self.serviceType, txtRecord: record)
-        listener.stateUpdateHandler = { [weak self] state in self?.handleListenerState(state) }
+        if enableBonjour {
+            listener.service = NWListener.Service(name: localDevice.name, type: Self.serviceType, txtRecord: record)
+        }
+        listener.stateUpdateHandler = { [weak self, weak listener] state in
+            self?.handleListenerState(state, listener: listener)
+        }
         listener.newConnectionHandler = { [weak self] connection in self?.accept(connection) }
         listener.start(queue: queue)
 
-        let browser = NWBrowser(for: .bonjour(type: Self.serviceType, domain: nil), using: parameters)
-        browser.stateUpdateHandler = { [weak self] state in
-            switch state {
-            case let .failed(error), let .waiting(error):
-                self?.emit(.failure(nil, error.localizedDescription))
-            default:
-                break
+        let browser: NWBrowser?
+        if enableBonjour {
+            let activeBrowser = NWBrowser(for: .bonjour(type: Self.serviceType, domain: nil), using: parameters)
+            activeBrowser.stateUpdateHandler = { [weak self] state in
+                switch state {
+                case let .failed(error), let .waiting(error):
+                    self?.emit(.failure(nil, error.localizedDescription))
+                default:
+                    break
+                }
             }
+            activeBrowser.browseResultsChangedHandler = { [weak self] results, _ in self?.handle(results) }
+            activeBrowser.start(queue: queue)
+            browser = activeBrowser
+        } else {
+            browser = nil
         }
-        browser.browseResultsChangedHandler = { [weak self] results, _ in self?.handle(results) }
-        browser.start(queue: queue)
         lock.withLock {
             self.listener = listener
             self.browser = browser
+        }
+        for peer in workspace.devices where peer.id != localDevice.id && !peer.peerAddresses.isEmpty {
+            scheduleDirectConnection(to: peer.id, immediately: true)
         }
     }
 
@@ -100,10 +137,15 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
             let active = Array(connections.values) + Array(pendingConnections.values)
             let values = (listener, browser, active)
             listener = nil
+            readyControlPort = nil
             browser = nil
             connections.removeAll()
             pendingConnections.removeAll()
             discoveredDevices.removeAll()
+            knownPeers.removeAll()
+            retryAttempts.removeAll()
+            retryTokens.removeAll()
+            running = false
             return values
         }
         values.0?.cancel()
@@ -111,8 +153,10 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
         values.2.forEach { $0.cancel() }
     }
 
-    private func handleListenerState(_ state: NWListener.State) {
+    private func handleListenerState(_ state: NWListener.State, listener: NWListener?) {
         switch state {
+        case .ready:
+            if let port = listener?.port { lock.withLock { readyControlPort = port } }
         case let .failed(error), let .waiting(error): emit(.failure(nil, error.localizedDescription))
         default: break
         }
@@ -144,21 +188,21 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
 
         for id in added { if let descriptor = current[id] { emit(.discovered(descriptor)) } }
         for id in removed { emit(.lost(id)) }
-        for (device, endpoint) in candidates { connect(to: endpoint, expectedDevice: device) }
+        for (device, endpoint) in candidates { connect(to: endpoint, expectedDevice: device, isOutbound: true) }
     }
 
-    private func connect(to endpoint: NWEndpoint, expectedDevice: DeviceDescriptor) {
+    private func connect(to endpoint: NWEndpoint, expectedDevice: DeviceDescriptor, isOutbound: Bool) {
         let connection = NWConnection(to: endpoint, using: Self.makeParameters())
-        install(connection, expectedDeviceID: expectedDevice.id)
+        install(connection, expectedDeviceID: expectedDevice.id, isOutbound: isOutbound)
         connection.start(queue: queue)
     }
 
     private func accept(_ connection: NWConnection) {
-        install(connection, expectedDeviceID: nil)
+        install(connection, expectedDeviceID: nil, isOutbound: false)
         connection.start(queue: queue)
     }
 
-    private func install(_ connection: NWConnection, expectedDeviceID: DeviceID?) {
+    private func install(_ connection: NWConnection, expectedDeviceID: DeviceID?, isOutbound: Bool) {
         let configuration = lock.withLock { () -> (DeviceID, WorkspaceID, Data)? in
             guard let localDevice, let workspaceID, let key else { return nil }
             return (localDevice.id, workspaceID, key)
@@ -169,7 +213,8 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
             localDeviceID: configuration.0,
             workspaceID: configuration.1,
             workspaceKey: configuration.2,
-            expectedDeviceID: expectedDeviceID
+            expectedDeviceID: expectedDeviceID,
+            isOutbound: isOutbound
         )
         let objectID = ObjectIdentifier(managed)
         lock.withLock { pendingConnections[objectID] = managed }
@@ -198,9 +243,9 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
         switch state {
         case let .failed(error), let .waiting(error):
             emit(.failure(expectedDeviceID, error.localizedDescription))
-            if case .failed = state { remove(managed, objectID: objectID) }
+            if case .failed = state { remove(managed, objectID: objectID, expectedDeviceID: expectedDeviceID) }
         case .cancelled:
-            remove(managed, objectID: objectID)
+            remove(managed, objectID: objectID, expectedDeviceID: expectedDeviceID)
         default:
             break
         }
@@ -228,22 +273,96 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
     }
 
     private func register(_ managed: SecurePeerConnection, as deviceID: DeviceID, objectID: ObjectIdentifier) {
+        var replaced: SecurePeerConnection?
+        var rejected = false
+        var shouldEmitConnected = false
         lock.lock()
-        if let existing = connections[deviceID], existing !== managed { existing.cancel() }
-        let wasConnected = connections[deviceID] != nil
-        connections[deviceID] = managed
         pendingConnections.removeValue(forKey: objectID)
+        if let existing = connections[deviceID], existing !== managed {
+            if isPreferred(managed, for: deviceID), !isPreferred(existing, for: deviceID) {
+                connections[deviceID] = managed
+                replaced = existing
+            } else {
+                rejected = true
+            }
+        } else {
+            shouldEmitConnected = connections[deviceID] == nil
+            connections[deviceID] = managed
+        }
+        retryAttempts[deviceID] = 0
+        retryTokens.removeValue(forKey: deviceID)
         lock.unlock()
-        if !wasConnected { emit(.connected(deviceID)) }
+        if rejected {
+            managed.cancel()
+            return
+        }
+        replaced?.cancel()
+        if shouldEmitConnected { emit(.connected(deviceID)) }
     }
 
-    private func remove(_ managed: SecurePeerConnection, objectID: ObjectIdentifier) {
+    private func remove(
+        _ managed: SecurePeerConnection,
+        objectID: ObjectIdentifier,
+        expectedDeviceID: DeviceID?
+    ) {
+        var removedActive = false
         lock.lock()
         pendingConnections.removeValue(forKey: objectID)
         let deviceID = managed.deviceID
-        if let deviceID, connections[deviceID] === managed { connections.removeValue(forKey: deviceID) }
+        if let deviceID, connections[deviceID] === managed {
+            connections.removeValue(forKey: deviceID)
+            removedActive = true
+        }
         lock.unlock()
-        if let deviceID { emit(.disconnected(deviceID)) }
+        if let deviceID, removedActive { emit(.disconnected(deviceID)) }
+        if removedActive || deviceID == nil, let retryDeviceID = deviceID ?? expectedDeviceID {
+            scheduleDirectConnection(to: retryDeviceID, immediately: false)
+        }
+    }
+
+    private func isPreferred(_ connection: SecurePeerConnection, for peerID: DeviceID) -> Bool {
+        guard let localID = localDevice?.id else { return false }
+        return connection.isOutbound == (localID < peerID)
+    }
+
+    private func scheduleDirectConnection(to deviceID: DeviceID, immediately: Bool) {
+        let schedule = lock.withLock { () -> (UUID, TimeInterval)? in
+            guard running, connections[deviceID] == nil,
+                  retryTokens[deviceID] == nil,
+                  let peer = knownPeers[deviceID], !peer.peerAddresses.isEmpty else { return nil }
+            let attempt = retryAttempts[deviceID, default: 0]
+            let delays: [TimeInterval] = [1, 2, 4, 8, 15]
+            let delay = immediately ? 0 : delays[min(attempt, delays.count - 1)]
+            let token = UUID()
+            retryTokens[deviceID] = token
+            return (token, delay)
+        }
+        guard let (token, delay) = schedule else { return }
+        queue.asyncAfter(deadline: .now() + delay) { [weak self] in
+            self?.attemptDirectConnection(to: deviceID, token: token)
+        }
+    }
+
+    private func attemptDirectConnection(to deviceID: DeviceID, token: UUID) {
+        let target = lock.withLock { () -> (DeviceDescriptor, PeerAddress)? in
+            guard running, retryTokens[deviceID] == token,
+                  connections[deviceID] == nil,
+                  !pendingConnections.values.contains(where: { $0.expectedDeviceID == deviceID }),
+                  let peer = knownPeers[deviceID], !peer.peerAddresses.isEmpty else {
+                retryTokens.removeValue(forKey: deviceID)
+                return nil
+            }
+            retryTokens.removeValue(forKey: deviceID)
+            let attempt = retryAttempts[deviceID, default: 0]
+            retryAttempts[deviceID] = attempt + 1
+            return (peer, peer.peerAddresses[attempt % peer.peerAddresses.count])
+        }
+        guard let (peer, address) = target else { return }
+        let endpoint = NWEndpoint.hostPort(
+            host: NWEndpoint.Host(address.host),
+            port: configuredDirectPort
+        )
+        connect(to: endpoint, expectedDevice: peer, isOutbound: true)
     }
 
     private func emit(_ event: PeerEvent) { continuation.yield(event) }
@@ -275,6 +394,7 @@ private struct SecureChannelHello: Codable, Sendable {
 final class SecurePeerConnection: @unchecked Sendable {
     let connection: NWConnection
     let expectedDeviceID: DeviceID?
+    let isOutbound: Bool
     var stateHandler: (@Sendable (NWConnection.State) -> Void)?
     var authenticatedHandler: (@Sendable (DeviceID) -> Void)?
     var frameHandler: (@Sendable (WireFrameKind, Data) -> Void)?
@@ -297,13 +417,15 @@ final class SecurePeerConnection: @unchecked Sendable {
         localDeviceID: DeviceID,
         workspaceID: WorkspaceID,
         workspaceKey: Data,
-        expectedDeviceID: DeviceID?
+        expectedDeviceID: DeviceID?,
+        isOutbound: Bool = false
     ) {
         self.connection = connection
         self.localDeviceID = localDeviceID
         self.workspaceID = workspaceID
         self.workspaceKey = SymmetricKey(data: workspaceKey)
         self.expectedDeviceID = expectedDeviceID
+        self.isOutbound = isOutbound
         self.localNonce = PairingCryptoSession.randomData(count: 32)
         connection.stateUpdateHandler = { [weak self] state in
             self?.stateHandler?(state)
@@ -422,7 +544,11 @@ final class SecurePeerConnection: @unchecked Sendable {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 65_536) { [weak self] data, _, complete, error in
             guard let self else { return }
             if let data, !data.isEmpty { self.consume(data) }
-            if error == nil, !complete { self.receiveNext() }
+            if error == nil, !complete {
+                self.receiveNext()
+            } else {
+                self.cancel()
+            }
         }
     }
 

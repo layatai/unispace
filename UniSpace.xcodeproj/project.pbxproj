@@ -33,6 +33,7 @@
 		6E33270E4DFB9DBCEDFB91AF /* UniSpaceDomain.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D0CF733F292C646448A74827 /* UniSpaceDomain.framework */; };
 		78B81DC2D0676E5595C7897B /* DesignSystem.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0532F3407215F29850C4C079 /* DesignSystem.swift */; };
 		886D77A812D77B7AD388069E /* NetworkPeerTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 602F8819EF4D4A147D279865 /* NetworkPeerTransport.swift */; };
+		8E3850CC638FBADFE66DFE00 /* SystemTailnetAddressProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E450FB99AE7F4C9BB087CB4 /* SystemTailnetAddressProvider.swift */; };
 		8E6BA003D246813AC1906B0B /* FrameCodec.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1425648D0C5F8712AC268 /* FrameCodec.swift */; };
 		8E8D0D149CC8932E23A6D7DC /* FileWorkspaceStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6BD24036F75164EC8ED3CE84 /* FileWorkspaceStore.swift */; };
 		9C4AE39AE934CEDF88992640 /* UniSpaceApplication.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = CD69866EFD7AE9229BB70567 /* UniSpaceApplication.framework */; };
@@ -219,6 +220,7 @@
 		3705E48046B8D56DACF3CF21 /* PairingNetworkService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingNetworkService.swift; sourceTree = "<group>"; };
 		4FB1C3CA1F6EAACE025F81C8 /* CGEventInputInjector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CGEventInputInjector.swift; sourceTree = "<group>"; };
 		55C72D45E1BA1AC01DA60260 /* ControllerStateMachine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControllerStateMachine.swift; sourceTree = "<group>"; };
+		5E450FB99AE7F4C9BB087CB4 /* SystemTailnetAddressProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemTailnetAddressProvider.swift; sourceTree = "<group>"; };
 		602F8819EF4D4A147D279865 /* NetworkPeerTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NetworkPeerTransport.swift; sourceTree = "<group>"; };
 		63C1907F88FD14FAAC86A99A /* SetupFlowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SetupFlowView.swift; sourceTree = "<group>"; };
 		6546C790629F2520FF8A74A1 /* KeychainTrustStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainTrustStore.swift; sourceTree = "<group>"; };
@@ -412,6 +414,7 @@
 				0BEEFF85ADC6073F10990C58 /* SystemDisplayCatalog.swift */,
 				9B6E8B1FA2B7DDB5F10F7EDE /* SystemLoginItemController.swift */,
 				C9BC99509AFF12E2820267B0 /* SystemPermissionService.swift */,
+				5E450FB99AE7F4C9BB087CB4 /* SystemTailnetAddressProvider.swift */,
 			);
 			path = Infrastructure;
 			sourceTree = "<group>";
@@ -786,6 +789,7 @@
 				DC36F9B28CBDBE776F422330 /* SystemDisplayCatalog.swift in Sources */,
 				41885736115B4CE83994D88F /* SystemLoginItemController.swift in Sources */,
 				AC007143369DCAF64CBBA867 /* SystemPermissionService.swift in Sources */,
+				8E3850CC638FBADFE66DFE00 /* SystemTailnetAddressProvider.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

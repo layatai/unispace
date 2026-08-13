@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import UniSpaceApplication
 import UniSpaceDomain
@@ -7,6 +8,7 @@ import UniSpaceInfrastructure
 /// workspace discovery, and the two-sided pairing confirmation.
 struct SetupFlowView: View {
     @ObservedObject var model: AppModel
+    @State private var directAddress = ""
 
     var body: some View {
         Group {
@@ -42,7 +44,7 @@ struct SetupFlowView: View {
                 .font(.system(size: 30, weight: .bold))
                 .multilineTextAlignment(.center)
 
-            Text("Move your pointer between Macs as if they shared one desk. Everything stays on your local network.")
+            Text("Move your pointer between Macs as if they shared one desk, over your LAN or private Tailscale network.")
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -72,7 +74,7 @@ struct SetupFlowView: View {
 
             Spacer(minLength: 0)
 
-            Label("Pairing uses an encrypted local connection and a code you confirm on both Macs.", systemImage: "lock.shield")
+            Label("Pairing uses an encrypted private connection and a code you confirm on both Macs.", systemImage: "lock.shield")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .padding(.bottom, 4)
@@ -137,6 +139,24 @@ struct SetupFlowView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
+            VStack(alignment: .leading, spacing: 8) {
+                Label("Connect through Tailscale", systemImage: "network")
+                    .font(.headline)
+                Text("Enter the other Mac’s MagicDNS name or Tailscale IP.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                HStack(spacing: 10) {
+                    TextField("macbook.tailnet.ts.net or 100.x.x.x", text: $directAddress)
+                        .textFieldStyle(.roundedBorder)
+                        .onSubmit(connectDirectly)
+                        .accessibilityIdentifier("tailscale-address")
+                    Button("Connect", action: connectDirectly)
+                        .buttonStyle(.borderedProminent)
+                        .disabled(directAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+            .card()
+
             HStack {
                 Spacer()
                 Button("Cancel") { model.cancelPairing() }
@@ -145,6 +165,10 @@ struct SetupFlowView: View {
         }
         .padding(Metrics.pageInset)
         .frame(maxWidth: Metrics.contentWidth)
+    }
+
+    private func connectDirectly() {
+        model.joinDirectly(address: directAddress)
     }
 
     private func candidateRow(_ candidate: PairingCandidate) -> some View {
@@ -235,6 +259,35 @@ struct SetupFlowView: View {
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 380)
                 .padding(.top, 6)
+
+            if let address = model.tailnetAddresses.first {
+                VStack(spacing: 7) {
+                    Text("Tailscale address")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    HStack(spacing: 8) {
+                        Text(address.host)
+                            .font(.system(.body, design: .monospaced).weight(.medium))
+                            .textSelection(.enabled)
+                        Button {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(address.host, forType: .string)
+                        } label: {
+                            Image(systemName: "doc.on.doc")
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Copy Tailscale address")
+                    }
+                }
+                .card()
+                .frame(maxWidth: 380)
+                .padding(.top, 18)
+            } else {
+                Text("Tailscale was not detected. Nearby LAN pairing is still available.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.top, 14)
+            }
 
             Button("Cancel") { model.cancelPairing() }
                 .controlSize(.large)

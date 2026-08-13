@@ -6,6 +6,8 @@ import UniSpaceDomain
 struct DevicesView: View {
     @ObservedObject var model: AppModel
     @State private var pendingRemoval: DeviceDescriptor?
+    @State private var addressDevice: DeviceDescriptor?
+    @State private var connectionAddress = ""
 
     private let capacity = 4
 
@@ -51,6 +53,9 @@ struct DevicesView: View {
             Button("Cancel", role: .cancel) { pendingRemoval = nil }
         } message: {
             Text("This Mac leaves the workspace and the shared key is replaced. You can pair it again later.")
+        }
+        .sheet(item: $addressDevice) { device in
+            connectionAddressSheet(device)
         }
     }
 
@@ -120,6 +125,16 @@ struct DevicesView: View {
             }
 
             if !isLocal {
+                Button {
+                    connectionAddress = device.peerAddresses.first?.host ?? ""
+                    addressDevice = device
+                } label: {
+                    Image(systemName: "network")
+                }
+                .buttonStyle(.borderless)
+                .help("Set Tailscale connection address")
+                .accessibilityLabel("Set connection address for \(device.name)")
+
                 Button(role: .destructive) {
                     pendingRemoval = device
                 } label: {
@@ -134,6 +149,35 @@ struct DevicesView: View {
         .accessibilityElement(children: .contain)
     }
 
+    private func connectionAddressSheet(_ device: DeviceDescriptor) -> some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Connect to \(device.name)")
+                .font(.title2.bold())
+            Text("Enter this Mac’s MagicDNS name or Tailscale IP. UniSpace will keep Bonjour enabled for nearby connections.")
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            TextField("macbook.tailnet.ts.net or 100.x.x.x", text: $connectionAddress)
+                .textFieldStyle(.roundedBorder)
+                .onSubmit { saveConnectionAddress(for: device) }
+            HStack {
+                Spacer()
+                Button("Cancel") { addressDevice = nil }
+                    .keyboardShortcut(.cancelAction)
+                Button("Save") { saveConnectionAddress(for: device) }
+                    .buttonStyle(.borderedProminent)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(connectionAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding(24)
+        .frame(width: 460)
+    }
+
+    private func saveConnectionAddress(for device: DeviceDescriptor) {
+        model.setConnectionAddress(connectionAddress, for: device.id)
+        addressDevice = nil
+    }
+
     private var addCard: some View {
         Button {
             model.startHostingPairing()
@@ -144,7 +188,7 @@ struct DevicesView: View {
                     Text("Pair New Mac")
                         .font(.headline)
                         .foregroundStyle(.primary)
-                    Text("Show a pairing code that another Mac on this network can join.")
+                    Text("Show a pairing code another Mac can join over LAN or Tailscale.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

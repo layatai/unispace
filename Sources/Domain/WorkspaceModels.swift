@@ -1,4 +1,69 @@
 import Foundation
+import Darwin
+
+public enum PeerAddressError: Error, LocalizedError, Equatable {
+    case empty
+    case invalidFormat
+
+    public var errorDescription: String? {
+        switch self {
+        case .empty: "Enter a Tailscale hostname or IP address."
+        case .invalidFormat: "Enter a hostname or IP address without a URL, path, or port."
+        }
+    }
+}
+
+public struct PeerAddress: Codable, Hashable, Sendable, CustomStringConvertible {
+    public let host: String
+
+    public init(_ rawValue: String) throws {
+        var value = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { throw PeerAddressError.empty }
+        if value.hasPrefix("["), value.hasSuffix("]") {
+            value.removeFirst()
+            value.removeLast()
+        }
+        guard !value.isEmpty,
+              !value.contains("://"),
+              value.rangeOfCharacter(from: CharacterSet(charactersIn: "/?#@")) == nil,
+              Self.isIPAddress(value) || Self.isHostname(value) else {
+            throw PeerAddressError.invalidFormat
+        }
+        host = value.lowercased()
+    }
+
+    public var description: String { host }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        try self.init(container.decode(String.self))
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(host)
+    }
+
+    private static func isIPAddress(_ value: String) -> Bool {
+        var ipv4 = in_addr()
+        var ipv6 = in6_addr()
+        return value.withCString {
+            inet_pton(AF_INET, $0, &ipv4) == 1 || inet_pton(AF_INET6, $0, &ipv6) == 1
+        }
+    }
+
+    private static func isHostname(_ value: String) -> Bool {
+        guard value.utf8.count <= 253, !value.contains(":") else { return false }
+        let labels = value.split(separator: ".", omittingEmptySubsequences: false)
+        return !labels.isEmpty && labels.allSatisfy { label in
+            guard !label.isEmpty, label.utf8.count <= 63,
+                  label.first != "-", label.last != "-" else { return false }
+            return label.unicodeScalars.allSatisfy {
+                CharacterSet.alphanumerics.contains($0) || $0.value == 45
+            }
+        }
+    }
+}
 
 public struct DisplayRect: Codable, Hashable, Sendable {
     public var x: Double
@@ -48,11 +113,33 @@ public struct DeviceDescriptor: Codable, Hashable, Identifiable, Sendable {
     public let id: DeviceID
     public var name: String
     public var displays: [DisplayDescriptor]
+    public var peerAddresses: [PeerAddress]
 
-    public init(id: DeviceID, name: String, displays: [DisplayDescriptor] = []) {
+    public init(
+        id: DeviceID,
+        name: String,
+        displays: [DisplayDescriptor] = [],
+        peerAddresses: [PeerAddress] = []
+    ) {
         self.id = id
         self.name = name
         self.displays = displays
+        self.peerAddresses = peerAddresses
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case displays
+        case peerAddresses
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(DeviceID.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        displays = try container.decodeIfPresent([DisplayDescriptor].self, forKey: .displays) ?? []
+        peerAddresses = try container.decodeIfPresent([PeerAddress].self, forKey: .peerAddresses) ?? []
     }
 }
 

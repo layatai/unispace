@@ -170,7 +170,7 @@ private final class TransportSpy: PeerTransport, @unchecked Sendable {
     private let lock = NSLock()
     private var storedFrames: [InputFrame] = []
     var frames: [InputFrame] { lock.withLock { storedFrames } }
-    func start(localDevice: DeviceDescriptor, workspaceID: WorkspaceID, key: Data) async throws {}
+    func start(localDevice: DeviceDescriptor, workspace: WorkspaceSnapshot, key: Data) async throws {}
     func stop() async {}
     func events() -> AsyncStream<PeerEvent> { stream }
     func send(_ envelope: ControlEnvelope, to deviceID: DeviceID) async throws {}

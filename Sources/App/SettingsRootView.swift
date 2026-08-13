@@ -17,7 +17,6 @@ struct SettingsRootView: View {
             }
         }
         .animation(reduceMotion ? nil : .unispace, value: model.setupState)
-        .accessibilityIdentifier("unispace-main-view")
         .alert(
             "Something went wrong",
             isPresented: Binding(

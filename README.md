@@ -1,6 +1,6 @@
 # UniSpace
 
-UniSpace is a native macOS Dock and menu-bar app for controlling up to four personal Macs with one keyboard and pointer over a trusted local network.
+UniSpace is a native macOS Dock and menu-bar app for controlling up to four personal Macs with one keyboard and pointer over a trusted LAN or Tailscale network.
 
 ## Requirements
 
@@ -28,7 +28,7 @@ The generated Xcode project is derived from `project.yml`; edit the YAML and reg
 5. Confirm that the six-digit code matches on both Macs, then approve both sides.
 6. Arrange displays in Settings by dragging their cards next to each other.
 
-UniSpace uses Bonjour only on the local network. Pairing transfers a random workspace key only after an ephemeral key exchange and two-sided code confirmation. Peer sessions use per-connection keys derived from that workspace key, HMAC-authenticated handshakes, ChaCha20-Poly1305 encryption, and replay sequencing. Workspace secrets are stored in Keychain. Raw keyboard and pointer events are never logged.
+UniSpace uses Bonjour for automatic LAN discovery. Across Tailscale, enter the host Mac’s MagicDNS name or Tailscale IP; UniSpace uses TCP `61337` for pairing and TCP `61338` for trusted control sessions. Pairing transfers a random workspace key only after an ephemeral key exchange and two-sided code confirmation. Peer sessions use per-connection keys derived from that workspace key, HMAC-authenticated handshakes, ChaCha20-Poly1305 encryption, and replay sequencing. Workspace secrets are stored in Keychain. Raw keyboard and pointer events are never logged.
 
 Use `Control-Option-Command-Escape` to stop a remote-control session and return control locally.
 
