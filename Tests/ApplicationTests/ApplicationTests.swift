@@ -172,6 +172,26 @@ final class ApplicationTests: XCTestCase {
         let (inputKind, inputPayload) = try WireFrameCodec.decode(encodedInput)
         XCTAssertEqual(inputKind, .inputBinary)
         XCTAssertEqual(try WireFrameCodec.decodeInput(inputPayload), frame)
+
+        let realtime = RealtimePointerFrame(
+            workspaceID: frame.workspaceID,
+            sessionID: frame.sessionID,
+            controllerID: device,
+            epoch: epoch,
+            generation: 2,
+            sequence: 4,
+            deltaX: 2,
+            deltaY: -1,
+            cumulativeDeltaX: 7,
+            cumulativeDeltaY: -3,
+            absoluteX: 40,
+            absoluteY: 80,
+            timestampNanos: 100
+        )
+        let encodedRealtime = try WireFrameCodec.encodeRealtimePointer(realtime)
+        let (realtimeKind, realtimePayload) = try WireFrameCodec.decode(encodedRealtime)
+        XCTAssertEqual(realtimeKind, .realtimePointerBinary)
+        XCTAssertEqual(try WireFrameCodec.decodeRealtimePointer(realtimePayload), realtime)
     }
 
     func testWireCodecRejectsMismatchedLength() throws {
@@ -230,6 +250,106 @@ final class ApplicationTests: XCTestCase {
         XCTAssertEqual(injector.releaseAllCount, 1)
     }
 
+    func testRealtimePointerRecoversCumulativeMotionAfterDatagramLoss() async throws {
+        let local = DeviceID()
+        let remote = DeviceID()
+        let workspace = WorkspaceID()
+        let injector = InjectorSpy()
+        let coordinator = ControlSessionCoordinator(
+            localDeviceID: local,
+            workspaceID: workspace,
+            capture: CaptureSpy(),
+            injector: injector,
+            transport: TransportSpy()
+        )
+        let epoch = ControllerEpoch(generation: 1, controllerID: remote)
+        let sessionID = SessionID()
+        await coordinator.observeControllerClaim(epoch)
+        _ = await coordinator.receiveActivation(
+            .init(
+                sessionID: sessionID,
+                epoch: epoch,
+                targetDisplayID: DisplayID(),
+                entryEdge: .left,
+                normalizedPosition: 0.5
+            ),
+            from: remote,
+            targetDisplay: nil
+        )
+
+        await coordinator.handleIncomingRealtime(.init(
+            workspaceID: workspace,
+            sessionID: sessionID,
+            controllerID: remote,
+            epoch: epoch,
+            generation: 4,
+            sequence: 0,
+            deltaX: 2,
+            deltaY: 1,
+            cumulativeDeltaX: 2,
+            cumulativeDeltaY: 1,
+            absoluteX: 20,
+            absoluteY: 10,
+            timestampNanos: 1
+        ), from: remote)
+        await coordinator.handleIncomingRealtime(.init(
+            workspaceID: workspace,
+            sessionID: sessionID,
+            controllerID: remote,
+            epoch: epoch,
+            generation: 4,
+            sequence: 2,
+            deltaX: 3,
+            deltaY: 2,
+            cumulativeDeltaX: 9,
+            cumulativeDeltaY: 5,
+            absoluteX: 29,
+            absoluteY: 15,
+            timestampNanos: 3
+        ), from: remote)
+
+        XCTAssertEqual(injector.events, [
+            .pointerMove(deltaX: 2, deltaY: 1, absoluteX: 20, absoluteY: 10),
+            .pointerMove(deltaX: 7, deltaY: 4, absoluteX: 29, absoluteY: 15)
+        ])
+        await coordinator.stop()
+    }
+
+    func testReceiverDoesNotAbandonSessionAfterFourSecondSlowLinkDelay() async throws {
+        let local = DeviceID()
+        let remote = DeviceID()
+        let clock = MutableClock()
+        let coordinator = ControlSessionCoordinator(
+            localDeviceID: local,
+            workspaceID: WorkspaceID(),
+            capture: CaptureSpy(),
+            injector: InjectorSpy(),
+            transport: TransportSpy(),
+            clock: clock
+        )
+        let epoch = ControllerEpoch(generation: 1, controllerID: remote)
+        await coordinator.observeControllerClaim(epoch)
+        let activation = InputActivation(
+            sessionID: SessionID(),
+            epoch: epoch,
+            targetDisplayID: DisplayID(),
+            entryEdge: .left,
+            normalizedPosition: 0.5
+        )
+        let accepted = await coordinator.receiveActivation(activation, from: remote, targetDisplay: nil)
+        XCTAssertTrue(accepted)
+
+        clock.advance(by: 4_000_000_000)
+        try await Task.sleep(for: .milliseconds(1_100))
+
+        guard case let .receiving(_, source, session) = await coordinator.currentState() else {
+            return XCTFail("A slow but viable link must not expire after the old three-second watchdog")
+        }
+        XCTAssertEqual(source, remote)
+        XCTAssertEqual(session, activation.sessionID)
+        await coordinator.stop()
+    }
+
     func testCoordinatorCoalescesPointerMovesWithoutDroppingFinalPosition() async throws {
         let local = DeviceID()
         let remote = DeviceID()
@@ -258,6 +378,89 @@ final class ApplicationTests: XCTestCase {
             transport.frames.first?.event,
             .pointerMove(deltaX: 4, deltaY: 6, absoluteX: 13, absoluteY: 24)
         )
+        await coordinator.stop()
+    }
+
+    func testPointerMotionUsesRealtimeLaneButDraggingStaysReliable() async throws {
+        let local = DeviceID()
+        let remote = DeviceID()
+        let transport = TransportSpy(useRealtime: true)
+        let coordinator = ControlSessionCoordinator(
+            localDeviceID: local,
+            workspaceID: WorkspaceID(),
+            capture: CaptureSpy(),
+            injector: InjectorSpy(),
+            transport: transport
+        )
+        _ = await coordinator.makeLocalController()
+        try await coordinator.activate(
+            target: remote,
+            displayID: DisplayID(),
+            entryEdge: .left,
+            normalizedPosition: 0.5
+        )
+
+        _ = await coordinator.handleCaptured(.pointerMove(
+            deltaX: 2,
+            deltaY: 1,
+            absoluteX: 12,
+            absoluteY: 11
+        ))
+        try await Task.sleep(for: .milliseconds(25))
+        _ = await coordinator.handleCaptured(.mouseButton(button: .left, isDown: true, clickCount: 1))
+        _ = await coordinator.handleCaptured(.pointerMove(
+            deltaX: 5,
+            deltaY: 0,
+            absoluteX: 17,
+            absoluteY: 11
+        ))
+
+        XCTAssertEqual(transport.realtimeFrames.count, 1)
+        XCTAssertEqual(transport.realtimeFrames.first?.cumulativeDeltaX, 2)
+        XCTAssertEqual(transport.frames.map(\.event), [
+            .mouseButton(button: .left, isDown: true, clickCount: 1),
+            .pointerMove(deltaX: 5, deltaY: 0, absoluteX: 17, absoluteY: 11)
+        ])
+        await coordinator.stop()
+    }
+
+    func testHeartbeatEchoReportsSmoothedRoundTripLatency() async throws {
+        let local = DeviceID()
+        let remote = DeviceID()
+        let clock = MutableClock()
+        let coordinator = ControlSessionCoordinator(
+            localDeviceID: local,
+            workspaceID: WorkspaceID(),
+            capture: CaptureSpy(),
+            injector: InjectorSpy(),
+            transport: TransportSpy(),
+            clock: clock
+        )
+        _ = await coordinator.makeLocalController()
+        try await coordinator.activate(
+            target: remote,
+            displayID: DisplayID(),
+            entryEdge: .left,
+            normalizedPosition: 0.5
+        )
+        guard case let .controlling(_, _, sessionID) = await coordinator.currentState() else {
+            return XCTFail("Expected an active control session")
+        }
+
+        clock.advance(by: 800_000_000)
+        let firstLatency = await coordinator.receiveHeartbeatEcho(
+            sessionID: sessionID,
+            from: remote,
+            sentAtNanos: 0
+        )
+        XCTAssertEqual(firstLatency, 800)
+        clock.advance(by: 200_000_000)
+        let secondLatency = await coordinator.receiveHeartbeatEcho(
+            sessionID: sessionID,
+            from: remote,
+            sentAtNanos: 800_000_000
+        )
+        XCTAssertEqual(secondLatency, 725)
         await coordinator.stop()
     }
 
@@ -307,6 +510,63 @@ final class ApplicationTests: XCTestCase {
         XCTAssertTrue(capture.suppressed)
         XCTAssertEqual(transport.controlMessages.filter(\.isActivation).count, 2)
         XCTAssertEqual(transport.frames.map(\.event), [.flags(rawValue: 0)])
+        await coordinator.stop()
+    }
+
+    func testControllerReturnsLocallyAfterReconnectGraceExpires() async throws {
+        let local = DeviceID()
+        let remote = DeviceID()
+        let capture = CaptureSpy()
+        let coordinator = ControlSessionCoordinator(
+            localDeviceID: local,
+            workspaceID: WorkspaceID(),
+            capture: capture,
+            injector: InjectorSpy(),
+            transport: TransportSpy(),
+            reconnectGrace: .milliseconds(50)
+        )
+        _ = await coordinator.makeLocalController()
+        try await coordinator.activate(
+            target: remote,
+            displayID: DisplayID(),
+            entryEdge: .left,
+            normalizedPosition: 0.5
+        )
+
+        await coordinator.peerDisconnected(remote)
+        try await Task.sleep(for: .milliseconds(100))
+
+        let state = await coordinator.currentState()
+        XCTAssertEqual(state, .idle)
+        XCTAssertFalse(capture.suppressed)
+    }
+
+    func testCoordinatorCoalescesContinuousScrollWithoutLosingDistance() async throws {
+        let local = DeviceID()
+        let remote = DeviceID()
+        let transport = TransportSpy()
+        let coordinator = ControlSessionCoordinator(
+            localDeviceID: local,
+            workspaceID: WorkspaceID(),
+            capture: CaptureSpy(),
+            injector: InjectorSpy(),
+            transport: transport
+        )
+        _ = await coordinator.makeLocalController()
+        try await coordinator.activate(
+            target: remote,
+            displayID: DisplayID(),
+            entryEdge: .left,
+            normalizedPosition: 0.5
+        )
+
+        _ = await coordinator.handleCaptured(.scroll(deltaX: 1, deltaY: 2, isContinuous: true))
+        _ = await coordinator.handleCaptured(.scroll(deltaX: 3, deltaY: 4, isContinuous: true))
+        try await Task.sleep(for: .milliseconds(40))
+
+        XCTAssertEqual(transport.frames.map(\.event), [
+            .scroll(deltaX: 4, deltaY: 6, isContinuous: true)
+        ])
         await coordinator.stop()
     }
 
@@ -593,16 +853,28 @@ private final class InjectorSpy: InputInjector, @unchecked Sendable {
     func releaseAll() { lock.withLock { storedReleaseCount += 1 } }
 }
 
+private final class MutableClock: MonotonicClock, @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: UInt64 = 0
+
+    func nowNanoseconds() -> UInt64 { lock.withLock { value } }
+    func advance(by nanoseconds: UInt64) { lock.withLock { value &+= nanoseconds } }
+}
+
 private final class TransportSpy: PeerTransport, @unchecked Sendable {
     private let stream = AsyncStream<PeerEvent> { $0.finish() }
     private let lock = NSLock()
     private let frameSendError: Error?
+    private let useRealtime: Bool
     private var storedFrames: [InputFrame] = []
+    private var storedRealtimeFrames: [RealtimePointerFrame] = []
     private var storedControlMessages: [ControlMessage] = []
     var frames: [InputFrame] { lock.withLock { storedFrames } }
+    var realtimeFrames: [RealtimePointerFrame] { lock.withLock { storedRealtimeFrames } }
     var controlMessages: [ControlMessage] { lock.withLock { storedControlMessages } }
-    init(frameSendError: Error? = nil) {
+    init(frameSendError: Error? = nil, useRealtime: Bool = false) {
         self.frameSendError = frameSendError
+        self.useRealtime = useRealtime
     }
     func start(localDevice: DeviceDescriptor, workspace: WorkspaceSnapshot, key: Data) async throws {}
     func stop() async {}
@@ -613,5 +885,13 @@ private final class TransportSpy: PeerTransport, @unchecked Sendable {
     func send(_ frame: InputFrame, to deviceID: DeviceID) async throws {
         if let frameSendError { throw frameSendError }
         lock.withLock { storedFrames.append(frame) }
+    }
+    func sendRealtime(_ frame: RealtimePointerFrame, to deviceID: DeviceID) async throws -> Bool {
+        if useRealtime {
+            lock.withLock { storedRealtimeFrames.append(frame) }
+            return true
+        }
+        try await send(frame.reliableFallback, to: deviceID)
+        return false
     }
 }

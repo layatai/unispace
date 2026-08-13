@@ -64,6 +64,8 @@ targets:
         LSUIElement: false
         NSBonjourServices:
           - _unispace._tcp
+          - _unispace._udp
+          - _unispace-rt._udp
           - _unispace-pair._tcp
         NSLocalNetworkUsageDescription: UniSpace discovers and connects to nearby Macs so you can control them with one keyboard and mouse.
     entitlements:

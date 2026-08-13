@@ -23,6 +23,9 @@ public actor ControlSessionCoordinator {
 
     public static let emergencyKeyCode: UInt16 = 53
     public static let emergencyFlags: UInt64 = 0x0014_0000 | 0x0008_0000 | 0x0004_0000
+    public static let heartbeatTimeoutNanos: UInt64 = 10_000_000_000
+    public static let minimumHeartbeatTimeoutNanos: UInt64 = 5_000_000_000
+    public static let maximumHeartbeatTimeoutNanos: UInt64 = 30_000_000_000
 
     private let localDeviceID: DeviceID
     private let workspaceID: WorkspaceID
@@ -30,16 +33,30 @@ public actor ControlSessionCoordinator {
     private let injector: InputInjector
     private let transport: PeerTransport
     private let clock: MonotonicClock
+    private let reconnectGrace: Duration
     private var election: ControllerStateMachine
     private var remoteInputState = RemoteInputState()
     private var currentFlags: UInt64 = 0
     private var sequence: UInt64 = 0
+    private var realtimeGeneration: UInt64 = 0
+    private var realtimeSequence: UInt64 = 0
+    private var cumulativePointerX: Double = 0
+    private var cumulativePointerY: Double = 0
+    private var receivedRealtimeGeneration: UInt64?
+    private var receivedRealtimeSequence: UInt64?
+    private var receivedCumulativePointerX: Double = 0
+    private var receivedCumulativePointerY: Double = 0
+    private var pressedButtons: Set<PointerButton> = []
     private var state: State = .idle
     private var pendingPointerEvent: InputEvent?
+    private var pendingScrollEvent: InputEvent?
     private var pointerFlushTask: Task<Void, Never>?
     private var heartbeatTask: Task<Void, Never>?
     private var watchdogTask: Task<Void, Never>?
+    private var reconnectGraceTask: Task<Void, Never>?
     private var lastHeartbeatNanos: UInt64 = 0
+    private var smoothedHeartbeatIntervalNanos: UInt64?
+    private var smoothedRoundTripNanos: UInt64?
     private var activeControlRoute: ActiveControlRoute?
     private var isConnectionInterrupted = false
 
@@ -50,6 +67,7 @@ public actor ControlSessionCoordinator {
         injector: InputInjector,
         transport: PeerTransport,
         clock: MonotonicClock = SystemMonotonicClock(),
+        reconnectGrace: Duration = .seconds(5),
         election: ControllerStateMachine = .init()
     ) {
         self.localDeviceID = localDeviceID
@@ -58,6 +76,7 @@ public actor ControlSessionCoordinator {
         self.injector = injector
         self.transport = transport
         self.clock = clock
+        self.reconnectGrace = reconnectGrace
         self.election = election
     }
 
@@ -86,6 +105,7 @@ public actor ControlSessionCoordinator {
             await endCurrentSession(notifyPeer: true)
         }
         let sessionID = SessionID()
+        resetRealtimeSender(incrementGeneration: true)
         state = .controlling(epoch: epoch, target: target, session: sessionID)
         activeControlRoute = ActiveControlRoute(
             target: target,
@@ -143,7 +163,18 @@ public actor ControlSessionCoordinator {
             return .emergencyStop
         }
         guard !isConnectionInterrupted else { return .forwarded }
+        if case let .mouseButton(button, isDown, _) = event {
+            await flushPendingMotion()
+            if isDown { pressedButtons.insert(button) } else { pressedButtons.remove(button) }
+            await sendInput(event)
+            return .forwarded
+        }
         if case let .pointerMove(deltaX, deltaY, absoluteX, absoluteY) = event {
+            guard pressedButtons.isEmpty else {
+                await flushPendingMotion()
+                await sendInput(event)
+                return .forwarded
+            }
             if case let .pointerMove(pendingX, pendingY, _, _) = pendingPointerEvent {
                 pendingPointerEvent = .pointerMove(
                     deltaX: pendingX + deltaX,
@@ -157,15 +188,55 @@ public actor ControlSessionCoordinator {
             schedulePointerFlush()
             return .forwarded
         }
-        await flushPendingPointer()
+        if case let .scroll(deltaX, deltaY, isContinuous) = event {
+            if case let .scroll(pendingX, pendingY, pendingContinuous) = pendingScrollEvent,
+               pendingContinuous == isContinuous {
+                pendingScrollEvent = .scroll(
+                    deltaX: pendingX + deltaX,
+                    deltaY: pendingY + deltaY,
+                    isContinuous: isContinuous
+                )
+            } else {
+                await flushPendingMotion()
+                pendingScrollEvent = event
+            }
+            schedulePointerFlush()
+            return .forwarded
+        }
+        await flushPendingMotion()
         await sendInput(event)
         return .forwarded
     }
 
-    public func receiveHeartbeat(sessionID: SessionID, from source: DeviceID) {
+    @discardableResult
+    public func receiveHeartbeat(sessionID: SessionID, from source: DeviceID) -> Bool {
         guard case let .receiving(_, expectedSource, expectedSession) = state,
-              source == expectedSource, sessionID == expectedSession else { return }
-        lastHeartbeatNanos = clock.nowNanoseconds()
+              source == expectedSource, sessionID == expectedSession else { return false }
+        let now = clock.nowNanoseconds()
+        if lastHeartbeatNanos > 0, now > lastHeartbeatNanos {
+            smoothedHeartbeatIntervalNanos = Self.smoothed(
+                previous: smoothedHeartbeatIntervalNanos,
+                sample: now - lastHeartbeatNanos
+            )
+        }
+        lastHeartbeatNanos = now
+        return true
+    }
+
+    public func receiveHeartbeatEcho(
+        sessionID: SessionID,
+        from source: DeviceID,
+        sentAtNanos: UInt64
+    ) -> Int? {
+        guard case let .controlling(_, target, expectedSession) = state,
+              source == target, sessionID == expectedSession else { return nil }
+        let now = clock.nowNanoseconds()
+        guard now >= sentAtNanos else { return nil }
+        smoothedRoundTripNanos = Self.smoothed(
+            previous: smoothedRoundTripNanos,
+            sample: now - sentAtNanos
+        )
+        return Int((smoothedRoundTripNanos ?? 0) / 1_000_000)
     }
 
     private func sendInput(_ event: InputEvent) async {
@@ -193,10 +264,41 @@ public actor ControlSessionCoordinator {
         injector.inject(frame.event)
     }
 
+    public func handleIncomingRealtime(_ frame: RealtimePointerFrame, from source: DeviceID) {
+        guard frame.workspaceID == workspaceID,
+              election.currentEpoch == frame.epoch,
+              frame.controllerID == source,
+              case let .receiving(epoch, expectedSource, sessionID) = state,
+              epoch == frame.epoch,
+              expectedSource == source,
+              sessionID == frame.sessionID else { return }
+
+        if let receivedRealtimeGeneration, frame.generation < receivedRealtimeGeneration { return }
+        if receivedRealtimeGeneration != frame.generation {
+            receivedRealtimeGeneration = frame.generation
+            receivedRealtimeSequence = nil
+            receivedCumulativePointerX = 0
+            receivedCumulativePointerY = 0
+        }
+        guard receivedRealtimeSequence.map({ frame.sequence > $0 }) ?? true else { return }
+        let deltaX = frame.cumulativeDeltaX - receivedCumulativePointerX
+        let deltaY = frame.cumulativeDeltaY - receivedCumulativePointerY
+        receivedRealtimeSequence = frame.sequence
+        receivedCumulativePointerX = frame.cumulativeDeltaX
+        receivedCumulativePointerY = frame.cumulativeDeltaY
+        injector.inject(.pointerMove(
+            deltaX: deltaX,
+            deltaY: deltaY,
+            absoluteX: frame.absoluteX,
+            absoluteY: frame.absoluteY
+        ))
+    }
+
     public func peerDisconnected(_ deviceID: DeviceID) async {
         switch state {
         case let .controlling(_, target, _) where target == deviceID:
             interruptConnection(to: target)
+            startReconnectGrace(target: target)
         case let .receiving(_, source, _) where source == deviceID:
             await endCurrentSession(notifyPeer: false)
         default:
@@ -212,6 +314,9 @@ public actor ControlSessionCoordinator {
               case let .controlling(epoch, target, _) = state,
               target == deviceID else { return false }
 
+        reconnectGraceTask?.cancel()
+        reconnectGraceTask = nil
+
         let sessionID = SessionID()
         do {
             try await transport.send(
@@ -226,6 +331,7 @@ public actor ControlSessionCoordinator {
             )
             state = .controlling(epoch: epoch, target: target, session: sessionID)
             sequence = 0
+            resetRealtimeSender(incrementGeneration: true)
             isConnectionInterrupted = false
             await sendInput(.flags(rawValue: currentFlags))
             startHeartbeat(target: target, sessionID: sessionID)
@@ -250,13 +356,21 @@ public actor ControlSessionCoordinator {
         pointerFlushTask?.cancel()
         pointerFlushTask = nil
         pendingPointerEvent = nil
+        pendingScrollEvent = nil
         heartbeatTask?.cancel()
         heartbeatTask = nil
         watchdogTask?.cancel()
         watchdogTask = nil
+        reconnectGraceTask?.cancel()
+        reconnectGraceTask = nil
         activeControlRoute = nil
         isConnectionInterrupted = false
         currentFlags = 0
+        smoothedHeartbeatIntervalNanos = nil
+        smoothedRoundTripNanos = nil
+        pressedButtons.removeAll()
+        resetRealtimeSender(incrementGeneration: true)
+        resetRealtimeReceiver()
         capture.setSuppressionEnabled(false)
 
         switch previous {
@@ -287,6 +401,7 @@ public actor ControlSessionCoordinator {
         pointerFlushTask?.cancel()
         pointerFlushTask = nil
         pendingPointerEvent = nil
+        pendingScrollEvent = nil
         heartbeatTask?.cancel()
         heartbeatTask = nil
     }
@@ -294,17 +409,65 @@ public actor ControlSessionCoordinator {
     private func schedulePointerFlush() {
         guard pointerFlushTask == nil else { return }
         pointerFlushTask = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(8))
-            await self?.flushPendingPointer()
+            try? await Task.sleep(for: .milliseconds(16))
+            await self?.flushPendingMotion()
         }
     }
 
-    private func flushPendingPointer() async {
+    private func flushPendingMotion() async {
         pointerFlushTask?.cancel()
         pointerFlushTask = nil
-        guard let event = pendingPointerEvent else { return }
+        let pointer = pendingPointerEvent
+        let scroll = pendingScrollEvent
         pendingPointerEvent = nil
-        await sendInput(event)
+        pendingScrollEvent = nil
+        if let pointer { await sendPointer(pointer) }
+        if let scroll { await sendInput(scroll) }
+    }
+
+    private func sendPointer(_ event: InputEvent) async {
+        guard case let .pointerMove(deltaX, deltaY, absoluteX, absoluteY) = event,
+              case let .controlling(epoch, target, sessionID) = state else { return }
+        cumulativePointerX += deltaX
+        cumulativePointerY += deltaY
+        let frame = RealtimePointerFrame(
+            workspaceID: workspaceID,
+            sessionID: sessionID,
+            controllerID: localDeviceID,
+            epoch: epoch,
+            generation: realtimeGeneration,
+            sequence: realtimeSequence,
+            deltaX: deltaX,
+            deltaY: deltaY,
+            cumulativeDeltaX: cumulativePointerX,
+            cumulativeDeltaY: cumulativePointerY,
+            absoluteX: absoluteX,
+            absoluteY: absoluteY,
+            timestampNanos: clock.nowNanoseconds()
+        )
+        realtimeSequence &+= 1
+        do {
+            let usedRealtime = try await transport.sendRealtime(frame, to: target)
+            if !usedRealtime {
+                resetRealtimeSender(incrementGeneration: true)
+            }
+        } catch {
+            resetRealtimeSender(incrementGeneration: true)
+        }
+    }
+
+    private func resetRealtimeSender(incrementGeneration: Bool) {
+        if incrementGeneration { realtimeGeneration &+= 1 }
+        realtimeSequence = 0
+        cumulativePointerX = 0
+        cumulativePointerY = 0
+    }
+
+    private func resetRealtimeReceiver() {
+        receivedRealtimeGeneration = nil
+        receivedRealtimeSequence = nil
+        receivedCumulativePointerX = 0
+        receivedCumulativePointerY = 0
     }
 
     private func startHeartbeat(target: DeviceID, sessionID: SessionID) {
@@ -345,6 +508,32 @@ public actor ControlSessionCoordinator {
     private func isHeartbeatExpired(source: DeviceID, sessionID: SessionID) -> Bool {
         guard case let .receiving(_, expectedSource, expectedSession) = state,
               source == expectedSource, sessionID == expectedSession else { return false }
-        return clock.nowNanoseconds() &- lastHeartbeatNanos > 3_000_000_000
+        let adaptiveTimeout = smoothedHeartbeatIntervalNanos.map {
+            min(max(min($0, Self.maximumHeartbeatTimeoutNanos / 8) * 8,
+                    Self.minimumHeartbeatTimeoutNanos),
+                Self.maximumHeartbeatTimeoutNanos)
+        } ?? Self.heartbeatTimeoutNanos
+        return clock.nowNanoseconds() &- lastHeartbeatNanos > adaptiveTimeout
+    }
+
+    private static func smoothed(previous: UInt64?, sample: UInt64) -> UInt64 {
+        guard let previous else { return sample }
+        return (previous &* 7 &+ sample) / 8
+    }
+
+    private func startReconnectGrace(target: DeviceID) {
+        reconnectGraceTask?.cancel()
+        reconnectGraceTask = Task { [weak self, reconnectGrace] in
+            try? await Task.sleep(for: reconnectGrace)
+            guard !Task.isCancelled, let self else { return }
+            await self.finishInterruptedSession(target: target)
+        }
+    }
+
+    private func finishInterruptedSession(target: DeviceID) async {
+        guard isConnectionInterrupted,
+              case let .controlling(_, expectedTarget, _) = state,
+              expectedTarget == target else { return }
+        await endCurrentSession(notifyPeer: false)
     }
 }

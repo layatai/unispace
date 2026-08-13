@@ -25,6 +25,8 @@
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_unispace._tcp</string>
+		<string>_unispace._udp</string>
+		<string>_unispace-rt._udp</string>
 		<string>_unispace-pair._tcp</string>
 	</array>
 	<key>NSLocalNetworkUsageDescription</key>

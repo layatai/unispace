@@ -17,7 +17,7 @@ public struct ControllerEpoch: Codable, Hashable, Comparable, Sendable {
     }
 }
 
-public enum PointerButton: UInt8, Codable, CaseIterable, Sendable {
+public enum PointerButton: UInt8, Codable, CaseIterable, Hashable, Sendable {
     case left = 0
     case right = 1
     case center = 2
@@ -59,6 +59,73 @@ public struct InputFrame: Codable, Equatable, Sendable {
         self.sequence = sequence
         self.timestampNanos = timestampNanos
         self.event = event
+    }
+}
+
+/// Replaceable pointer state sent over the low-latency datagram lane.
+/// Cumulative displacement lets the receiver recover motion represented by a lost datagram.
+public struct RealtimePointerFrame: Codable, Equatable, Sendable {
+    public static let protocolVersion: UInt16 = 1
+
+    public let workspaceID: WorkspaceID
+    public let sessionID: SessionID
+    public let controllerID: DeviceID
+    public let epoch: ControllerEpoch
+    public let generation: UInt64
+    public let sequence: UInt64
+    public let deltaX: Double
+    public let deltaY: Double
+    public let cumulativeDeltaX: Double
+    public let cumulativeDeltaY: Double
+    public let absoluteX: Double
+    public let absoluteY: Double
+    public let timestampNanos: UInt64
+
+    public init(
+        workspaceID: WorkspaceID,
+        sessionID: SessionID,
+        controllerID: DeviceID,
+        epoch: ControllerEpoch,
+        generation: UInt64,
+        sequence: UInt64,
+        deltaX: Double,
+        deltaY: Double,
+        cumulativeDeltaX: Double,
+        cumulativeDeltaY: Double,
+        absoluteX: Double,
+        absoluteY: Double,
+        timestampNanos: UInt64
+    ) {
+        self.workspaceID = workspaceID
+        self.sessionID = sessionID
+        self.controllerID = controllerID
+        self.epoch = epoch
+        self.generation = generation
+        self.sequence = sequence
+        self.deltaX = deltaX
+        self.deltaY = deltaY
+        self.cumulativeDeltaX = cumulativeDeltaX
+        self.cumulativeDeltaY = cumulativeDeltaY
+        self.absoluteX = absoluteX
+        self.absoluteY = absoluteY
+        self.timestampNanos = timestampNanos
+    }
+
+    public var reliableFallback: InputFrame {
+        InputFrame(
+            workspaceID: workspaceID,
+            sessionID: sessionID,
+            controllerID: controllerID,
+            epoch: epoch,
+            sequence: sequence,
+            timestampNanos: timestampNanos,
+            event: .pointerMove(
+                deltaX: deltaX,
+                deltaY: deltaY,
+                absoluteX: absoluteX,
+                absoluteY: absoluteY
+            )
+        )
     }
 }
 

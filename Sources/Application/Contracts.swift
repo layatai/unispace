@@ -56,6 +56,38 @@ public protocol LoginItemController: Sendable {
     func setEnabled(_ enabled: Bool) throws
 }
 
+public enum TransportKind: String, Codable, Equatable, Sendable {
+    case tcp
+    case quic
+}
+
+public enum ConnectionHealth: String, Codable, Equatable, Sendable {
+    case connecting
+    case healthy
+    case degraded
+    case reconnecting
+    case disconnected
+}
+
+public struct ConnectionSnapshot: Codable, Equatable, Sendable {
+    public let health: ConnectionHealth
+    public let transport: TransportKind
+    public let latencyMilliseconds: Int?
+    public let detail: String?
+
+    public init(
+        health: ConnectionHealth,
+        transport: TransportKind,
+        latencyMilliseconds: Int? = nil,
+        detail: String? = nil
+    ) {
+        self.health = health
+        self.transport = transport
+        self.latencyMilliseconds = latencyMilliseconds
+        self.detail = detail
+    }
+}
+
 public enum PeerEvent: Sendable, Equatable {
     case discovered(DeviceDescriptor)
     case lost(DeviceID)
@@ -63,6 +95,8 @@ public enum PeerEvent: Sendable, Equatable {
     case disconnected(DeviceID)
     case control(DeviceID, ControlEnvelope)
     case input(DeviceID, InputFrame)
+    case realtimeInput(DeviceID, RealtimePointerFrame)
+    case health(DeviceID?, ConnectionSnapshot)
     case failure(DeviceID?, String)
 }
 
@@ -72,6 +106,16 @@ public protocol PeerTransport: Sendable {
     func events() -> AsyncStream<PeerEvent>
     func send(_ envelope: ControlEnvelope, to deviceID: DeviceID) async throws
     func send(_ frame: InputFrame, to deviceID: DeviceID) async throws
+    @discardableResult
+    func sendRealtime(_ frame: RealtimePointerFrame, to deviceID: DeviceID) async throws -> Bool
+}
+
+public extension PeerTransport {
+    @discardableResult
+    func sendRealtime(_ frame: RealtimePointerFrame, to deviceID: DeviceID) async throws -> Bool {
+        try await send(frame.reliableFallback, to: deviceID)
+        return false
+    }
 }
 
 public protocol MonotonicClock: Sendable {

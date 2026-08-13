@@ -28,12 +28,12 @@ The generated Xcode project is derived from `project.yml`; edit the YAML and reg
 5. Confirm that the six-digit code matches on both Macs, then approve both sides.
 6. Arrange displays in Settings by dragging their cards next to each other.
 
-UniSpace uses Bonjour for automatic LAN discovery. Across Tailscale, enter the host Mac’s MagicDNS name or Tailscale IP; UniSpace uses TCP `61337` for pairing and TCP `61338` for trusted control sessions. Pairing transfers a random workspace key only after an ephemeral key exchange and two-sided code confirmation. Peer sessions use per-connection keys derived from that workspace key, HMAC-authenticated handshakes, ChaCha20-Poly1305 encryption, and replay sequencing. Workspace secrets are stored in Keychain. Raw keyboard and pointer events are never logged.
+UniSpace uses Bonjour for automatic LAN discovery. Across Tailscale, enter the host Mac’s MagicDNS name or Tailscale IP. Pairing uses TCP `61337`. Trusted sessions prefer QUIC on UDP `61338`, automatically fall back to TCP `61338`, and use a replaceable pointer-motion lane on UDP `61339`; allow all three ports through any host or tailnet firewall. Keyboard, buttons, dragging, scrolling, and control messages always use the reliable channel. Pairing transfers a random workspace key only after an ephemeral key exchange and two-sided code confirmation. Peer sessions use per-connection keys derived from that workspace key, HMAC-authenticated handshakes, ChaCha20-Poly1305 encryption, and replay sequencing. Workspace secrets and the per-install QUIC transport identity are stored in Keychain. Raw keyboard and pointer events are never logged.
 
 Use `Control-Option-Command-Escape` to stop a remote-control session and return control locally.
 If the LAN or Tailscale connection is interrupted, UniSpace keeps the controller pointer anchored,
-drops input while offline, and resumes the remote session after reconnection. The emergency hotkey
-remains available while reconnecting.
+drops input while offline, and resumes the remote session when it reconnects within five seconds.
+After five seconds it safely returns control locally. The emergency hotkey remains available while reconnecting.
 
 To join a different workspace, open **General → Workspace**, choose **Leave Workspace…**, and confirm. This removes only this Mac’s local workspace membership and Keychain key, preserves macOS permissions, and returns to the setup screen where **Join Workspace** is available.
 

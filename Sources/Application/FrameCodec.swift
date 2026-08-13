@@ -4,6 +4,7 @@ import UniSpaceDomain
 public enum WireFrameKind: UInt8, Sendable {
     case controlJSON = 1
     case inputBinary = 2
+    case realtimePointerBinary = 3
 }
 
 public enum WireFrameCodec {
@@ -17,6 +18,11 @@ public enum WireFrameCodec {
     public static func encodeInput(_ frame: InputFrame) throws -> Data {
         var payload = try PropertyListEncoder.unispace.encode(frame)
         return try self.frame(kind: .inputBinary, payload: &payload)
+    }
+
+    public static func encodeRealtimePointer(_ frame: RealtimePointerFrame) throws -> Data {
+        var payload = try PropertyListEncoder.unispace.encode(frame)
+        return try self.frame(kind: .realtimePointerBinary, payload: &payload)
     }
 
     public static func decode(_ data: Data) throws -> (WireFrameKind, Data) {
@@ -41,6 +47,10 @@ public enum WireFrameCodec {
 
     public static func decodeInput(_ payload: Data) throws -> InputFrame {
         try PropertyListDecoder().decode(InputFrame.self, from: payload)
+    }
+
+    public static func decodeRealtimePointer(_ payload: Data) throws -> RealtimePointerFrame {
+        try PropertyListDecoder().decode(RealtimePointerFrame.self, from: payload)
     }
 
     private static func frame(kind: WireFrameKind, payload: inout Data) throws -> Data {

@@ -1,4 +1,5 @@
 import SwiftUI
+import UniSpaceApplication
 import UniSpaceDomain
 
 /// The roster of Macs in the workspace, with online state, controller state,
@@ -84,6 +85,10 @@ struct DevicesView: View {
         let isLocal = device.id == model.localDeviceID
         let isOnline = isLocal || model.connectedDevices.contains(device.id)
         let isController = device.id == model.currentControllerID
+        let connection = model.connectionSnapshots[device.id]
+        let connectionColor: Color = connection?.health == .degraded || connection?.health == .reconnecting
+            ? .orange
+            : .green
 
         return HStack(spacing: 14) {
             IconTile(
@@ -108,9 +113,13 @@ struct DevicesView: View {
 
                 HStack(spacing: 6) {
                     Circle()
-                        .fill(isOnline ? Color.green : Color.secondary.opacity(0.6))
+                        .fill(isOnline ? connectionColor : Color.secondary.opacity(0.6))
                         .frame(width: 7, height: 7)
                     Text(isOnline ? "Available" : "Offline")
+                    if isOnline, !isLocal, let connection {
+                        Text("·")
+                        Text(connectionDescription(connection))
+                    }
                     Text("·")
                     Text(displayCount(device))
                 }
@@ -211,5 +220,13 @@ struct DevicesView: View {
     private func displayCount(_ device: DeviceDescriptor) -> String {
         let count = device.displays.count
         return count == 1 ? "1 display" : "\(count) displays"
+    }
+
+    private func connectionDescription(_ connection: ConnectionSnapshot) -> String {
+        var parts = [connection.transport.rawValue.uppercased()]
+        if connection.health == .degraded { parts.append("Slow") }
+        if connection.health == .reconnecting { parts.append("Reconnecting") }
+        if let latency = connection.latencyMilliseconds { parts.append("\(latency) ms") }
+        return parts.joined(separator: " · ")
     }
 }

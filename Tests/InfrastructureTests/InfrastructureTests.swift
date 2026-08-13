@@ -88,7 +88,12 @@ final class InfrastructureTests: XCTestCase {
 
         XCTAssertEqual(
             Set(try XCTUnwrap(plist["NSBonjourServices"] as? [String])),
-            [NetworkPeerTransport.serviceType, PairingNetworkService.serviceType]
+            [
+                NetworkPeerTransport.serviceType,
+                NetworkPeerTransport.quicServiceType,
+                QUICRealtimeTransport.serviceType,
+                PairingNetworkService.serviceType
+            ]
         )
         XCTAssertFalse(try XCTUnwrap(plist["NSLocalNetworkUsageDescription"] as? String).isEmpty)
     }
@@ -178,7 +183,12 @@ final class InfrastructureTests: XCTestCase {
             localDeviceID: serverID,
             devices: [serverDevice, clientDevice]
         )
-        let server = NetworkPeerTransport(listenPort: .any, directPort: .any, enableBonjour: false)
+        let server = NetworkPeerTransport(
+            listenPort: .any,
+            directPort: .any,
+            enableBonjour: false,
+            enableQUIC: false
+        )
         try await server.start(localDevice: serverDevice, workspace: serverWorkspace, key: key)
         let port = try await waitForPort(of: server)
 
@@ -190,7 +200,12 @@ final class InfrastructureTests: XCTestCase {
             localDeviceID: clientID,
             devices: [routedServer, clientDevice]
         )
-        let client = NetworkPeerTransport(listenPort: .any, directPort: port, enableBonjour: false)
+        let client = NetworkPeerTransport(
+            listenPort: .any,
+            directPort: port,
+            enableBonjour: false,
+            enableQUIC: false
+        )
         let serverConnected = expectation(description: "server connected directly")
         let clientConnected = expectation(description: "client connected directly")
         let controlReceived = expectation(description: "control transferred")
@@ -224,6 +239,152 @@ final class InfrastructureTests: XCTestCase {
         clientEvents.cancel()
     }
 
+    func testQUICTransportAuthenticatesAndTransfersControl() async throws {
+        let workspaceID = WorkspaceID()
+        let key = PairingCryptoSession.randomData(count: 32)
+        let serverID = DeviceID()
+        let clientID = DeviceID()
+        let serverDevice = DeviceDescriptor(id: serverID, name: "QUIC Server")
+        let clientDevice = DeviceDescriptor(id: clientID, name: "QUIC Client")
+        let serverWorkspace = WorkspaceSnapshot(
+            id: workspaceID,
+            name: "QUIC",
+            localDeviceID: serverID,
+            devices: [serverDevice, clientDevice]
+        )
+        let server = NetworkPeerTransport(
+            listenPort: .any,
+            directPort: .any,
+            quicListenPort: .any,
+            directQUICPort: .any,
+            enableBonjour: false,
+            enableRealtime: false
+        )
+        try await server.start(localDevice: serverDevice, workspace: serverWorkspace, key: key)
+        let quicPort = try await waitForQUICPort(of: server)
+
+        let routedServer = DeviceDescriptor(
+            id: serverID,
+            name: "QUIC Server",
+            peerAddresses: [try PeerAddress("127.0.0.1")]
+        )
+        let clientWorkspace = WorkspaceSnapshot(
+            id: workspaceID,
+            name: "QUIC",
+            localDeviceID: clientID,
+            devices: [routedServer, clientDevice]
+        )
+        let client = NetworkPeerTransport(
+            listenPort: .any,
+            directPort: .any,
+            quicListenPort: .any,
+            directQUICPort: quicPort,
+            enableBonjour: false,
+            enableRealtime: false
+        )
+        let serverConnected = expectation(description: "server accepted QUIC")
+        let clientConnected = expectation(description: "client authenticated QUIC")
+        let controlReceived = expectation(description: "control transferred over QUIC")
+        serverConnected.assertForOverFulfill = false
+        clientConnected.assertForOverFulfill = false
+        let serverEvents = Task {
+            for await event in server.events() {
+                switch event {
+                case .health(let id, let snapshot) where id == clientID &&
+                    snapshot.health == .healthy && snapshot.transport == .quic:
+                    serverConnected.fulfill()
+                case .control(let id, let envelope) where id == clientID:
+                    if case .controllerClaim = envelope.message { controlReceived.fulfill() }
+                default:
+                    break
+                }
+            }
+        }
+        let clientEvents = Task {
+            for await event in client.events() {
+                if case .health(let id, let snapshot) = event,
+                   id == serverID, snapshot.health == .healthy, snapshot.transport == .quic {
+                    clientConnected.fulfill()
+                }
+            }
+        }
+
+        try await client.start(localDevice: clientDevice, workspace: clientWorkspace, key: key)
+        await fulfillment(of: [serverConnected, clientConnected], timeout: 8)
+        try await client.send(
+            ControlEnvelope(message: .controllerClaim(.init(generation: 1, controllerID: clientID))),
+            to: serverID
+        )
+        await fulfillment(of: [controlReceived], timeout: 3)
+
+        await client.stop()
+        await server.stop()
+        serverEvents.cancel()
+        clientEvents.cancel()
+    }
+
+    func testQUICDatagramLaneAuthenticatesAndTransfersPointerState() async throws {
+        let workspaceID = WorkspaceID()
+        let key = PairingCryptoSession.randomData(count: 32)
+        let serverID = DeviceID()
+        let clientID = DeviceID()
+        let serverDevice = DeviceDescriptor(id: serverID, name: "Realtime Server")
+        let clientDevice = DeviceDescriptor(id: clientID, name: "Realtime Client")
+        let serverWorkspace = WorkspaceSnapshot(
+            id: workspaceID,
+            name: "Realtime",
+            localDeviceID: serverID,
+            devices: [serverDevice, clientDevice]
+        )
+        let server = QUICRealtimeTransport(listenPort: .any, directPort: .any, enableBonjour: false)
+        try server.start(localDevice: serverDevice, workspace: serverWorkspace, key: key)
+        let port = try await waitForRealtimePort(of: server)
+
+        let routedServer = DeviceDescriptor(
+            id: serverID,
+            name: serverDevice.name,
+            peerAddresses: [try PeerAddress("127.0.0.1")]
+        )
+        let clientWorkspace = WorkspaceSnapshot(
+            id: workspaceID,
+            name: "Realtime",
+            localDeviceID: clientID,
+            devices: [routedServer, clientDevice]
+        )
+        let client = QUICRealtimeTransport(listenPort: .any, directPort: port, enableBonjour: false)
+        let received = expectation(description: "pointer datagram received")
+        let sessionID = SessionID()
+        let frame = RealtimePointerFrame(
+            workspaceID: workspaceID,
+            sessionID: sessionID,
+            controllerID: clientID,
+            epoch: .init(generation: 1, controllerID: clientID),
+            generation: 1,
+            sequence: 0,
+            deltaX: 3,
+            deltaY: -2,
+            cumulativeDeltaX: 3,
+            cumulativeDeltaY: -2,
+            absoluteX: 100,
+            absoluteY: 200,
+            timestampNanos: 1
+        )
+        server.frameHandler = { source, incoming in
+            if source == clientID, incoming == frame { received.fulfill() }
+        }
+        try client.start(localDevice: clientDevice, workspace: clientWorkspace, key: key)
+
+        var sent = false
+        for _ in 0..<100 where !sent {
+            sent = try await client.send(frame, to: serverID)
+            if !sent { try await Task.sleep(for: .milliseconds(20)) }
+        }
+        XCTAssertTrue(sent, "The authenticated QUIC datagram lane did not become ready")
+        await fulfillment(of: [received], timeout: 3)
+        client.stop()
+        server.stop()
+    }
+
     func testTrustedTransportReconnectsToStoredDirectAddress() async throws {
         let workspaceID = WorkspaceID()
         let key = PairingCryptoSession.randomData(count: 32)
@@ -237,7 +398,12 @@ final class InfrastructureTests: XCTestCase {
             localDeviceID: serverID,
             devices: [serverDevice, clientDevice]
         )
-        let firstServer = NetworkPeerTransport(listenPort: .any, directPort: .any, enableBonjour: false)
+        let firstServer = NetworkPeerTransport(
+            listenPort: .any,
+            directPort: .any,
+            enableBonjour: false,
+            enableQUIC: false
+        )
         try await firstServer.start(localDevice: serverDevice, workspace: baseWorkspace, key: key)
         let port = try await waitForPort(of: firstServer)
 
@@ -252,7 +418,12 @@ final class InfrastructureTests: XCTestCase {
             localDeviceID: clientID,
             devices: [routedServer, clientDevice]
         )
-        let client = NetworkPeerTransport(listenPort: .any, directPort: port, enableBonjour: false)
+        let client = NetworkPeerTransport(
+            listenPort: .any,
+            directPort: port,
+            enableBonjour: false,
+            enableQUIC: false
+        )
         let connectionTracker = ConnectionExpectationTracker()
         let firstConnection = expectation(description: "initial direct connection")
         let disconnected = expectation(description: "direct connection lost")
@@ -278,7 +449,8 @@ final class InfrastructureTests: XCTestCase {
         let replacementServer = NetworkPeerTransport(
             listenPort: port,
             directPort: .any,
-            enableBonjour: false
+            enableBonjour: false,
+            enableQUIC: false
         )
         try await replacementServer.start(localDevice: serverDevice, workspace: baseWorkspace, key: key)
         await fulfillment(of: [reconnected], timeout: 12)
@@ -398,6 +570,22 @@ private func waitForPort(of transport: NetworkPeerTransport) async throws -> NWE
         try await Task.sleep(for: .milliseconds(20))
     }
     throw XCTSkip("Listener did not become ready")
+}
+
+private func waitForQUICPort(of transport: NetworkPeerTransport) async throws -> NWEndpoint.Port {
+    for _ in 0..<100 {
+        if let port = transport.activeQUICPort { return port }
+        try await Task.sleep(for: .milliseconds(20))
+    }
+    throw XCTSkip("QUIC listener did not become ready")
+}
+
+private func waitForRealtimePort(of transport: QUICRealtimeTransport) async throws -> NWEndpoint.Port {
+    for _ in 0..<100 {
+        if let port = transport.activePort { return port }
+        try await Task.sleep(for: .milliseconds(20))
+    }
+    throw XCTSkip("Realtime QUIC listener did not become ready")
 }
 
 private func waitForPairingPort(of service: PairingNetworkService) throws -> NWEndpoint.Port {

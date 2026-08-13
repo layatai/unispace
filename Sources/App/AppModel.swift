@@ -19,6 +19,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var workspace: WorkspaceSnapshot?
     @Published private(set) var candidates: [PairingCandidate] = []
     @Published private(set) var connectedDevices: Set<DeviceID> = []
+    @Published private(set) var connectionSnapshots: [DeviceID: ConnectionSnapshot] = [:]
     @Published private(set) var currentControllerID: DeviceID?
     @Published private(set) var statusMessage = "Not configured"
     @Published var lastError: String?
@@ -43,6 +44,7 @@ final class AppModel: ObservableObject {
     private var lastBoundaryTime: UInt64 = 0
     private var entryEdgeHysteresis = EntryEdgeHysteresis()
     private var pendingActivationEvents: [InputEvent]?
+    private var reconnectStatusTasks: [DeviceID: Task<Void, Never>] = [:]
 
     let localDeviceID: DeviceID
 
@@ -85,6 +87,7 @@ final class AppModel: ObservableObject {
 
     deinit {
         networkTask?.cancel()
+        reconnectStatusTasks.values.forEach { $0.cancel() }
     }
 
     var localDevice: DeviceDescriptor {
@@ -139,9 +142,11 @@ final class AppModel: ObservableObject {
     }
 
     func startBrowsingForWorkspace() {
-        pairing.startBrowsing()
         setupState = .browsing
         statusMessage = "Looking for UniSpace workspaces"
+        // UI tests verify the setup flow, not macOS local-network authorization.
+        guard !ProcessInfo.processInfo.arguments.contains("--ui-testing-onboarding") else { return }
+        pairing.startBrowsing()
     }
 
     func join(_ candidate: PairingCandidate) {
@@ -573,6 +578,7 @@ final class AppModel: ObservableObject {
         case .lost:
             break
         case let .connected(deviceID):
+            reconnectStatusTasks.removeValue(forKey: deviceID)?.cancel()
             connectedDevices.insert(deviceID)
             if let workspace {
                 try? await transport.send(ControlEnvelope(message: .workspace(workspace)), to: deviceID)
@@ -585,17 +591,43 @@ final class AppModel: ObservableObject {
             }
         case let .disconnected(deviceID):
             connectedDevices.remove(deviceID)
+            let disconnectedTransport = connectionSnapshots[deviceID]?.transport ?? .tcp
+            connectionSnapshots[deviceID] = .init(
+                health: .reconnecting,
+                transport: disconnectedTransport
+            )
             let previousState = await coordinator?.currentState()
             await coordinator?.peerDisconnected(deviceID)
             if case let .receiving(_, source, _)? = previousState, source == deviceID {
                 entryEdgeHysteresis.reset()
             } else if case let .controlling(_, target, _)? = previousState, target == deviceID {
                 statusMessage = "Reconnecting to \(deviceName(deviceID)) — use Control-Option-Command-Escape to return"
+                reconnectStatusTasks[deviceID]?.cancel()
+                reconnectStatusTasks[deviceID] = Task { @MainActor [weak self] in
+                    try? await Task.sleep(for: .seconds(5))
+                    guard !Task.isCancelled, let self,
+                          !self.connectedDevices.contains(deviceID),
+                          case .idle = await self.coordinator?.currentState() else { return }
+                    self.statusMessage = "Connection lost — control returned to this Mac"
+                    self.connectionSnapshots[deviceID] = .init(
+                        health: .disconnected,
+                        transport: disconnectedTransport
+                    )
+                    self.reconnectStatusTasks.removeValue(forKey: deviceID)
+                }
             }
         case let .control(source, envelope):
             await handleControl(envelope.message, from: source)
         case let .input(source, frame):
             await coordinator?.handleIncoming(frame, from: source)
+        case let .realtimeInput(source, frame):
+            await coordinator?.handleIncomingRealtime(frame, from: source)
+        case let .health(deviceID, snapshot):
+            if let deviceID { connectionSnapshots[deviceID] = snapshot }
+            guard let deviceID, snapshot.health == .degraded,
+                  case let .controlling(_, target, _)? = await coordinator?.currentState(),
+                  target == deviceID else { break }
+            statusMessage = "Slow \(snapshot.transport.rawValue.uppercased()) connection to \(deviceName(deviceID))"
         case let .failure(_, message):
             statusMessage = message
         }
@@ -658,8 +690,32 @@ final class AppModel: ObservableObject {
                 edge: edge,
                 normalizedPosition: normalizedPosition
             )
-        case let .heartbeat(sessionID, _):
-            await coordinator?.receiveHeartbeat(sessionID: sessionID, from: source)
+        case let .heartbeat(sessionID, timestampNanos):
+            if await coordinator?.receiveHeartbeat(sessionID: sessionID, from: source) == true {
+                try? await transport.send(
+                    ControlEnvelope(message: .heartbeat(
+                        sessionID: sessionID,
+                        timestampNanos: timestampNanos
+                    )),
+                    to: source
+                )
+            } else if let latency = await coordinator?.receiveHeartbeatEcho(
+                sessionID: sessionID,
+                from: source,
+                sentAtNanos: timestampNanos
+            ) {
+                let transportKind = connectionSnapshots[source]?.transport ?? .tcp
+                let health: ConnectionHealth = latency >= 500 ? .degraded : .healthy
+                connectionSnapshots[source] = .init(
+                    health: health,
+                    transport: transportKind,
+                    latencyMilliseconds: latency,
+                    detail: health == .degraded ? "High network latency" : nil
+                )
+                if health == .degraded {
+                    statusMessage = "Slow \(transportKind.rawValue.uppercased()) connection to \(deviceName(source))"
+                }
+            }
         case let .rotateWorkspaceKey(newKey):
             guard let workspace else { return }
             do {
