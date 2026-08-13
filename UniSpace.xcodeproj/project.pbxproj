@@ -25,10 +25,13 @@
 		3A3A388DE7A4473F3CAD2FD1 /* UniSpaceInfrastructure.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A92FBB5C74B263098DBE15F3 /* UniSpaceInfrastructure.framework */; };
 		3D2F9446A49594963007BAA5 /* UniSpaceApplication.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = CD69866EFD7AE9229BB70567 /* UniSpaceApplication.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		41885736115B4CE83994D88F /* SystemLoginItemController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B6E8B1FA2B7DDB5F10F7EDE /* SystemLoginItemController.swift */; };
+		5497A8C8B7253CC28499418B /* WorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 184432B7A6AD87798C281699 /* WorkspaceView.swift */; };
 		59A98523E54491459EB8B530 /* UniSpaceDomain.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = D0CF733F292C646448A74827 /* UniSpaceDomain.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		630D9260AED7669F82DBAF80 /* UniSpaceApplication.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = CD69866EFD7AE9229BB70567 /* UniSpaceApplication.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		64D7A647CC98A3FEAF3F7535 /* SetupFlowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63C1907F88FD14FAAC86A99A /* SetupFlowView.swift */; };
 		6B79E31F3F32675B4F869816 /* ControlProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = FAD25BEF07E35D0FEC867A03 /* ControlProtocol.swift */; };
 		6E33270E4DFB9DBCEDFB91AF /* UniSpaceDomain.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D0CF733F292C646448A74827 /* UniSpaceDomain.framework */; };
+		78B81DC2D0676E5595C7897B /* DesignSystem.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0532F3407215F29850C4C079 /* DesignSystem.swift */; };
 		886D77A812D77B7AD388069E /* NetworkPeerTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 602F8819EF4D4A147D279865 /* NetworkPeerTransport.swift */; };
 		8E6BA003D246813AC1906B0B /* FrameCodec.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1425648D0C5F8712AC268 /* FrameCodec.swift */; };
 		8E8D0D149CC8932E23A6D7DC /* FileWorkspaceStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6BD24036F75164EC8ED3CE84 /* FileWorkspaceStore.swift */; };
@@ -42,12 +45,14 @@
 		B41063357019F965414B17AF /* Identifiers.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAE63ADE4DBD602BB708A723 /* Identifiers.swift */; };
 		BB4A272847FDCD4D64F1F554 /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC7DB685B1A02A9DD593C503 /* AppModel.swift */; };
 		BF04F103BA0FD0FF02B87871 /* UniSpaceDomain.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D0CF733F292C646448A74827 /* UniSpaceDomain.framework */; };
+		C068575E8069A5EFCEFF9B1D /* DevicesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1884A9135A3257510B0A8F0 /* DevicesView.swift */; };
 		C37C9B32207B502AF2957684 /* UniSpaceDomain.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D0CF733F292C646448A74827 /* UniSpaceDomain.framework */; };
 		C3FE6236D3044AB4482A4914 /* UniSpaceApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 904734B26F5ED02D2FFA4505 /* UniSpaceApp.swift */; };
 		C79F084DA0355C3CE898BCAA /* UniSpaceInfrastructure.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = A92FBB5C74B263098DBE15F3 /* UniSpaceInfrastructure.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		C87E7AABB9E094847FC67001 /* UniSpaceDomain.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = D0CF733F292C646448A74827 /* UniSpaceDomain.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		CA142C606E1C6C9D9472778C /* PairingCrypto.swift in Sources */ = {isa = PBXBuildFile; fileRef = C699F9E8100751E72C66CD36 /* PairingCrypto.swift */; };
 		CC24AF606D59D87DDAA6E1AD /* ControllerStateMachine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 55C72D45E1BA1AC01DA60260 /* ControllerStateMachine.swift */; };
+		CEA146ECA0410A489A48C28B /* DisplaysView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5E239C50434E115697BAFB7 /* DisplaysView.swift */; };
 		DC36F9B28CBDBE776F422330 /* SystemDisplayCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0BEEFF85ADC6073F10990C58 /* SystemDisplayCatalog.swift */; };
 		DED47A3ABE3B26E0ED9BB1A1 /* PairingNetworkService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3705E48046B8D56DACF3CF21 /* PairingNetworkService.swift */; };
 		E41FB56FC55B098152423FCC /* UniSpaceDomain.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = D0CF733F292C646448A74827 /* UniSpaceDomain.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
@@ -204,15 +209,18 @@
 
 /* Begin PBXFileReference section */
 		01A1425648D0C5F8712AC268 /* FrameCodec.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameCodec.swift; sourceTree = "<group>"; };
+		0532F3407215F29850C4C079 /* DesignSystem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesignSystem.swift; sourceTree = "<group>"; };
 		0BEEFF85ADC6073F10990C58 /* SystemDisplayCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemDisplayCatalog.swift; sourceTree = "<group>"; };
 		0D53BFBE80B81BD15ADE9567 /* WorkspaceModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceModels.swift; sourceTree = "<group>"; };
 		161694A87BE723803EFBD6DC /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		184432B7A6AD87798C281699 /* WorkspaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceView.swift; sourceTree = "<group>"; };
 		1EFF200775381B9BA7CE0515 /* InfrastructureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InfrastructureTests.swift; sourceTree = "<group>"; };
 		25E8100835AABC1FFE4EC018 /* UniSpaceUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = UniSpaceUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		3705E48046B8D56DACF3CF21 /* PairingNetworkService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingNetworkService.swift; sourceTree = "<group>"; };
 		4FB1C3CA1F6EAACE025F81C8 /* CGEventInputInjector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CGEventInputInjector.swift; sourceTree = "<group>"; };
 		55C72D45E1BA1AC01DA60260 /* ControllerStateMachine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControllerStateMachine.swift; sourceTree = "<group>"; };
 		602F8819EF4D4A147D279865 /* NetworkPeerTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NetworkPeerTransport.swift; sourceTree = "<group>"; };
+		63C1907F88FD14FAAC86A99A /* SetupFlowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SetupFlowView.swift; sourceTree = "<group>"; };
 		6546C790629F2520FF8A74A1 /* KeychainTrustStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainTrustStore.swift; sourceTree = "<group>"; };
 		6BD24036F75164EC8ED3CE84 /* FileWorkspaceStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileWorkspaceStore.swift; sourceTree = "<group>"; };
 		73D75018570BCFF3ADAA8FFA /* ApplicationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApplicationTests.swift; sourceTree = "<group>"; };
@@ -226,7 +234,9 @@
 		A7F83A6EAED5A346AA0A2F73 /* SettingsRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsRootView.swift; sourceTree = "<group>"; };
 		A92FBB5C74B263098DBE15F3 /* UniSpaceInfrastructure.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = UniSpaceInfrastructure.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		AD45CA2E1EFEB55F7EAA255E /* UniSpaceDomainTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = UniSpaceDomainTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		B5E239C50434E115697BAFB7 /* DisplaysView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplaysView.swift; sourceTree = "<group>"; };
 		B8E5A6E1D4BB67A7DC9361AD /* EdgeRouter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EdgeRouter.swift; sourceTree = "<group>"; };
+		C1884A9135A3257510B0A8F0 /* DevicesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DevicesView.swift; sourceTree = "<group>"; };
 		C4AC57E967E60EA86351A838 /* CGEventInputCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CGEventInputCapture.swift; sourceTree = "<group>"; };
 		C699F9E8100751E72C66CD36 /* PairingCrypto.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingCrypto.swift; sourceTree = "<group>"; };
 		C9BC99509AFF12E2820267B0 /* SystemPermissionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemPermissionService.swift; sourceTree = "<group>"; };
@@ -322,8 +332,13 @@
 			isa = PBXGroup;
 			children = (
 				CC7DB685B1A02A9DD593C503 /* AppModel.swift */,
+				0532F3407215F29850C4C079 /* DesignSystem.swift */,
+				C1884A9135A3257510B0A8F0 /* DevicesView.swift */,
+				B5E239C50434E115697BAFB7 /* DisplaysView.swift */,
 				A7F83A6EAED5A346AA0A2F73 /* SettingsRootView.swift */,
+				63C1907F88FD14FAAC86A99A /* SetupFlowView.swift */,
 				904734B26F5ED02D2FFA4505 /* UniSpaceApp.swift */,
+				184432B7A6AD87798C281699 /* WorkspaceView.swift */,
 			);
 			path = App;
 			sourceTree = "<group>";
@@ -739,8 +754,13 @@
 			buildActionMask = 2147483647;
 			files = (
 				BB4A272847FDCD4D64F1F554 /* AppModel.swift in Sources */,
+				78B81DC2D0676E5595C7897B /* DesignSystem.swift in Sources */,
+				C068575E8069A5EFCEFF9B1D /* DevicesView.swift in Sources */,
+				CEA146ECA0410A489A48C28B /* DisplaysView.swift in Sources */,
 				AFDC60F8666AE6E6C9B7DBE9 /* SettingsRootView.swift in Sources */,
+				64D7A647CC98A3FEAF3F7535 /* SetupFlowView.swift in Sources */,
 				C3FE6236D3044AB4482A4914 /* UniSpaceApp.swift in Sources */,
+				5497A8C8B7253CC28499418B /* WorkspaceView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

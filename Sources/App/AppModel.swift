@@ -81,6 +81,10 @@ final class AppModel: ObservableObject {
     var allDisplays: [DisplayDescriptor] { devices.flatMap(\.displays) }
     var isLocalController: Bool { currentControllerID == localDeviceID }
 
+    var needsPermissions: Bool {
+        inputMonitoringPermission != .granted || postEventsPermission != .granted
+    }
+
     func createWorkspace() {
         let device = localDevice
         let snapshot = WorkspaceSnapshot(
@@ -184,6 +188,26 @@ final class AppModel: ObservableObject {
         guard var workspace else { return }
         workspace.topology.connect(first, to: second)
         persistAndBroadcast(workspace)
+    }
+
+    func disconnect(_ endpoint: DisplayEndpoint) {
+        guard var workspace else { return }
+        workspace.topology.disconnect(endpoint)
+        persistAndBroadcast(workspace)
+    }
+
+    /// Opens the relevant Privacy & Security pane. The Core Graphics prompts
+    /// only ever appear once, so a denied permission can otherwise only be
+    /// changed in System Settings.
+    func openSystemSettings(for permission: PermissionKind) {
+        let anchor: String
+        switch permission {
+        case .inputMonitoring: anchor = "Privacy_ListenEvent"
+        case .postEvents: anchor = "Privacy_Accessibility"
+        case .localNetwork: anchor = "Privacy_LocalNetwork"
+        }
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(anchor)") else { return }
+        NSWorkspace.shared.open(url)
     }
 
     func removeDevice(_ deviceID: DeviceID) {
