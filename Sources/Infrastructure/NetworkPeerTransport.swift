@@ -63,7 +63,12 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
 
         let browser = NWBrowser(for: .bonjour(type: Self.serviceType, domain: nil), using: parameters)
         browser.stateUpdateHandler = { [weak self] state in
-            if case let .failed(error) = state { self?.emit(.failure(nil, error.localizedDescription)) }
+            switch state {
+            case let .failed(error), let .waiting(error):
+                self?.emit(.failure(nil, error.localizedDescription))
+            default:
+                break
+            }
         }
         browser.browseResultsChangedHandler = { [weak self] results, _ in self?.handle(results) }
         browser.start(queue: queue)

@@ -58,8 +58,14 @@ targets:
     info:
       path: Resources/Info.plist
       properties:
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         LSApplicationCategoryType: public.app-category.utilities
         LSUIElement: false
+        NSBonjourServices:
+          - _unispace._tcp
+          - _unispace-pair._tcp
+        NSLocalNetworkUsageDescription: UniSpace discovers and connects to nearby Macs so you can control them with one keyboard and mouse.
     entitlements:
       path: Resources/UniSpace.entitlements
       properties:

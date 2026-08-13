@@ -5,6 +5,23 @@ import UniSpaceApplication
 import UniSpaceDomain
 
 final class InfrastructureTests: XCTestCase {
+    func testApplicationDeclaresEveryBonjourServiceAndLocalNetworkPurpose() throws {
+        let repositoryRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let data = try Data(contentsOf: repositoryRoot.appendingPathComponent("Resources/Info.plist"))
+        let plist = try XCTUnwrap(
+            PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
+        )
+
+        XCTAssertEqual(
+            Set(try XCTUnwrap(plist["NSBonjourServices"] as? [String])),
+            [NetworkPeerTransport.serviceType, PairingNetworkService.serviceType]
+        )
+        XCTAssertFalse(try XCTUnwrap(plist["NSLocalNetworkUsageDescription"] as? String).isEmpty)
+    }
+
     func testPairingSessionsDeriveSameCodeAndTransferWorkspaceKey() throws {
         let host = PairingCryptoSession()
         let joiner = PairingCryptoSession()

@@ -44,6 +44,12 @@ public enum PairingServiceError: Error, LocalizedError {
     }
 }
 
+public enum PairingNetworkStatus: Equatable, Sendable {
+    case ready
+    case waiting(String)
+    case failed(String)
+}
+
 public final class PairingNetworkService: @unchecked Sendable {
     public static let serviceType = "_unispace-pair._tcp"
 
@@ -52,6 +58,7 @@ public final class PairingNetworkService: @unchecked Sendable {
     public var joinedHandler: (@Sendable (WorkspaceSnapshot, Data) -> Void)?
     public var hostUpdatedHandler: (@Sendable (WorkspaceSnapshot) -> Void)?
     public var failureHandler: (@Sendable (String) -> Void)?
+    public var statusHandler: (@Sendable (PairingNetworkStatus) -> Void)?
 
     private let queue = DispatchQueue(label: "com.layatai.unispace.pairing", qos: .userInitiated)
     private let lock = NSLock()
@@ -84,9 +91,7 @@ public final class PairingNetworkService: @unchecked Sendable {
         ])
         listener.service = NWListener.Service(name: localDevice.name, type: Self.serviceType, txtRecord: record)
         listener.newConnectionHandler = { [weak self] connection in self?.accept(connection) }
-        listener.stateUpdateHandler = { [weak self] state in
-            if case let .failed(error) = state { self?.fail(error.localizedDescription) }
-        }
+        listener.stateUpdateHandler = { [weak self] state in self?.handleListenerState(state) }
         lock.lock()
         self.crypto = crypto
         self.listener = listener
@@ -102,9 +107,7 @@ public final class PairingNetworkService: @unchecked Sendable {
         stop()
         let browser = NWBrowser(for: .bonjour(type: Self.serviceType, domain: nil), using: .tcp)
         browser.browseResultsChangedHandler = { [weak self] results, _ in self?.handleCandidates(results) }
-        browser.stateUpdateHandler = { [weak self] state in
-            if case let .failed(error) = state { self?.fail(error.localizedDescription) }
-        }
+        browser.stateUpdateHandler = { [weak self] state in self?.handleBrowserState(state) }
         lock.lock()
         self.browser = browser
         self.isHost = false
@@ -285,6 +288,32 @@ public final class PairingNetworkService: @unchecked Sendable {
 
     private func fail(_ message: String) {
         failureHandler?(message)
+    }
+
+    private func handleListenerState(_ state: NWListener.State) {
+        switch state {
+        case .ready:
+            statusHandler?(.ready)
+        case let .waiting(error):
+            statusHandler?(.waiting(error.localizedDescription))
+        case let .failed(error):
+            statusHandler?(.failed(error.localizedDescription))
+        default:
+            break
+        }
+    }
+
+    private func handleBrowserState(_ state: NWBrowser.State) {
+        switch state {
+        case .ready:
+            statusHandler?(.ready)
+        case let .waiting(error):
+            statusHandler?(.waiting(error.localizedDescription))
+        case let .failed(error):
+            statusHandler?(.failed(error.localizedDescription))
+        default:
+            break
+        }
     }
 }
 

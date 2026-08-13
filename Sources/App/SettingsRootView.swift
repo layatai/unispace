@@ -67,7 +67,7 @@ struct SettingsRootView: View {
             HStack {
                 VStack(alignment: .leading) {
                     Text("Nearby Workspaces").font(.title.bold())
-                    Text("Choose the Mac showing Pair New Mac.").foregroundStyle(.secondary)
+                    Text("On an existing Mac, open Macs and choose Pair New Mac.").foregroundStyle(.secondary)
                 }
                 Spacer()
                 ProgressView().controlSize(.small)
@@ -109,8 +109,11 @@ struct SettingsRootView: View {
         VStack(spacing: 18) {
             ProgressView().controlSize(.large)
             Text("Waiting for another Mac").font(.title2.bold())
-            Text("On the other Mac, open UniSpace and choose Join Workspace.")
+            Text(model.statusMessage)
                 .foregroundStyle(.secondary)
+            Text("On the other Mac, open UniSpace and choose Join Workspace. Both Macs must allow Local Network access.")
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
             Button("Cancel") { model.cancelPairing() }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -228,14 +231,16 @@ struct SettingsRootView: View {
                     detail: "\(model.devices.count) of 4 Macs in this workspace"
                 )
                 Spacer()
-                if model.isLocalController {
+                HStack(spacing: 10) {
+                    if !model.isLocalController {
+                        Button("Make This Mac Controller") { model.makeThisMacController() }
+                            .buttonStyle(.bordered)
+                            .controlSize(.large)
+                    }
                     Button("Pair New Mac") { model.startHostingPairing() }
                         .buttonStyle(.borderedProminent)
                         .controlSize(.large)
-                } else {
-                    Button("Make This Mac Controller") { model.makeThisMacController() }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.large)
+                        .disabled(model.devices.count >= 4)
                 }
             }
             ScrollView {

@@ -107,7 +107,7 @@ final class AppModel: ObservableObject {
             guard let key = try trustStore.workspaceKey(for: workspace.id) else { return }
             try pairing.startHosting(workspace: workspace, key: key, localDevice: localDevice)
             setupState = .hostingPairing
-            statusMessage = "Waiting for a Mac to join"
+            statusMessage = "Starting local discovery"
         } catch {
             lastError = error.localizedDescription
         }
@@ -232,6 +232,22 @@ final class AppModel: ObservableObject {
             Task { @MainActor [weak self] in
                 self?.lastError = message
                 self?.setupState = self?.workspace == nil ? .needsWorkspace : .ready
+            }
+        }
+        pairing.statusHandler = { [weak self] status in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                switch status {
+                case .ready:
+                    statusMessage = setupState == .hostingPairing
+                        ? "Visible to nearby Macs as \(localDevice.name)"
+                        : "Searching the local network"
+                case let .waiting(message):
+                    statusMessage = "Waiting for local network access: \(message)"
+                case let .failed(message):
+                    lastError = "Local network discovery failed: \(message)"
+                    setupState = workspace == nil ? .needsWorkspace : .ready
+                }
             }
         }
     }
