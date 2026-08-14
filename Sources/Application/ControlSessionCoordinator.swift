@@ -410,7 +410,11 @@ public actor ControlSessionCoordinator {
                 try? await transport.send(ControlEnvelope(message: .releaseAll(sessionID)), to: target)
                 try? await transport.send(ControlEnvelope(message: .deactivate(sessionID)), to: target)
             }
-        case .receiving, .idle:
+        case let .receiving(_, source, sessionID):
+            if notifyPeer {
+                try? await transport.send(ControlEnvelope(message: .deactivate(sessionID)), to: source)
+            }
+        case .idle:
             break
         }
     }

@@ -42,7 +42,7 @@ final class AppModel: ObservableObject {
     private var screenChangeSubscription: AnyCancellable?
     private var currentEpoch: ControllerEpoch?
     private var lastBoundaryTime: UInt64 = 0
-    private var entryEdgeHysteresis = EntryEdgeHysteresis()
+    private var controlTransferGuard = ControlTransferGuard()
     private var pendingActivationEvents: [InputEvent]?
     private var reconnectStatusTasks: [DeviceID: Task<Void, Never>] = [:]
 
@@ -222,7 +222,7 @@ final class AppModel: ObservableObject {
         currentControllerID = nil
         currentEpoch = nil
         lastBoundaryTime = 0
-        entryEdgeHysteresis.reset()
+        controlTransferGuard.reset()
         setupState = .needsWorkspace
         statusMessage = "Not configured"
 
@@ -235,7 +235,7 @@ final class AppModel: ObservableObject {
         Task {
             guard let coordinator else { return }
             let epoch = await coordinator.makeLocalController()
-            entryEdgeHysteresis.reset()
+            controlTransferGuard.reset()
             currentEpoch = epoch
             currentControllerID = localDeviceID
             if var workspace, epoch.generation > workspace.generation {
@@ -248,8 +248,12 @@ final class AppModel: ObservableObject {
     }
 
     func stopControlling() {
+        controlTransferGuard.beginStop()
+        pendingActivationEvents = nil
+        capture.setSuppressionEnabled(false)
         Task {
             await coordinator?.deactivateCurrentSession()
+            controlTransferGuard.completeStop()
             statusMessage = isLocalController ? "Controller ready" : "Receiver ready"
         }
     }
@@ -409,7 +413,7 @@ final class AppModel: ObservableObject {
     private func startTrustedNetwork(claimControl: Bool) async {
         guard let workspace else { return }
         do {
-            entryEdgeHysteresis.reset()
+            controlTransferGuard.reset()
             guard let key = try trustStore.workspaceKey(for: workspace.id) else { return }
             networkTask?.cancel()
             await transport.stop()
@@ -482,7 +486,7 @@ final class AppModel: ObservableObject {
             return true
         }
         if case let .pointerMove(_, _, x, y) = event {
-            entryEdgeHysteresis.observe(x: x, y: y)
+            controlTransferGuard.observe(x: x, y: y)
             if !capture.isSuppressionEnabled,
                isLocalController,
                coordinator != nil,
@@ -493,24 +497,34 @@ final class AppModel: ObservableObject {
                     localDeviceID: localDeviceID,
                     devices: workspace.devices,
                     topology: workspace.topology
-               ), entryEdgeHysteresis.allows(transition),
+               ), controlTransferGuard.allows(transition),
                connectedDevices.contains(transition.targetDeviceID),
                let sourceDisplay = workspace.devices.flatMap(\.displays).first(where: {
                    $0.id == transition.sourceDisplayID
-               }) {
-                entryEdgeHysteresis.arm(display: sourceDisplay, entryEdge: transition.sourceEdge)
+               }),
+               let attempt = controlTransferGuard.beginActivation(
+                   transition,
+                   sourceDisplay: sourceDisplay
+               ) {
                 pendingActivationEvents = [event]
                 capture.setSuppressionEnabled(true)
-                Task { @MainActor [weak self] in await self?.completeActivation(transition) }
+                Task { @MainActor [weak self] in
+                    await self?.completeActivation(transition, attempt: attempt)
+                }
                 return true
             }
         }
+        guard controlTransferGuard.forwardsCapturedInput else { return false }
         Task { @MainActor [weak self] in await self?.forwardCaptured(event) }
         return false
     }
 
-    private func completeActivation(_ transition: EdgeTransition) async {
+    private func completeActivation(
+        _ transition: EdgeTransition,
+        attempt: ControlTransferGuard.ActivationAttempt
+    ) async {
         guard let coordinator else {
+            controlTransferGuard.activationFailed(attempt)
             pendingActivationEvents = nil
             capture.setSuppressionEnabled(false)
             return
@@ -524,7 +538,14 @@ final class AppModel: ObservableObject {
                 targetCapabilities: capabilities(of: transition.targetDeviceID)
             )
             guard case .controlling = await coordinator.currentState() else {
+                controlTransferGuard.activationFailed(attempt)
                 pendingActivationEvents = nil
+                capture.setSuppressionEnabled(false)
+                return
+            }
+            guard controlTransferGuard.activationSucceeded(attempt) else {
+                pendingActivationEvents = nil
+                await coordinator.deactivateCurrentSession()
                 capture.setSuppressionEnabled(false)
                 return
             }
@@ -535,7 +556,9 @@ final class AppModel: ObservableObject {
             }
             statusMessage = "Controlling \(deviceName(transition.targetDeviceID))"
         } catch {
+            controlTransferGuard.activationFailed(attempt)
             pendingActivationEvents = nil
+            capture.setSuppressionEnabled(false)
             lastError = error.localizedDescription
         }
     }
@@ -543,13 +566,15 @@ final class AppModel: ObservableObject {
     private func forwardCaptured(_ event: InputEvent) async {
         guard let coordinator else { return }
         if await coordinator.handleCaptured(event) == .emergencyStop {
+            controlTransferGuard.beginStop()
+            controlTransferGuard.completeStop()
             statusMessage = "Control returned to this Mac"
         }
     }
 
     private func handleInjectedPointer(x: Double, y: Double) async {
         let now = DispatchTime.now().uptimeNanoseconds
-        entryEdgeHysteresis.observe(x: x, y: y)
+        controlTransferGuard.observe(x: x, y: y)
         guard let coordinator,
               case let .receiving(_, source, sessionID) = await coordinator.currentState(),
               let workspace,
@@ -559,7 +584,7 @@ final class AppModel: ObservableObject {
                 localDeviceID: localDeviceID,
                 devices: workspace.devices,
                 topology: workspace.topology
-              ), entryEdgeHysteresis.allows(transition),
+              ), controlTransferGuard.allows(transition),
               now - lastBoundaryTime > 250_000_000 else { return }
         lastBoundaryTime = now
         try? await transport.send(
@@ -601,7 +626,7 @@ final class AppModel: ObservableObject {
             let previousState = await coordinator?.currentState()
             await coordinator?.peerDisconnected(deviceID)
             if case let .receiving(_, source, _)? = previousState, source == deviceID {
-                entryEdgeHysteresis.reset()
+                controlTransferGuard.reset()
             } else if case let .controlling(_, target, _)? = previousState, target == deviceID {
                 statusMessage = "Reconnecting to \(deviceName(deviceID)) — use Control-Option-Command-Escape to return"
                 reconnectStatusTasks[deviceID]?.cancel()
@@ -610,6 +635,8 @@ final class AppModel: ObservableObject {
                     guard !Task.isCancelled, let self,
                           !self.connectedDevices.contains(deviceID),
                           case .idle = await self.coordinator?.currentState() else { return }
+                    self.controlTransferGuard.beginStop()
+                    self.controlTransferGuard.completeStop()
                     self.statusMessage = "Connection lost — control returned to this Mac"
                     self.connectionSnapshots[deviceID] = .init(
                         health: .disconnected,
@@ -675,9 +702,9 @@ final class AppModel: ObservableObject {
             let display = workspace?.devices.flatMap(\.displays).first { $0.id == activation.targetDisplayID }
             if await coordinator?.receiveActivation(activation, from: source, targetDisplay: display) == true {
                 if let display {
-                    entryEdgeHysteresis.arm(display: display, entryEdge: activation.entryEdge)
+                    controlTransferGuard.returned(to: display, enteringFrom: activation.entryEdge)
                 } else {
-                    entryEdgeHysteresis.reset()
+                    controlTransferGuard.reset()
                 }
                 statusMessage = "Controlled by \(deviceName(source))"
             }
@@ -685,7 +712,10 @@ final class AppModel: ObservableObject {
             let previousState = await coordinator?.currentState()
             await coordinator?.deactivateCurrentSession()
             if case .receiving? = previousState {
-                entryEdgeHysteresis.reset()
+                controlTransferGuard.reset()
+            } else if case .controlling? = previousState {
+                controlTransferGuard.beginStop()
+                controlTransferGuard.completeStop()
             }
             statusMessage = isLocalController ? "Controller ready" : "Receiver ready"
         case let .boundaryCrossed(sessionID, displayID, edge, normalizedPosition):
@@ -749,7 +779,7 @@ final class AppModel: ObservableObject {
         await coordinator.deactivateCurrentSession()
         if targetDisplay.deviceID == localDeviceID {
             injector.activate(on: targetDisplay, enteringFrom: destination.edge, normalizedPosition: normalizedPosition)
-            entryEdgeHysteresis.arm(display: targetDisplay, entryEdge: destination.edge)
+            controlTransferGuard.returned(to: targetDisplay, enteringFrom: destination.edge)
             statusMessage = "Controller ready"
         } else {
             try? await coordinator.activate(

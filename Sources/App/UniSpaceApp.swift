@@ -10,7 +10,11 @@ struct UniSpaceApp: App {
         Window("UniSpace", id: "main") {
             SettingsRootView(model: model)
                 .frame(minWidth: 760, minHeight: 540)
-                .onAppear { model.refreshPermissions() }
+                .onAppear {
+                    DockIconVisibility.show()
+                    model.refreshPermissions()
+                }
+                .onDisappear { DockIconVisibility.hide() }
         }
         .defaultSize(width: 900, height: 640)
         .windowToolbarStyle(.unified)
@@ -53,6 +57,7 @@ struct UniSpaceApp: App {
         Divider()
 
         Button("Open UniSpace…") {
+            DockIconVisibility.show()
             NSApplication.shared.activate(ignoringOtherApps: true)
             openWindow(id: "main")
         }
@@ -62,5 +67,16 @@ struct UniSpaceApp: App {
 
         Button("Quit UniSpace") { NSApplication.shared.terminate(nil) }
             .keyboardShortcut("q")
+    }
+}
+
+@MainActor
+private enum DockIconVisibility {
+    static func show() {
+        NSApplication.shared.setActivationPolicy(.regular)
+    }
+
+    static func hide() {
+        NSApplication.shared.setActivationPolicy(.accessory)
     }
 }
