@@ -1,0 +1,3 @@
+import UniSpaceInfrastructure
+
+typealias SystemFileSourceProvider = PersistentSystemFileSourceProvider
