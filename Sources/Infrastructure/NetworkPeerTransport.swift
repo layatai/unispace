@@ -19,7 +19,10 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
     public static let quicServiceType = "_unispace._udp"
     public static let controlPort = NWEndpoint.Port(rawValue: 61_338)!
     public static let realtimePort = NWEndpoint.Port(rawValue: 61_339)!
+    public static let crossPlatformQUICPort = NWEndpoint.Port(rawValue: 61_340)!
+    public static let crossPlatformPointerPort = NWEndpoint.Port(rawValue: 61_341)!
     private static let quicALPN = "unispace/2"
+    private static let crossPlatformQUICALPN = "unispace/3"
 
     private let queue = DispatchQueue(label: "com.layatai.unispace.network", qos: .userInteractive)
     private let lock = NSLock()
@@ -41,6 +44,7 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
     private var knownPeers: [DeviceID: DeviceDescriptor] = [:]
     private var listener: NWListener?
     private var quicListener: NWListener?
+    private var crossPlatformQUICListener: NWListener?
     private var readyControlPort: NWEndpoint.Port?
     private var readyQUICPort: NWEndpoint.Port?
     private var browser: NWBrowser?
@@ -52,6 +56,7 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
     private var retryTokens: [DeviceID: UUID] = [:]
     private var stabilityTokens: [DeviceID: UUID] = [:]
     private var realtimeTransport: QUICRealtimeTransport?
+    private var crossPlatformPointerTransport: CrossPlatformPointerTransport?
     private var running = false
 
     public init(
@@ -126,6 +131,7 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
             key: key,
             record: record
         )
+        let crossPlatformQUICListener = makeCrossPlatformQUICListener()
 
         let browser: NWBrowser?
         if enableBonjour {
@@ -148,6 +154,7 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
             self.listener = listener
             self.browser = browser
             self.quicListener = quicValues.listener
+            self.crossPlatformQUICListener = crossPlatformQUICListener
             self.quicBrowser = quicValues.browser
         }
         if enableQUIC, enableRealtime {
@@ -174,6 +181,22 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
                 )))
             }
         }
+        if enableRealtime,
+           workspace.devices.contains(where: {
+               $0.platform == .windows && $0.capabilities.contains(.udpPointerV2)
+           }) {
+            do {
+                let pointerTransport = CrossPlatformPointerTransport()
+                try pointerTransport.start(localDevice: localDevice, workspace: workspace, key: key)
+                lock.withLock { crossPlatformPointerTransport = pointerTransport }
+            } catch {
+                emit(.health(nil, .init(
+                    health: .degraded,
+                    transport: .tcp,
+                    detail: "Windows UDP pointer lane unavailable; using reliable input"
+                )))
+            }
+        }
         for peer in workspace.devices where peer.id != localDevice.id && !peer.peerAddresses.isEmpty {
             scheduleDirectConnection(to: peer.id, immediately: true)
         }
@@ -182,15 +205,32 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
     public func stop() async { stopSynchronously() }
 
     public func send(_ envelope: ControlEnvelope, to deviceID: DeviceID) async throws {
-        try await send(data: WireFrameCodec.encodeControl(envelope), to: deviceID)
+        let data = try isWindowsPeer(deviceID)
+            ? WireFrameCodec.encodePortableControl(envelope)
+            : WireFrameCodec.encodeControl(envelope)
+        try await send(data: data, to: deviceID)
     }
 
     public func send(_ frame: InputFrame, to deviceID: DeviceID) async throws {
-        try await send(data: WireFrameCodec.encodeInput(frame), to: deviceID)
+        if isWindowsPeer(deviceID) {
+            guard let portable = PortableInputMapper.map(frame) else { return }
+            try await send(data: WireFrameCodec.encodePortableInput(portable), to: deviceID)
+        } else {
+            try await send(data: WireFrameCodec.encodeInput(frame), to: deviceID)
+        }
     }
 
     @discardableResult
     public func sendRealtime(_ frame: RealtimePointerFrame, to deviceID: DeviceID) async throws -> Bool {
+        if isWindowsPeer(deviceID) {
+            let portable = PortableInputMapper.map(frame)
+            if let pointerTransport = lock.withLock({ crossPlatformPointerTransport }),
+               try await pointerTransport.send(portable, to: deviceID) {
+                return true
+            }
+            try await send(data: WireFrameCodec.encodePortableRealtimePointer(portable), to: deviceID)
+            return false
+        }
         guard let realtime = lock.withLock({ realtimeTransport }) else {
             try await send(frame.reliableFallback, to: deviceID)
             return false
@@ -207,17 +247,26 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
         try await connection.send(data)
     }
 
+    private func isWindowsPeer(_ deviceID: DeviceID) -> Bool {
+        lock.withLock {
+            guard let peer = knownPeers[deviceID] else { return false }
+            return peer.platform == .windows && peer.capabilities.contains(.crossPlatformInputV2)
+        }
+    }
+
     private func stopSynchronously() {
-        let values: (NWListener?, NWListener?, NWBrowser?, NWBrowser?, QUICRealtimeTransport?, [SecurePeerConnection]) = lock.withLock {
+        let values: (NWListener?, NWListener?, NWListener?, NWBrowser?, NWBrowser?, QUICRealtimeTransport?, CrossPlatformPointerTransport?, [SecurePeerConnection]) = lock.withLock {
             let active = Array(connections.values) + Array(pendingConnections.values)
-            let values = (listener, quicListener, browser, quicBrowser, realtimeTransport, active)
+            let values = (listener, quicListener, crossPlatformQUICListener, browser, quicBrowser, realtimeTransport, crossPlatformPointerTransport, active)
             listener = nil
             quicListener = nil
+            crossPlatformQUICListener = nil
             readyControlPort = nil
             readyQUICPort = nil
             browser = nil
             quicBrowser = nil
             realtimeTransport = nil
+            crossPlatformPointerTransport = nil
             connections.removeAll()
             pendingConnections.removeAll()
             discoveredDevices.removeAll()
@@ -232,8 +281,47 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
         values.1?.cancel()
         values.2?.cancel()
         values.3?.cancel()
-        values.4?.stop()
-        values.5.forEach { $0.cancel() }
+        values.4?.cancel()
+        values.5?.stop()
+        values.6?.stop()
+        values.7.forEach { $0.cancel() }
+    }
+
+    private func makeCrossPlatformQUICListener() -> NWListener? {
+        guard enableQUIC,
+              lock.withLock({ knownPeers.values.contains(where: {
+                  $0.platform == .windows && $0.capabilities.contains(.quicStreamV2)
+              }) }) else { return nil }
+        do {
+            let listener = try NWListener(
+                using: try Self.makeCrossPlatformQUICParameters(),
+                on: Self.crossPlatformQUICPort
+            )
+            listener.newConnectionHandler = { [weak self] connection in
+                self?.accept(connection, transport: .quic)
+            }
+            listener.stateUpdateHandler = { [weak self] state in
+                switch state {
+                case let .failed(error), let .waiting(error):
+                    self?.emit(.health(nil, .init(
+                        health: .degraded,
+                        transport: .quic,
+                        detail: "Windows QUIC unavailable: \(error.localizedDescription)"
+                    )))
+                default:
+                    break
+                }
+            }
+            listener.start(queue: queue)
+            return listener
+        } catch {
+            emit(.health(nil, .init(
+                health: .degraded,
+                transport: .quic,
+                detail: "Windows QUIC unavailable; using TCP"
+            )))
+            return nil
+        }
     }
 
     private func handleListenerState(_ state: NWListener.State, listener: NWListener?) {
@@ -442,7 +530,12 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
             guard let self, let managed else { return }
             self.register(managed, as: deviceID, objectID: objectID)
             let hello = self.lock.withLock { self.localDevice.map { ControlEnvelope(message: .hello($0)) } }
-            if let hello, let data = try? WireFrameCodec.encodeControl(hello) { managed.send(data, completion: nil) }
+            if let hello {
+                let data = try? (self.isWindowsPeer(deviceID)
+                    ? WireFrameCodec.encodePortableControl(hello)
+                    : WireFrameCodec.encodeControl(hello))
+                if let data { managed.send(data, completion: nil) }
+            }
         }
         managed.frameHandler = { [weak self, weak managed] kind, payload in
             guard let self, let managed else { return }
@@ -508,6 +601,18 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
                 guard frame.controllerID == deviceID else { throw ControlProtocolError.malformedFrame }
                 emit(.input(deviceID, frame))
             case .realtimePointerBinary:
+                throw ControlProtocolError.malformedFrame
+            case .controlJSONV2:
+                let envelope = try WireFrameCodec.decodePortableControl(payload)
+                if case let .hello(device) = envelope.message, device.id != deviceID {
+                    throw PeerTransportError.authenticationFailed
+                }
+                if case let .hello(device) = envelope.message {
+                    lock.withLock { knownPeers[device.id] = device }
+                }
+                emit(.control(deviceID, envelope))
+            case .inputBinaryV2, .realtimePointerBinaryV2:
+                // Windows peers are receiver-only. Portable input received by a Mac is invalid.
                 throw ControlProtocolError.malformedFrame
             }
         } catch {
@@ -720,11 +825,42 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
         parameters.includePeerToPeer = true
         return parameters
     }
+
+    static func makeCrossPlatformQUICParameters() throws -> NWParameters {
+        let options = NWProtocolQUIC.Options(alpn: [crossPlatformQUICALPN])
+        options.idleTimeout = 30_000
+        options.maxUDPPayloadSize = 1_350
+        sec_protocol_options_set_local_identity(
+            options.securityProtocolOptions,
+            try QUICIdentityProvider.identity()
+        )
+        // TLS bootstraps QUIC. The workspace-key secure hello and AEAD channel
+        // below authenticate the peer and protect application frames.
+        sec_protocol_options_set_verify_block(
+            options.securityProtocolOptions,
+            { _, _, complete in complete(true) },
+            DispatchQueue.global(qos: .userInteractive)
+        )
+        sec_protocol_options_set_min_tls_protocol_version(options.securityProtocolOptions, .TLSv13)
+        sec_protocol_options_set_max_tls_protocol_version(options.securityProtocolOptions, .TLSv13)
+        let parameters = NWParameters(quic: options)
+        parameters.includePeerToPeer = true
+        return parameters
+    }
 }
 
 private enum SecurePacketKind: UInt8 {
     case hello = 10
     case sealed = 11
+}
+
+enum SecureChannelSecurityProfile: Equatable {
+    case reliableV1
+    case pointerV2
+
+    var helloVersion: UInt16 { self == .reliableV1 ? 1 : 2 }
+    var helloPrefix: String { self == .reliableV1 ? "UniSpace secure hello v1" : "UniSpace pointer hello v2" }
+    var infoPrefix: String { self == .reliableV1 ? "UniSpace channel v1" : "UniSpace pointer lane v2" }
 }
 
 private struct SecureChannelHello: Codable, Sendable {
@@ -733,6 +869,37 @@ private struct SecureChannelHello: Codable, Sendable {
     let deviceID: DeviceID
     let nonce: Data
     let proof: Data
+    let supportedWireVersions: [UInt16]
+
+    private enum CodingKeys: String, CodingKey {
+        case version, workspaceID, deviceID, nonce, proof, supportedWireVersions
+    }
+
+    init(
+        version: UInt16,
+        workspaceID: WorkspaceID,
+        deviceID: DeviceID,
+        nonce: Data,
+        proof: Data,
+        supportedWireVersions: [UInt16] = [1, 2]
+    ) {
+        self.version = version
+        self.workspaceID = workspaceID
+        self.deviceID = deviceID
+        self.nonce = nonce
+        self.proof = proof
+        self.supportedWireVersions = supportedWireVersions
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        version = try container.decode(UInt16.self, forKey: .version)
+        workspaceID = try container.decode(WorkspaceID.self, forKey: .workspaceID)
+        deviceID = try container.decode(DeviceID.self, forKey: .deviceID)
+        nonce = try container.decode(Data.self, forKey: .nonce)
+        proof = try container.decode(Data.self, forKey: .proof)
+        supportedWireVersions = try container.decodeIfPresent([UInt16].self, forKey: .supportedWireVersions) ?? [1]
+    }
 }
 
 final class SecurePeerConnection: @unchecked Sendable {
@@ -751,6 +918,7 @@ final class SecurePeerConnection: @unchecked Sendable {
     private let workspaceID: WorkspaceID
     private let workspaceKey: SymmetricKey
     private let localNonce: Data
+    private let securityProfile: SecureChannelSecurityProfile
     private let lock = NSLock()
     private let sendQueue = DispatchQueue(
         label: "com.layatai.unispace.secure-peer-send",
@@ -773,6 +941,7 @@ final class SecurePeerConnection: @unchecked Sendable {
         isOutbound: Bool = false,
         transportKind: TransportKind = .tcp,
         isDatagram: Bool = false,
+        securityProfile: SecureChannelSecurityProfile = .reliableV1,
         authenticationTimeout: TimeInterval = 8
     ) {
         self.connection = connection
@@ -784,6 +953,7 @@ final class SecurePeerConnection: @unchecked Sendable {
         self.transportKind = transportKind
         self.isDatagram = isDatagram
         self.localNonce = PairingCryptoSession.randomData(count: 32)
+        self.securityProfile = securityProfile
         connection.stateUpdateHandler = { [weak self] state in
             self?.stateHandler?(state)
             if case .ready = state {
@@ -838,7 +1008,7 @@ final class SecurePeerConnection: @unchecked Sendable {
         let unsigned = helloProofPayload(deviceID: localDeviceID, nonce: localNonce)
         let proof = Data(HMAC<SHA256>.authenticationCode(for: unsigned, using: workspaceKey))
         let hello = SecureChannelHello(
-            version: 1,
+            version: securityProfile.helloVersion,
             workspaceID: workspaceID,
             deviceID: localDeviceID,
             nonce: localNonce,
@@ -863,7 +1033,7 @@ final class SecurePeerConnection: @unchecked Sendable {
 
     private func handleHello(_ payload: Data) throws {
         let hello = try JSONDecoder().decode(SecureChannelHello.self, from: payload)
-        guard hello.version == 1, hello.workspaceID == workspaceID,
+        guard hello.version == securityProfile.helloVersion, hello.workspaceID == workspaceID,
               expectedDeviceID == nil || expectedDeviceID == hello.deviceID else {
             throw PeerTransportError.authenticationFailed
         }
@@ -872,13 +1042,12 @@ final class SecurePeerConnection: @unchecked Sendable {
             throw PeerTransportError.authenticationFailed
         }
         let localFirst = localDeviceID < hello.deviceID
-        let salt = localFirst ? localNonce + hello.nonce : hello.nonce + localNonce
-        let info = Data("UniSpace channel v1|\(workspaceID.rawValue.uuidString)".utf8)
-        let derived = HKDF<SHA256>.deriveKey(
-            inputKeyMaterial: workspaceKey,
-            salt: salt,
-            info: info,
-            outputByteCount: 32
+        let derived = Self.deriveSessionKey(
+            workspaceID: workspaceID,
+            workspaceKey: workspaceKey,
+            firstNonce: localFirst ? localNonce : hello.nonce,
+            secondNonce: localFirst ? hello.nonce : localNonce,
+            securityProfile: securityProfile
         )
         let shouldNotify = lock.withLock { () -> Bool in
             guard sessionKey == nil else { return false }
@@ -920,8 +1089,37 @@ final class SecurePeerConnection: @unchecked Sendable {
         return plaintext.dropFirst(8)
     }
 
+    static func deriveSessionKey(
+        workspaceID: WorkspaceID,
+        workspaceKey: SymmetricKey,
+        firstNonce: Data,
+        secondNonce: Data,
+        securityProfile: SecureChannelSecurityProfile
+    ) -> SymmetricKey {
+        let salt = firstNonce + secondNonce
+        let info = Data("\(securityProfile.infoPrefix)|\(workspaceID.rawValue.uuidString)".utf8)
+        return HKDF<SHA256>.deriveKey(
+            inputKeyMaterial: workspaceKey,
+            salt: salt,
+            info: info,
+            outputByteCount: 32
+        )
+    }
+
+    static func sealForInterop(
+        _ plaintext: Data,
+        key: SymmetricKey,
+        nonce: Data
+    ) throws -> Data {
+        try ChaChaPoly.seal(
+            plaintext,
+            using: key,
+            nonce: try ChaChaPoly.Nonce(data: nonce)
+        ).combined
+    }
+
     private func helloProofPayload(deviceID: DeviceID, nonce: Data) -> Data {
-        var data = Data("UniSpace secure hello v1".utf8)
+        var data = Data(securityProfile.helloPrefix.utf8)
         data.append(Data(workspaceID.rawValue.uuidString.utf8))
         data.append(Data(deviceID.rawValue.uuidString.utf8))
         data.append(nonce)

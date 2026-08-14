@@ -180,3 +180,123 @@ public enum ControlProtocolError: Error, Equatable {
     case malformedFrame
     case oversizedFrame(Int)
 }
+
+public struct PortableModifierMask: OptionSet, Equatable, Sendable {
+    public let rawValue: UInt16
+
+    public init(rawValue: UInt16) {
+        self.rawValue = rawValue
+    }
+
+    public static let shift = Self(rawValue: 1 << 0)
+    public static let control = Self(rawValue: 1 << 1)
+    public static let option = Self(rawValue: 1 << 2)
+    public static let command = Self(rawValue: 1 << 3)
+    public static let capsLock = Self(rawValue: 1 << 4)
+    public static let function = Self(rawValue: 1 << 5)
+}
+
+public enum PortableInputEvent: Equatable, Sendable {
+    case pointerMove(deltaX: Double, deltaY: Double, absoluteX: Double, absoluteY: Double)
+    case mouseButton(button: PointerButton, isDown: Bool, clickCount: UInt16)
+    case scroll(deltaX: Double, deltaY: Double, isContinuous: Bool)
+    case key(usage: UInt16, isDown: Bool, isRepeat: Bool)
+    case modifiers(PortableModifierMask)
+}
+
+public struct PortableInputFrame: Equatable, Sendable {
+    public static let protocolVersion: UInt16 = 2
+
+    public let workspaceID: WorkspaceID
+    public let sessionID: SessionID
+    public let controllerID: DeviceID
+    public let epoch: ControllerEpoch
+    public let sequence: UInt64
+    public let timestampNanos: UInt64
+    public let event: PortableInputEvent
+
+    public init(
+        workspaceID: WorkspaceID,
+        sessionID: SessionID,
+        controllerID: DeviceID,
+        epoch: ControllerEpoch,
+        sequence: UInt64,
+        timestampNanos: UInt64,
+        event: PortableInputEvent
+    ) {
+        self.workspaceID = workspaceID
+        self.sessionID = sessionID
+        self.controllerID = controllerID
+        self.epoch = epoch
+        self.sequence = sequence
+        self.timestampNanos = timestampNanos
+        self.event = event
+    }
+}
+
+/// Replaceable pointer state for the authenticated cross-platform UDP lane.
+/// The cumulative displacement lets receivers recover motion lost between datagrams.
+public struct PortableRealtimePointerFrame: Equatable, Sendable {
+    public static let protocolVersion: UInt16 = 2
+
+    public let workspaceID: WorkspaceID
+    public let sessionID: SessionID
+    public let controllerID: DeviceID
+    public let epoch: ControllerEpoch
+    public let generation: UInt64
+    public let sequence: UInt64
+    public let deltaX: Double
+    public let deltaY: Double
+    public let cumulativeDeltaX: Double
+    public let cumulativeDeltaY: Double
+    public let absoluteX: Double
+    public let absoluteY: Double
+    public let timestampNanos: UInt64
+
+    public init(
+        workspaceID: WorkspaceID,
+        sessionID: SessionID,
+        controllerID: DeviceID,
+        epoch: ControllerEpoch,
+        generation: UInt64,
+        sequence: UInt64,
+        deltaX: Double,
+        deltaY: Double,
+        cumulativeDeltaX: Double,
+        cumulativeDeltaY: Double,
+        absoluteX: Double,
+        absoluteY: Double,
+        timestampNanos: UInt64
+    ) {
+        self.workspaceID = workspaceID
+        self.sessionID = sessionID
+        self.controllerID = controllerID
+        self.epoch = epoch
+        self.generation = generation
+        self.sequence = sequence
+        self.deltaX = deltaX
+        self.deltaY = deltaY
+        self.cumulativeDeltaX = cumulativeDeltaX
+        self.cumulativeDeltaY = cumulativeDeltaY
+        self.absoluteX = absoluteX
+        self.absoluteY = absoluteY
+        self.timestampNanos = timestampNanos
+    }
+
+    public var reliableFallback: PortableInputFrame {
+        PortableInputFrame(
+            workspaceID: workspaceID,
+            sessionID: sessionID,
+            controllerID: controllerID,
+            epoch: epoch,
+            sequence: sequence,
+            timestampNanos: timestampNanos,
+            event: .pointerMove(
+                deltaX: deltaX,
+                deltaY: deltaY,
+                absoluteX: absoluteX,
+                absoluteY: absoluteY
+            )
+        )
+    }
+}

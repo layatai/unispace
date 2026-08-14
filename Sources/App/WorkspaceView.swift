@@ -17,7 +17,7 @@ struct WorkspaceView: View {
             switch self {
             case .general: "General"
             case .displays: "Displays"
-            case .macs: "Macs"
+            case .macs: "Devices"
             }
         }
 
@@ -68,7 +68,7 @@ struct WorkspaceView: View {
                 VStack(alignment: .leading, spacing: 1) {
                     Text(model.isLocalController ? "Controlling" : "Receiving")
                         .font(.caption.weight(.semibold))
-                    Text("\(model.connectedDevices.count + 1) of \(max(model.devices.count, 1)) Macs online")
+                    Text("\(model.connectedDevices.count + 1) of \(max(model.devices.count, 1)) devices online")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
@@ -101,9 +101,9 @@ struct WorkspaceView: View {
                 Button {
                     model.startHostingPairing()
                 } label: {
-                    Label("Pair New Mac", systemImage: "plus")
+                    Label("Pair New Device", systemImage: "plus")
                 }
-                .help("Add another Mac to this workspace")
+                .help("Add another device to this workspace")
                 .disabled(model.devices.count >= 4)
             } else {
                 Button {
@@ -147,7 +147,7 @@ struct GeneralView: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This Mac will forget the workspace and return to setup. Other Macs and macOS permissions are unchanged.")
+            Text("This Mac will forget the workspace and return to setup. Other devices and macOS permissions are unchanged.")
         }
     }
 

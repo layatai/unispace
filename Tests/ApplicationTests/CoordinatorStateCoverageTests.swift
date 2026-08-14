@@ -380,6 +380,47 @@ final class CoordinatorStateCoverageTests: XCTestCase {
         await coordinator.stop()
     }
 
+    func testReceiverStopNotifiesControllerAndReleasesInjectedInput() async throws {
+        let localID = DeviceID()
+        let controllerID = DeviceID()
+        let transport = CoordinatorTransportSpy()
+        let injector = CoordinatorInjectorSpy()
+        let coordinator = ControlSessionCoordinator(
+            localDeviceID: localID,
+            workspaceID: WorkspaceID(),
+            capture: CoordinatorCaptureSpy(),
+            injector: injector,
+            transport: transport
+        )
+        let epoch = ControllerEpoch(generation: 1, controllerID: controllerID)
+        let sessionID = SessionID()
+        await coordinator.observeControllerClaim(epoch)
+        let activated = await coordinator.receiveActivation(
+            .init(
+                sessionID: sessionID,
+                epoch: epoch,
+                targetDisplayID: DisplayID(),
+                entryEdge: .left,
+                normalizedPosition: 0.5
+            ),
+            from: controllerID,
+            targetDisplay: nil
+        )
+        XCTAssertTrue(activated)
+
+        await coordinator.deactivateCurrentSession()
+
+        let finalState = await coordinator.currentState()
+        XCTAssertEqual(finalState, .idle)
+        XCTAssertEqual(injector.releaseAllCount, 1)
+        XCTAssertTrue(transport.sentControls.contains { sentControl in
+            let (target, message) = sentControl
+            guard target == controllerID else { return false }
+            if case let .deactivate(sentSessionID) = message { return sentSessionID == sessionID }
+            return false
+        })
+    }
+
     func testHeartbeatValidationAndActivationFailureLeaveCoordinatorIdle() async throws {
         let localID = DeviceID()
         let remoteID = DeviceID()
@@ -521,15 +562,20 @@ private final class CoordinatorTransportSpy: PeerTransport, @unchecked Sendable 
     private let lock = NSLock()
     private let stream = AsyncStream<PeerEvent> { $0.finish() }
     private var storedControlMessages: [ControlMessage] = []
+    private var storedSentControls: [(DeviceID, ControlMessage)] = []
     var controlError: Error?
     var controlMessages: [ControlMessage] { lock.withLock { storedControlMessages } }
+    var sentControls: [(DeviceID, ControlMessage)] { lock.withLock { storedSentControls } }
 
     func start(localDevice: DeviceDescriptor, workspace: WorkspaceSnapshot, key: Data) async throws {}
     func stop() async {}
     func events() -> AsyncStream<PeerEvent> { stream }
     func send(_ envelope: ControlEnvelope, to deviceID: DeviceID) async throws {
         if let controlError { throw controlError }
-        lock.withLock { storedControlMessages.append(envelope.message) }
+        lock.withLock {
+            storedControlMessages.append(envelope.message)
+            storedSentControls.append((deviceID, envelope.message))
+        }
     }
     func send(_ frame: InputFrame, to deviceID: DeviceID) async throws {}
 }

@@ -22,6 +22,8 @@ final class DomainModelsTests: XCTestCase {
 
         XCTAssertEqual(device.id, id)
         XCTAssertEqual(device.peerAddresses, [])
+        XCTAssertEqual(device.platform, .unknown)
+        XCTAssertEqual(device.capabilities, [])
         XCTAssertEqual(device.capabilities, [])
     }
 
@@ -35,8 +37,18 @@ final class DomainModelsTests: XCTestCase {
 
         let data = try JSONEncoder().encode(device)
         let decoded = try JSONDecoder().decode(DeviceDescriptor.self, from: data)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
 
         XCTAssertEqual(decoded, device)
+        XCTAssertEqual(json["platform"] as? String, "unknown")
+        XCTAssertEqual(
+            Set(try XCTUnwrap(json["capabilities"] as? [String])),
+            Set(["public-trackpad-gestures-v1", "future-input-v2"])
+        )
+        XCTAssertEqual(
+            try JSONDecoder().decode(DeviceCapability.self, from: Data("{\"rawValue\":\"legacy-capability\"}".utf8)),
+            DeviceCapability(rawValue: "legacy-capability")
+        )
     }
 
     func testLegacyDecoderIgnoresNewDeviceCapabilities() throws {

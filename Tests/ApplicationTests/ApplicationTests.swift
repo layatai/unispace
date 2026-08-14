@@ -81,6 +81,89 @@ final class ApplicationTests: XCTestCase {
         )))
     }
 
+    func testManualStopRejectsStaleActivationAndRearmsTheExitEdge() throws {
+        let localID = DeviceID()
+        let source = display(device: localID, frame: .init(x: 0, y: 0, width: 100, height: 100))
+        let transition = EdgeTransition(
+            sourceDisplayID: source.id,
+            sourceEdge: .left,
+            targetDisplayID: DisplayID(),
+            targetDeviceID: DeviceID(),
+            entryEdge: .right,
+            normalizedPosition: 0.5
+        )
+        var guardState = ControlTransferGuard()
+        let attempt = try XCTUnwrap(guardState.beginActivation(transition, sourceDisplay: source))
+
+        // Remote movement can move the captured absolute point far enough inward
+        // to clear the original edge hysteresis while control is active.
+        guardState.observe(x: 50, y: 50)
+        guardState.beginStop()
+        XCTAssertFalse(guardState.allows(transition))
+        guardState.completeStop()
+
+        XCTAssertFalse(guardState.activationSucceeded(attempt))
+        XCTAssertFalse(guardState.allows(transition))
+        guardState.observe(x: EntryEdgeHysteresis.defaultInwardDistance, y: 50)
+        XCTAssertTrue(guardState.allows(transition))
+    }
+
+    func testStaleActivationCompletionCannotCancelANewerTransfer() throws {
+        let localID = DeviceID()
+        let source = display(device: localID, frame: .init(x: 0, y: 0, width: 100, height: 100))
+        let transition = EdgeTransition(
+            sourceDisplayID: source.id,
+            sourceEdge: .right,
+            targetDisplayID: DisplayID(),
+            targetDeviceID: DeviceID(),
+            entryEdge: .left,
+            normalizedPosition: 0.5
+        )
+        var guardState = ControlTransferGuard()
+        XCTAssertFalse(guardState.forwardsCapturedInput)
+        let staleAttempt = try XCTUnwrap(guardState.beginActivation(transition, sourceDisplay: source))
+        guardState.beginStop()
+        guardState.completeStop()
+        guardState.observe(x: source.frame.maxX - EntryEdgeHysteresis.defaultInwardDistance, y: 50)
+
+        let currentAttempt = try XCTUnwrap(guardState.beginActivation(transition, sourceDisplay: source))
+        guardState.activationFailed(staleAttempt)
+
+        XCTAssertTrue(guardState.activationSucceeded(currentAttempt))
+        XCTAssertTrue(guardState.forwardsCapturedInput)
+    }
+
+    func testControlTransferGuardHandlesFailureIdleStopReturnAndReset() throws {
+        let localID = DeviceID()
+        let source = display(device: localID, frame: .init(x: 0, y: 0, width: 100, height: 100))
+        let transition = EdgeTransition(
+            sourceDisplayID: source.id,
+            sourceEdge: .right,
+            targetDisplayID: DisplayID(),
+            targetDeviceID: DeviceID(),
+            entryEdge: .left,
+            normalizedPosition: 0.5
+        )
+        var guardState = ControlTransferGuard()
+        let failedAttempt = try XCTUnwrap(guardState.beginActivation(transition, sourceDisplay: source))
+        XCTAssertNil(guardState.beginActivation(transition, sourceDisplay: source))
+        guardState.activationFailed(failedAttempt)
+        guardState.observe(x: source.frame.maxX - EntryEdgeHysteresis.defaultInwardDistance, y: 50)
+        XCTAssertTrue(guardState.allows(transition))
+
+        guardState.beginStop()
+        guardState.beginStop()
+        XCTAssertFalse(guardState.allows(transition))
+        guardState.completeStop()
+        guardState.completeStop()
+        XCTAssertTrue(guardState.allows(transition))
+
+        guardState.returned(to: source, enteringFrom: .right)
+        XCTAssertFalse(guardState.allows(transition))
+        guardState.reset()
+        XCTAssertTrue(guardState.allows(transition))
+    }
+
     func testReturnFromLeftMacUnlocksAfterShortInwardMoveAndAllowsPointerOvershoot() throws {
         let controllerID = DeviceID()
         let leftMacID = DeviceID()

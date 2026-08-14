@@ -116,7 +116,56 @@ public struct DeviceCapability: RawRepresentable, Codable, Hashable, Sendable {
         self.rawValue = rawValue
     }
 
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let value = try? container.decode(String.self) {
+            rawValue = value
+        } else {
+            let legacy = try decoder.container(keyedBy: LegacyCodingKeys.self)
+            rawValue = try legacy.decode(String.self, forKey: .rawValue)
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
+
+    private enum LegacyCodingKeys: String, CodingKey { case rawValue }
+
     public static let publicTrackpadGestures = Self(rawValue: "public-trackpad-gestures-v1")
+    public static let crossPlatformInputV2 = Self(rawValue: "cross-platform-input-v2")
+    public static let quicStreamV2 = Self(rawValue: "quic-stream-v2")
+    public static let udpPointerV2 = Self(rawValue: "udp-pointer-v2")
+}
+
+public struct DevicePlatform: RawRepresentable, Codable, Hashable, Sendable {
+    public let rawValue: String
+
+    public init(rawValue: String) {
+        self.rawValue = rawValue
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let value = try? container.decode(String.self) {
+            rawValue = value
+        } else {
+            let legacy = try decoder.container(keyedBy: LegacyCodingKeys.self)
+            rawValue = try legacy.decode(String.self, forKey: .rawValue)
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
+
+    private enum LegacyCodingKeys: String, CodingKey { case rawValue }
+
+    public static let unknown = Self(rawValue: "unknown")
+    public static let macOS = Self(rawValue: "macos")
+    public static let windows = Self(rawValue: "windows")
 }
 
 public struct DeviceDescriptor: Codable, Hashable, Identifiable, Sendable {
@@ -125,19 +174,22 @@ public struct DeviceDescriptor: Codable, Hashable, Identifiable, Sendable {
     public var displays: [DisplayDescriptor]
     public var peerAddresses: [PeerAddress]
     public var capabilities: Set<DeviceCapability>
+    public var platform: DevicePlatform
 
     public init(
         id: DeviceID,
         name: String,
         displays: [DisplayDescriptor] = [],
         peerAddresses: [PeerAddress] = [],
-        capabilities: Set<DeviceCapability> = []
+        capabilities: Set<DeviceCapability> = [],
+        platform: DevicePlatform = .unknown
     ) {
         self.id = id
         self.name = name
         self.displays = displays
         self.peerAddresses = peerAddresses
         self.capabilities = capabilities
+        self.platform = platform
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -146,6 +198,7 @@ public struct DeviceDescriptor: Codable, Hashable, Identifiable, Sendable {
         case displays
         case peerAddresses
         case capabilities
+        case platform
     }
 
     public init(from decoder: Decoder) throws {
@@ -155,6 +208,7 @@ public struct DeviceDescriptor: Codable, Hashable, Identifiable, Sendable {
         displays = try container.decodeIfPresent([DisplayDescriptor].self, forKey: .displays) ?? []
         peerAddresses = try container.decodeIfPresent([PeerAddress].self, forKey: .peerAddresses) ?? []
         capabilities = try container.decodeIfPresent(Set<DeviceCapability>.self, forKey: .capabilities) ?? []
+        platform = try container.decodeIfPresent(DevicePlatform.self, forKey: .platform) ?? .unknown
     }
 }
 

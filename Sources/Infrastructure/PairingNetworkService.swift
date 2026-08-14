@@ -37,8 +37,8 @@ public enum PairingServiceError: Error, LocalizedError {
         switch self {
         case .notReady: "Pairing is not ready."
         case .malformedMessage: "The pairing message was invalid."
-        case .peerRejected: "The other Mac rejected pairing."
-        case .workspaceFull: "A UniSpace workspace supports up to four Macs."
+        case .peerRejected: "The other device rejected pairing."
+        case .workspaceFull: "A UniSpace workspace supports up to four devices."
         case let .network(message): message
         }
     }
