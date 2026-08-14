@@ -66,14 +66,16 @@ targets:
           - _unispace._tcp
           - _unispace._udp
           - _unispace-rt._udp
+          - _unispace-xfer._tcp
           - _unispace-pair._tcp
-        NSLocalNetworkUsageDescription: UniSpace discovers and connects to nearby Macs so you can control them with one keyboard and mouse.
+        NSLocalNetworkUsageDescription: UniSpace discovers and connects to nearby Macs so you can control them and transfer files over your private network.
     entitlements:
       path: Resources/UniSpace.entitlements
       properties:
         com.apple.security.app-sandbox: true
         com.apple.security.network.client: true
         com.apple.security.network.server: true
+        com.apple.security.files.user-selected.read-write: true
     dependencies:
       - target: UniSpaceDomain
       - target: UniSpaceApplication
