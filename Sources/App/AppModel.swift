@@ -96,7 +96,8 @@ final class AppModel: ObservableObject {
             name: Host.current().localizedName ?? "Mac",
             displays: displayCatalog.currentDisplays(for: localDeviceID),
             peerAddresses: tailnetAddressProvider.currentAddresses(),
-            capabilities: [.publicTrackpadGestures]
+            capabilities: [.publicTrackpadGestures, .crossPlatformInputV2, .quicStreamV2, .udpPointerV2],
+            platform: .macOS
         )
     }
 
@@ -340,7 +341,7 @@ final class AppModel: ObservableObject {
         pairing.promptHandler = { [weak self] prompt in
             Task { @MainActor [weak self] in
                 self?.setupState = .confirming(prompt)
-                self?.statusMessage = "Confirm the code on both Macs"
+                self?.statusMessage = "Confirm the code on both devices"
             }
         }
         pairing.joinedHandler = { [weak self] snapshot, key in
@@ -361,7 +362,7 @@ final class AppModel: ObservableObject {
                 switch status {
                 case .ready:
                     statusMessage = setupState == .hostingPairing
-                        ? "Visible to nearby Macs as \(localDevice.name)"
+                        ? "Visible to nearby devices as \(localDevice.name)"
                         : "Searching the local network"
                 case let .waiting(message):
                     statusMessage = "Waiting for local network access: \(message)"
@@ -387,6 +388,7 @@ final class AppModel: ObservableObject {
 
     private func completeHostPairing(snapshot: WorkspaceSnapshot) {
         var snapshot = snapshot
+        let shouldRetainControl = isLocalController
         if snapshot.topology.links.isEmpty,
            let localDisplay = snapshot.devices.first(where: { $0.id == localDeviceID })?.displays.first(where: \.isMain),
            let remoteDisplay = snapshot.devices.first(where: { $0.id != localDeviceID })?.displays.first(where: \.isMain) {
@@ -395,9 +397,17 @@ final class AppModel: ObservableObject {
                 to: DisplayEndpoint(displayID: remoteDisplay.id, edge: .left)
             )
         }
-        persistAndBroadcast(snapshot)
-        setupState = .ready
-        statusMessage = "Paired successfully"
+        do {
+            try workspaceStore.save(snapshot)
+            workspace = snapshot
+            setupState = .ready
+            statusMessage = "Paired successfully"
+            // Restart so capability-gated Windows QUIC and pointer listeners are
+            // created immediately for the newly trusted receiver.
+            Task { await startTrustedNetwork(claimControl: shouldRetainControl) }
+        } catch {
+            lastError = error.localizedDescription
+        }
     }
 
     private func persistAndBroadcast(_ snapshot: WorkspaceSnapshot) {

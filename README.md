@@ -5,8 +5,8 @@
 <h1 align="center">UniSpace</h1>
 
 <p align="center">
-  <strong>One keyboard. Every Mac.</strong><br>
-  Move your pointer between up to four Macs as if they shared one desk—over your LAN or private Tailscale network.
+  <strong>One keyboard. Every device.</strong><br>
+  Move your pointer between up to four Macs and Windows PCs as if they shared one desk—over your LAN or private Tailscale network.
 </p>
 
 <p align="center">
@@ -27,12 +27,12 @@
   <img src="Documentation/Images/welcome.png" width="900" alt="UniSpace welcome screen with Create Workspace and Join Workspace options">
 </p>
 
-UniSpace is a native macOS Dock and menu-bar app for sharing one Mac's keyboard and pointer with your other Macs. Arrange their displays the way they sit on your desk, then cross a touching edge to move control to the next Mac.
+UniSpace is a native macOS Dock and menu-bar controller for sharing one Mac's keyboard and pointer with your other Macs and Windows PCs. Arrange their displays the way they sit on your desk, then cross a touching edge to move control to the next device. Windows support is provided by the receiver built into Macifier.
 
 ## Built for a shared desk
 
-- **Natural handoff:** move through a configured display edge to control another Mac, then cross back to return.
-- **LAN or Tailscale:** discover nearby Macs with Bonjour or connect directly with a MagicDNS name or Tailscale IP.
+- **Natural handoff:** move through a configured display edge to control another device, then cross back to return.
+- **LAN or Tailscale:** discover nearby devices with Bonjour or connect directly with a MagicDNS name or Tailscale IP.
 - **Responsive under imperfect networks:** trusted sessions prefer QUIC, fall back to TCP, and keep replaceable pointer motion separate from reliable keyboard, button, drag, and scroll events.
 - **A safe way home:** press `Control-Option-Command-Escape` at any time to stop remote control and return locally.
 
@@ -45,10 +45,10 @@ UniSpace is a native macOS Dock and menu-bar app for sharing one Mac's keyboard 
 ## Quick start
 
 1. [Download the latest release](https://github.com/layatai/unispace/releases/latest), open the DMG, and move UniSpace to Applications.
-2. Launch UniSpace on every Mac and grant **Input Monitoring** and **Post Events** when prompted.
+2. Launch UniSpace on each Mac and enable UniSpace in Macifier on each Windows receiver. Grant **Input Monitoring** and **Post Events** on Macs when prompted.
 3. Choose **Create Workspace** on the Mac whose keyboard and pointer you want to use.
-4. Choose **Pair New Mac** on the controller, then **Join Workspace** on the other Mac.
-5. Select the controller over the LAN, or enter its MagicDNS name or Tailscale IP. Confirm the same six-digit code on both Macs.
+4. Choose **Pair New Device** on the controller, then **Join Workspace** on the other Mac or in Macifier on Windows.
+5. Select the controller over the LAN, or enter its MagicDNS name or Tailscale IP. Confirm the same six-digit code on both devices.
 6. Open **Displays**, drag the display cards so their edges touch, and move the pointer through that edge.
 
 To join a different workspace later, open **General → Workspace**, choose **Leave Workspace…**, then return to setup and select **Join Workspace**. This removes only the local workspace membership and Keychain key; macOS permissions remain unchanged.
@@ -64,14 +64,16 @@ Bonjour handles automatic discovery on a trusted local network. Across Tailscale
 | Port | Protocol | Purpose |
 | --- | --- | --- |
 | `61337` | TCP | Pairing and workspace-key exchange |
-| `61338` | UDP, then TCP fallback | Encrypted trusted-session control channel |
-| `61339` | UDP | Replaceable low-latency pointer motion |
+| `61338` | UDP, then TCP fallback | Existing Mac-to-Mac v1 control; Windows reliable TCP fallback |
+| `61339` | UDP | Existing Mac-to-Mac replaceable pointer motion |
+| `61340` | QUIC/UDP | Windows cross-platform reliable stream, ALPN `unispace/3` |
+| `61341` | UDP | Windows authenticated replay-protected latest pointer state |
 
-Allow these ports through any host or tailnet firewall between participating Macs. Reliable input and control messages remain on the trusted control channel even when the pointer-motion lane is unavailable.
+Allow these ports through any host or tailnet firewall between participating devices. Windows initiates trusted sessions, so Macifier does not add an inbound listener or firewall exception. Reliable input and control messages remain on the trusted control channel when the pointer lane is unavailable.
 
 ## Security and privacy
 
-- Pairing requires a matching code and approval on both Macs.
+- Pairing requires a matching code and approval on both devices.
 - The workspace key is transferred only after an ephemeral key exchange.
 - Peer sessions derive per-connection keys, authenticate handshakes, encrypt traffic with ChaCha20-Poly1305, and reject replayed messages.
 - Workspace secrets and each installation's QUIC transport identity are stored in Keychain.
@@ -79,7 +81,7 @@ Allow these ports through any host or tailnet firewall between participating Mac
 
 ## Current scope
 
-UniSpace forwards standard pointer movement and buttons, scrolling, keyboard keys, modifiers, and shortcuts. When both Macs advertise gesture support, it also forwards public macOS trackpad gestures such as pinch, rotate, swipe, and smart magnify; mixed versions keep normal input working without sending incompatible gesture frames. It intentionally does not provide screen sharing, clipboard or file transfer, an internet relay, Touch ID or power-button forwarding, login-window control, Secure Input bypasses, or OS-reserved Mission Control and desktop gestures.
+UniSpace forwards standard pointer movement and buttons, scrolling, keyboard keys, modifiers, and shortcuts. When both Macs advertise gesture support, it also forwards public macOS trackpad gestures such as pinch, rotate, swipe, and smart magnify; Windows is receiver-only and does not receive gestures. Mixed versions keep normal input working without sending incompatible frames. UniSpace intentionally does not provide screen sharing, clipboard or file transfer, Windows-to-Mac control, an internet relay, Touch ID or power-button forwarding, login/UAC secure-desktop control, Secure Input bypasses, or OS-reserved Mission Control and desktop gestures.
 
 <details>
 <summary><strong>Build and test from source</strong></summary>

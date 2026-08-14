@@ -2,6 +2,7 @@ import XCTest
 @testable import UniSpaceInfrastructure
 import AppKit
 import CoreGraphics
+import CryptoKit
 import Network
 import UniSpaceApplication
 import UniSpaceDomain
@@ -165,8 +166,8 @@ final class InfrastructureTests: XCTestCase {
         let errors: [(PairingServiceError, String)] = [
             (.notReady, "Pairing is not ready."),
             (.malformedMessage, "The pairing message was invalid."),
-            (.peerRejected, "The other Mac rejected pairing."),
-            (.workspaceFull, "A UniSpace workspace supports up to four Macs."),
+            (.peerRejected, "The other device rejected pairing."),
+            (.workspaceFull, "A UniSpace workspace supports up to four devices."),
             (.network("offline"), "offline")
         ]
         for (error, description) in errors {
@@ -208,6 +209,78 @@ final class InfrastructureTests: XCTestCase {
         let workspaceKey = PairingCryptoSession.randomData(count: 32)
         let sealed = try host.sealWorkspaceKey(workspaceKey, peerOffer: joiner.offer)
         XCTAssertEqual(try joiner.openWorkspaceKey(sealed, peerOffer: host.offer), workspaceKey)
+    }
+
+    func testPairingCryptoMatchesSharedWindowsVector() throws {
+        let repositoryRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let data = try Data(contentsOf: repositoryRoot.appendingPathComponent(
+            "Documentation/Protocol/interop-vectors.json"
+        ))
+        let root = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let pairing = try XCTUnwrap(root["pairingV1"] as? [String: String])
+        let privateA = try P256.KeyAgreement.PrivateKey(
+            rawRepresentation: try XCTUnwrap(Data(hexString: pairing["privateAHex"]))
+        )
+        let publicB = try P256.KeyAgreement.PublicKey(
+            x963Representation: try XCTUnwrap(Data(hexString: pairing["publicBHex"]))
+        )
+        let publicAData = privateA.publicKey.x963Representation
+        XCTAssertEqual(publicAData, try XCTUnwrap(Data(hexString: pairing["publicAHex"])))
+        let nonceA = try XCTUnwrap(Data(hexString: pairing["nonceAHex"]))
+        let nonceB = try XCTUnwrap(Data(hexString: pairing["nonceBHex"]))
+        let publicBData = publicB.x963Representation
+        let localFirst = publicAData.lexicographicallyPrecedes(publicBData)
+        let transcript = localFirst
+            ? publicAData + publicBData + nonceA + nonceB
+            : publicBData + publicAData + nonceB + nonceA
+        let shared = try privateA.sharedSecretFromKeyAgreement(with: publicB)
+        let key = shared.hkdfDerivedSymmetricKey(
+            using: SHA256.self,
+            salt: transcript,
+            sharedInfo: Data("UniSpace pairing v1".utf8),
+            outputByteCount: 32
+        )
+        let keyData = key.withUnsafeBytes { Data($0) }
+        XCTAssertEqual(keyData, try XCTUnwrap(Data(hexString: pairing["derivedKeyHex"])))
+        let code = keyData.prefix(4).reduce(UInt32(0)) { ($0 << 8) | UInt32($1) } % 1_000_000
+        XCTAssertEqual(String(format: "%06u", code), pairing["confirmationCode"])
+        let credential = try ChaChaPoly.SealedBox(
+            combined: try XCTUnwrap(Data(hexString: pairing["credentialCombinedHex"]))
+        )
+        XCTAssertEqual(
+            try ChaChaPoly.open(credential, using: key),
+            try XCTUnwrap(Data(hexString: pairing["workspaceKeyHex"]))
+        )
+
+        let secure = try XCTUnwrap(root["secureChannelV1"] as? [String: String])
+        let secureWorkspaceID = WorkspaceID(rawValue: try XCTUnwrap(
+            UUID(uuidString: try XCTUnwrap(secure["workspaceId"]))
+        ))
+        let derivedSessionKey = SecurePeerConnection.deriveSessionKey(
+            workspaceID: secureWorkspaceID,
+            workspaceKey: SymmetricKey(data: try XCTUnwrap(Data(hexString: secure["workspaceKeyHex"]))),
+            firstNonce: try XCTUnwrap(Data(hexString: secure["localNonceHex"])),
+            secondNonce: try XCTUnwrap(Data(hexString: secure["peerNonceHex"])),
+            securityProfile: .reliableV1
+        )
+        XCTAssertEqual(
+            derivedSessionKey.withUnsafeBytes { Data($0) },
+            try XCTUnwrap(Data(hexString: secure["sessionKeyHex"]))
+        )
+        let wire = try XCTUnwrap(root["wireV2"] as? [String: String])
+        let expectedPacket = try XCTUnwrap(Data(hexString: secure["sealedPacketHex"]))
+        let inputFrame = try XCTUnwrap(Data(hexString: wire["keyInputFrameHex"]))
+        XCTAssertEqual(
+            try SecurePeerConnection.sealForInterop(
+                Data(repeating: 0, count: 8) + inputFrame,
+                key: derivedSessionKey,
+                nonce: Data(expectedPacket.dropFirst(5).prefix(12))
+            ),
+            Data(expectedPacket.dropFirst(5))
+        )
     }
 
     func testPairingRejectsInvalidPeerPublicKey() throws {
@@ -744,6 +817,28 @@ final class InfrastructureTests: XCTestCase {
         XCTAssertNoThrow(try store.remove())
     }
 
+    func testKeychainTrustStoreCreatesUpdatesAndRemovesWorkspaceKey() throws {
+        let workspaceID = WorkspaceID()
+        let store = KeychainTrustStore(service: "com.layatai.unispace.tests.\(UUID().uuidString)")
+        defer { try? store.removeWorkspaceKey(for: workspaceID) }
+        let first = Data(repeating: 0x11, count: 32)
+        let second = Data(repeating: 0x22, count: 32)
+
+        XCTAssertNil(try store.workspaceKey(for: workspaceID))
+        try store.storeWorkspaceKey(first, for: workspaceID)
+        XCTAssertEqual(try store.workspaceKey(for: workspaceID), first)
+        try store.storeWorkspaceKey(second, for: workspaceID)
+        XCTAssertEqual(try store.workspaceKey(for: workspaceID), second)
+        try store.removeWorkspaceKey(for: workspaceID)
+        XCTAssertNil(try store.workspaceKey(for: workspaceID))
+        XCTAssertNoThrow(try store.removeWorkspaceKey(for: workspaceID))
+    }
+
+    func testCrossPlatformQUICParametersUsePeerToPeerTLSBootstrap() throws {
+        let parameters = try NetworkPeerTransport.makeCrossPlatformQUICParameters()
+        XCTAssertTrue(parameters.includePeerToPeer)
+    }
+
     @MainActor
     func testDisplayCatalogReturnsStableUniqueIdentifiers() {
         let displays = SystemDisplayCatalog().currentDisplays(for: DeviceID())
@@ -827,6 +922,91 @@ final class InfrastructureTests: XCTestCase {
         listener.cancel()
     }
 
+    func testCrossPlatformPointerLaneAuthenticatesAndDeliversLatestState() async throws {
+        let workspaceID = WorkspaceID()
+        let key = PairingCryptoSession.randomData(count: 32)
+        let macID = DeviceID()
+        let windowsID = DeviceID()
+        let mac = DeviceDescriptor(id: macID, name: "Mac", platform: .macOS)
+        let windows = DeviceDescriptor(
+            id: windowsID,
+            name: "Windows PC",
+            capabilities: [.crossPlatformInputV2, .udpPointerV2],
+            platform: .windows
+        )
+        let workspace = WorkspaceSnapshot(
+            id: workspaceID,
+            name: "Portable",
+            localDeviceID: macID,
+            devices: [mac, windows]
+        )
+        let transport = CrossPlatformPointerTransport()
+        try transport.start(localDevice: mac, workspace: workspace, key: key)
+        defer { transport.stop() }
+
+        let rawClient = NWConnection(
+            host: "127.0.0.1",
+            port: NetworkPeerTransport.crossPlatformPointerPort,
+            using: .udp
+        )
+        let client = SecurePeerConnection(
+            connection: rawClient,
+            localDeviceID: windowsID,
+            workspaceID: workspaceID,
+            workspaceKey: key,
+            expectedDeviceID: macID,
+            isOutbound: true,
+            transportKind: .tcp,
+            isDatagram: true,
+            securityProfile: .pointerV2
+        )
+        defer { client.cancel() }
+        let authenticated = expectation(description: "Windows pointer lane authenticated")
+        let received = expectation(description: "Latest pointer state received")
+        client.authenticatedHandler = { deviceID in
+            XCTAssertEqual(deviceID, macID)
+            authenticated.fulfill()
+        }
+        let frame = PortableRealtimePointerFrame(
+            workspaceID: workspaceID,
+            sessionID: SessionID(),
+            controllerID: macID,
+            epoch: .init(generation: 1, controllerID: macID),
+            generation: 2,
+            sequence: 3,
+            deltaX: 4,
+            deltaY: -5,
+            cumulativeDeltaX: 14,
+            cumulativeDeltaY: -15,
+            absoluteX: 640,
+            absoluteY: 480,
+            timestampNanos: 6
+        )
+        client.frameHandler = { kind, payload in
+            do {
+                XCTAssertEqual(kind, .realtimePointerBinaryV2)
+                let decoded = try WireFrameCodec.decodePortableRealtimePointer(payload)
+                XCTAssertEqual(decoded, frame)
+                received.fulfill()
+            } catch {
+                XCTFail("Could not decode Windows pointer frame: \(error)")
+            }
+        }
+        rawClient.start(queue: DispatchQueue(label: "UniSpaceInfrastructureTests.WindowsPointer"))
+        await fulfillment(of: [authenticated], timeout: 3)
+
+        var sent = false
+        for _ in 0..<50 where !sent {
+            sent = try await transport.send(frame, to: windowsID)
+            if !sent { try await Task.sleep(for: .milliseconds(20)) }
+        }
+        XCTAssertTrue(sent)
+        let sentToUnknownDevice = try await transport.send(frame, to: DeviceID())
+        XCTAssertFalse(sentToUnknownDevice)
+        await fulfillment(of: [received], timeout: 3)
+        transport.stop()
+    }
+
     private func display(id: DisplayID, deviceID: DeviceID) -> DisplayDescriptor {
         DisplayDescriptor(
             id: id,
@@ -836,6 +1016,21 @@ final class InfrastructureTests: XCTestCase {
             scaleFactor: 2,
             isMain: true
         )
+    }
+}
+
+private extension Data {
+    init?(hexString: String?) {
+        guard let hexString, hexString.count.isMultiple(of: 2) else { return nil }
+        self.init()
+        reserveCapacity(hexString.count / 2)
+        var index = hexString.startIndex
+        while index < hexString.endIndex {
+            let end = hexString.index(index, offsetBy: 2)
+            guard let byte = UInt8(hexString[index..<end], radix: 16) else { return nil }
+            append(byte)
+            index = end
+        }
     }
 }
 
