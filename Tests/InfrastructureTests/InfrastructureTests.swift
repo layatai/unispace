@@ -175,6 +175,21 @@ final class InfrastructureTests: XCTestCase {
         }
     }
 
+    func testPeerTransportErrorsExposeActionableDescriptions() {
+        XCTAssertEqual(
+            PeerTransportError.peerUnavailable(DeviceID()).errorDescription,
+            "The selected device is not connected. Wait until it appears online, then try again."
+        )
+        XCTAssertEqual(
+            PeerTransportError.authenticationFailed.errorDescription,
+            "The peer could not authenticate with this workspace. Pair the device again."
+        )
+        XCTAssertEqual(
+            PeerTransportError.sendFailed("offline").errorDescription,
+            "The connection failed while sending data: offline"
+        )
+    }
+
     func testApplicationDeclaresEveryBonjourServiceAndLocalNetworkPurpose() throws {
         let repositoryRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -922,6 +937,106 @@ final class InfrastructureTests: XCTestCase {
         listener.cancel()
     }
 
+    func testUnknownInboundWindowsPeerNegotiatesPortableHelloBeforeConnected() async throws {
+        let workspaceID = WorkspaceID()
+        let key = PairingCryptoSession.randomData(count: 32)
+        let macID = DeviceID()
+        let windowsID = DeviceID()
+        let mac = DeviceDescriptor(
+            id: macID,
+            name: "Mac",
+            capabilities: [.crossPlatformInputV2, .quicStreamV2, .udpPointerV2],
+            platform: .macOS
+        )
+        let windows = DeviceDescriptor(
+            id: windowsID,
+            name: "Windows PC",
+            capabilities: [.crossPlatformInputV2, .quicStreamV2, .udpPointerV2],
+            platform: .windows
+        )
+        let workspace = WorkspaceSnapshot(
+            id: workspaceID,
+            name: "Unknown Windows recovery",
+            localDeviceID: macID,
+            devices: [mac]
+        )
+        let transport = NetworkPeerTransport(
+            listenPort: .any,
+            directPort: .any,
+            enableBonjour: false,
+            enableQUIC: false,
+            enableRealtime: false
+        )
+        let peerHelloObserved = expectation(description: "Windows hello observed before connection announcement")
+        let connected = expectation(description: "unknown Windows peer announced connected")
+        let macHelloReceived = expectation(description: "Windows peer receives a portable Mac hello")
+        let eventOrder = StringRecorder()
+        let events = Task {
+            for await event in transport.events() {
+                switch event {
+                case let .control(source, envelope):
+                    guard source == windowsID, case let .hello(device) = envelope.message else { continue }
+                    XCTAssertEqual(device, windows)
+                    eventOrder.append("hello")
+                    peerHelloObserved.fulfill()
+                case let .connected(deviceID) where deviceID == windowsID:
+                    eventOrder.append("connected")
+                    connected.fulfill()
+                default:
+                    break
+                }
+            }
+        }
+
+        try await transport.start(localDevice: mac, workspace: workspace, key: key)
+        let port = try await waitForPort(of: transport)
+        let rawClient = NWConnection(
+            host: "127.0.0.1",
+            port: port,
+            using: NetworkPeerTransport.makeParameters()
+        )
+        let client = SecurePeerConnection(
+            connection: rawClient,
+            localDeviceID: windowsID,
+            workspaceID: workspaceID,
+            workspaceKey: key,
+            expectedDeviceID: macID,
+            isOutbound: true
+        )
+        client.authenticatedHandler = { deviceID in
+            XCTAssertEqual(deviceID, macID)
+            do {
+                let hello = try WireFrameCodec.encodePortableControl(
+                    ControlEnvelope(message: .hello(windows))
+                )
+                client.send(hello, completion: nil)
+            } catch {
+                XCTFail("Could not encode the Windows hello: \(error)")
+            }
+        }
+        client.frameHandler = { kind, payload in
+            do {
+                XCTAssertEqual(kind, .controlJSONV2)
+                let envelope = try WireFrameCodec.decodePortableControl(payload)
+                guard case let .hello(device) = envelope.message else {
+                    return XCTFail("Expected the Mac hello")
+                }
+                XCTAssertEqual(device, mac)
+                macHelloReceived.fulfill()
+            } catch {
+                XCTFail("Could not decode the portable Mac hello: \(error)")
+            }
+        }
+        rawClient.start(queue: DispatchQueue(label: "UniSpaceInfrastructureTests.UnknownWindows"))
+
+        await fulfillment(of: [peerHelloObserved, connected, macHelloReceived], timeout: 5)
+        XCTAssertEqual(Array(eventOrder.values.prefix(2)), ["hello", "connected"])
+
+        client.cancel()
+        events.cancel()
+        await transport.stop()
+    }
+
     func testCrossPlatformPointerLaneAuthenticatesAndDeliversLatestState() async throws {
         let workspaceID = WorkspaceID()
         let key = PairingCryptoSession.randomData(count: 32)
@@ -1041,6 +1156,17 @@ private final class MouseAssociationRecorder: @unchecked Sendable {
     var values: [Bool] { lock.withLock { storedValues } }
 
     func append(_ value: Bool) {
+        lock.withLock { storedValues.append(value) }
+    }
+}
+
+private final class StringRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storedValues: [String] = []
+
+    var values: [String] { lock.withLock { storedValues } }
+
+    func append(_ value: String) {
         lock.withLock { storedValues.append(value) }
     }
 }

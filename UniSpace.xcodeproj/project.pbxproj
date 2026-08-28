@@ -10,11 +10,13 @@
 		007BCF67A96551391FDD96B9 /* StateMachineCoverageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 05A832230695791A7DC5065D /* StateMachineCoverageTests.swift */; };
 		00D78959FB0F221402D1D22A /* UniSpaceDomain.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = D0CF733F292C646448A74827 /* UniSpaceDomain.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		01F8B032D536A77F3C24402A /* InfrastructureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1EFF200775381B9BA7CE0515 /* InfrastructureTests.swift */; };
+		036E0362A6722919974F7B49 /* WorkspaceReplicaMergerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 469284CBAF267B56A4B56BBA /* WorkspaceReplicaMergerTests.swift */; };
 		047D4147DE948C6D2BB38711 /* UniSpaceApplication.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = CD69866EFD7AE9229BB70567 /* UniSpaceApplication.framework */; };
 		0562F260B20737B8FCDFFF9C /* ApplicationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 73D75018570BCFF3ADAA8FFA /* ApplicationTests.swift */; };
 		089837EDE4B866F6DB8CFB69 /* WorkspaceModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D53BFBE80B81BD15ADE9567 /* WorkspaceModels.swift */; };
 		0FD70E2DF57D3C4771CADD97 /* UniSpaceInfrastructure.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = A92FBB5C74B263098DBE15F3 /* UniSpaceInfrastructure.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		1715553FA76B59428C5E1AAA /* SimulatedE2ETests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 256563740902D273A25CC9B0 /* SimulatedE2ETests.swift */; };
+		1717E7750DAD1E6D14EF4CD1 /* WorkspaceReplicaMerger.swift in Sources */ = {isa = PBXBuildFile; fileRef = 955E18CB8A8476625C1772C6 /* WorkspaceReplicaMerger.swift */; };
 		1CF86561870DB5B6B5215E3B /* CGEventInputInjector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FB1C3CA1F6EAACE025F81C8 /* CGEventInputInjector.swift */; };
 		22C3836F82F335609B866861 /* UniSpaceUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5BB0E1195B12A9CCB81CDE1 /* UniSpaceUITests.swift */; };
 		24B33FD1749F833343D4F583 /* Contracts.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5EF85F3792D7B832147692C /* Contracts.swift */; };
@@ -233,6 +235,7 @@
 		2CF070D689C1AA7C27334F7E /* WorkspaceLifecycle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceLifecycle.swift; sourceTree = "<group>"; };
 		337227C68BC5632299CFAA6F /* CrossPlatformPointerTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrossPlatformPointerTransport.swift; sourceTree = "<group>"; };
 		3705E48046B8D56DACF3CF21 /* PairingNetworkService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingNetworkService.swift; sourceTree = "<group>"; };
+		469284CBAF267B56A4B56BBA /* WorkspaceReplicaMergerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceReplicaMergerTests.swift; sourceTree = "<group>"; };
 		478444AE3F889D2F9D43B479 /* PortableInputMapper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PortableInputMapper.swift; sourceTree = "<group>"; };
 		4FB1C3CA1F6EAACE025F81C8 /* CGEventInputInjector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CGEventInputInjector.swift; sourceTree = "<group>"; };
 		55C72D45E1BA1AC01DA60260 /* ControllerStateMachine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControllerStateMachine.swift; sourceTree = "<group>"; };
@@ -246,6 +249,7 @@
 		904734B26F5ED02D2FFA4505 /* UniSpaceApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UniSpaceApp.swift; sourceTree = "<group>"; };
 		918BD24F1FF035FE50FDBF36 /* UniSpace.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = UniSpace.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		932AE2DF23AD73CE9D06228F /* Base.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Base.xcconfig; sourceTree = "<group>"; };
+		955E18CB8A8476625C1772C6 /* WorkspaceReplicaMerger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceReplicaMerger.swift; sourceTree = "<group>"; };
 		9B6E8B1FA2B7DDB5F10F7EDE /* SystemLoginItemController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemLoginItemController.swift; sourceTree = "<group>"; };
 		A5EF85F3792D7B832147692C /* Contracts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Contracts.swift; sourceTree = "<group>"; };
 		A66CF80D95080FEE80B09369 /* UniSpaceApplicationTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = UniSpaceApplicationTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -351,6 +355,7 @@
 				BF70CBE8D8890E0B9C31122B /* CoordinatorStateCoverageTests.swift */,
 				B5768D1126879FE096B44FAB /* ProtocolCoverageTests.swift */,
 				256563740902D273A25CC9B0 /* SimulatedE2ETests.swift */,
+				469284CBAF267B56A4B56BBA /* WorkspaceReplicaMergerTests.swift */,
 			);
 			path = ApplicationTests;
 			sourceTree = "<group>";
@@ -467,6 +472,7 @@
 				01A1425648D0C5F8712AC268 /* FrameCodec.swift */,
 				478444AE3F889D2F9D43B479 /* PortableInputMapper.swift */,
 				2CF070D689C1AA7C27334F7E /* WorkspaceLifecycle.swift */,
+				955E18CB8A8476625C1772C6 /* WorkspaceReplicaMerger.swift */,
 			);
 			path = Application;
 			sourceTree = "<group>";
@@ -766,6 +772,7 @@
 				40A062D997ADC412969A4DF1 /* CoordinatorStateCoverageTests.swift in Sources */,
 				4BF0B343A2396225C9AB48AB /* ProtocolCoverageTests.swift in Sources */,
 				1715553FA76B59428C5E1AAA /* SimulatedE2ETests.swift in Sources */,
+				036E0362A6722919974F7B49 /* WorkspaceReplicaMergerTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -790,6 +797,7 @@
 				8E6BA003D246813AC1906B0B /* FrameCodec.swift in Sources */,
 				7AC9BE31D5C8E171DA184B8F /* PortableInputMapper.swift in Sources */,
 				3BD92A406A4851CD54C8BD66 /* WorkspaceLifecycle.swift in Sources */,
+				1717E7750DAD1E6D14EF4CD1 /* WorkspaceReplicaMerger.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

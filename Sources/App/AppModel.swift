@@ -459,7 +459,7 @@ final class AppModel: ObservableObject {
         var current = localDevice
         var updated = snapshot
         if let index = updated.devices.firstIndex(where: { $0.id == localDeviceID }) {
-            current.peerAddresses = Self.mergedAddresses(
+            current.peerAddresses = WorkspaceReplicaMerger.mergeAddresses(
                 updated.devices[index].peerAddresses,
                 current.peerAddresses
             )
@@ -677,22 +677,11 @@ final class AppModel: ObservableObject {
         case let .hello(device):
             upsert(device, capabilitiesAreAuthoritative: true)
         case let .workspace(incoming):
-            guard var workspace, incoming.id == workspace.id else { return }
-            workspace.devices = incoming.devices.map { incomingDevice in
-                guard let current = workspace.devices.first(where: { $0.id == incomingDevice.id }) else {
-                    return incomingDevice
-                }
-                return Self.merging(
-                    current,
-                    with: incomingDevice,
-                    capabilitiesAreAuthoritative: false
-                )
-            }
-            workspace.topology = incoming.topology
-            workspace.generation = max(workspace.generation, incoming.generation)
+            guard let currentWorkspace = workspace,
+                  var workspace = WorkspaceReplicaMerger.mergeSnapshot(currentWorkspace, with: incoming) else { return }
             var current = localDevice
             if let persistedLocal = workspace.devices.first(where: { $0.id == localDeviceID }) {
-                current.peerAddresses = Self.mergedAddresses(
+                current.peerAddresses = WorkspaceReplicaMerger.mergeAddresses(
                     persistedLocal.peerAddresses,
                     current.peerAddresses
                 )
@@ -809,7 +798,7 @@ final class AppModel: ObservableObject {
     ) {
         guard var workspace else { return }
         if let index = workspace.devices.firstIndex(where: { $0.id == device.id }) {
-            workspace.updateDevice(Self.merging(
+            workspace.updateDevice(WorkspaceReplicaMerger.mergeDevice(
                 workspace.devices[index],
                 with: device,
                 capabilitiesAreAuthoritative: capabilitiesAreAuthoritative
@@ -847,29 +836,13 @@ final class AppModel: ObservableObject {
     private func refreshLocalDisplays() {
         guard var workspace, let index = workspace.devices.firstIndex(where: { $0.id == localDeviceID }) else { return }
         var current = localDevice
-        current.peerAddresses = Self.mergedAddresses(
+        current.peerAddresses = WorkspaceReplicaMerger.mergeAddresses(
             workspace.devices[index].peerAddresses,
             current.peerAddresses
         )
         guard workspace.devices[index] != current else { return }
         workspace.updateDevice(current)
         persistAndBroadcast(workspace)
-    }
-
-    private static func merging(
-        _ current: DeviceDescriptor,
-        with incoming: DeviceDescriptor,
-        capabilitiesAreAuthoritative: Bool
-    ) -> DeviceDescriptor {
-        var merged = incoming
-        if merged.displays.isEmpty { merged.displays = current.displays }
-        merged.peerAddresses = mergedAddresses(current.peerAddresses, incoming.peerAddresses)
-        if !capabilitiesAreAuthoritative { merged.capabilities = current.capabilities }
-        return merged
-    }
-
-    private static func mergedAddresses(_ first: [PeerAddress], _ second: [PeerAddress]) -> [PeerAddress] {
-        Array(Set(first + second)).sorted { $0.host < $1.host }
     }
 
     private static func loadDeviceID() -> DeviceID {
