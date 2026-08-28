@@ -44,7 +44,6 @@ final class AppModel: ObservableObject {
     private var lastBoundaryTime: UInt64 = 0
     private var controlTransferGuard = ControlTransferGuard()
     private var pendingActivationEvents: [InputEvent]?
-    private var reconnectStatusTasks: [DeviceID: Task<Void, Never>] = [:]
 
     let localDeviceID: DeviceID
 
@@ -87,7 +86,6 @@ final class AppModel: ObservableObject {
 
     deinit {
         networkTask?.cancel()
-        reconnectStatusTasks.values.forEach { $0.cancel() }
     }
 
     var localDevice: DeviceDescriptor {
@@ -621,16 +619,12 @@ final class AppModel: ObservableObject {
         case .lost:
             break
         case let .connected(deviceID):
-            reconnectStatusTasks.removeValue(forKey: deviceID)?.cancel()
             connectedDevices.insert(deviceID)
             if let workspace {
                 try? await transport.send(ControlEnvelope(message: .workspace(workspace)), to: deviceID)
             }
             if let currentEpoch {
                 try? await transport.send(ControlEnvelope(message: .controllerClaim(currentEpoch)), to: deviceID)
-            }
-            if await coordinator?.peerConnected(deviceID) == true {
-                statusMessage = "Controlling \(deviceName(deviceID))"
             }
         case let .disconnected(deviceID):
             connectedDevices.remove(deviceID)
@@ -644,22 +638,9 @@ final class AppModel: ObservableObject {
             if case let .receiving(_, source, _)? = previousState, source == deviceID {
                 controlTransferGuard.reset()
             } else if case let .controlling(_, target, _)? = previousState, target == deviceID {
-                statusMessage = "Reconnecting to \(deviceName(deviceID)) — use Control-Option-Command-Escape to return"
-                reconnectStatusTasks[deviceID]?.cancel()
-                reconnectStatusTasks[deviceID] = Task { @MainActor [weak self] in
-                    try? await Task.sleep(for: .seconds(5))
-                    guard !Task.isCancelled, let self,
-                          !self.connectedDevices.contains(deviceID),
-                          case .idle = await self.coordinator?.currentState() else { return }
-                    self.controlTransferGuard.beginStop()
-                    self.controlTransferGuard.completeStop()
-                    self.statusMessage = "Connection lost — control returned to this Mac"
-                    self.connectionSnapshots[deviceID] = .init(
-                        health: .disconnected,
-                        transport: disconnectedTransport
-                    )
-                    self.reconnectStatusTasks.removeValue(forKey: deviceID)
-                }
+                controlTransferGuard.beginStop()
+                controlTransferGuard.completeStop()
+                statusMessage = "Connection lost — control returned to this Mac"
             }
         case let .control(source, envelope):
             await handleControl(envelope.message, from: source)

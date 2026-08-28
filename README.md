@@ -57,7 +57,12 @@ To join a different workspace later, open **General → Workspace**, choose **Le
 
 ## Control and reconnection
 
-Keyboard input, pointer buttons, dragging, scrolling, modifiers, and shortcuts follow the active Mac. When a connection is interrupted, UniSpace anchors the controller pointer and drops input rather than applying it to the wrong Mac. If the peer reconnects within five seconds, the remote session resumes; otherwise control safely returns locally. The emergency shortcut remains active while reconnecting.
+Keyboard input, pointer buttons, dragging, scrolling, modifiers, and shortcuts
+follow the active device. If the focused remote device disconnects, UniSpace
+immediately ends the active session, releases pointer suppression, and returns
+keyboard and pointer focus to the controller. A later reconnect restores device
+availability but never silently reclaims focus; move through the configured edge
+again to start a new session.
 
 ## Networking
 

@@ -568,7 +568,7 @@ final class ApplicationTests: XCTestCase {
         await coordinator.stop()
     }
 
-    func testControllerKeepsPointerSuppressedAndReactivatesAfterTransientDisconnect() async throws {
+    func testControllerImmediatelyReturnsFocusWhenActiveTargetDisconnects() async throws {
         let local = DeviceID()
         let remote = DeviceID()
         let capture = CaptureSpy()
@@ -590,60 +590,17 @@ final class ApplicationTests: XCTestCase {
 
         await coordinator.peerDisconnected(remote)
 
-        guard case let .controlling(_, target, _) = await coordinator.currentState() else {
-            return XCTFail("A transient network interruption must not return control locally")
-        }
-        XCTAssertEqual(target, remote)
-        XCTAssertTrue(capture.suppressed)
-
-        _ = await coordinator.handleCaptured(.pointerMove(
+        let state = await coordinator.currentState()
+        XCTAssertEqual(state, .idle)
+        XCTAssertFalse(capture.suppressed)
+        let disposition = await coordinator.handleCaptured(.pointerMove(
             deltaX: 20,
             deltaY: 0,
             absoluteX: 40,
             absoluteY: 20
         ))
-        try await Task.sleep(for: .milliseconds(20))
+        XCTAssertEqual(disposition, .ignored)
         XCTAssertTrue(transport.frames.isEmpty)
-
-        let resumed = await coordinator.peerConnected(remote)
-        XCTAssertTrue(resumed)
-        await coordinator.flushPendingInput()
-        guard case let .controlling(_, resumedTarget, _) = await coordinator.currentState() else {
-            return XCTFail("The controller must resume after the peer reconnects")
-        }
-        XCTAssertEqual(resumedTarget, remote)
-        XCTAssertTrue(capture.suppressed)
-        XCTAssertEqual(transport.controlMessages.filter(\.isActivation).count, 2)
-        XCTAssertEqual(transport.frames.map(\.event), [.flags(rawValue: 0)])
-        await coordinator.stop()
-    }
-
-    func testControllerReturnsLocallyAfterReconnectGraceExpires() async throws {
-        let local = DeviceID()
-        let remote = DeviceID()
-        let capture = CaptureSpy()
-        let coordinator = ControlSessionCoordinator(
-            localDeviceID: local,
-            workspaceID: WorkspaceID(),
-            capture: capture,
-            injector: InjectorSpy(),
-            transport: TransportSpy(),
-            reconnectGrace: .milliseconds(50)
-        )
-        _ = await coordinator.makeLocalController()
-        try await coordinator.activate(
-            target: remote,
-            displayID: DisplayID(),
-            entryEdge: .left,
-            normalizedPosition: 0.5
-        )
-
-        await coordinator.peerDisconnected(remote)
-        try await Task.sleep(for: .milliseconds(100))
-
-        let state = await coordinator.currentState()
-        XCTAssertEqual(state, .idle)
-        XCTAssertFalse(capture.suppressed)
     }
 
     func testCoordinatorCoalescesContinuousScrollWithoutLosingDistance() async throws {
@@ -824,39 +781,6 @@ final class ApplicationTests: XCTestCase {
         XCTAssertEqual(Array(capture.suppressionHistory.dropFirst(historyStart)), [true])
         XCTAssertTrue(capture.suppressed)
         await coordinator.stop()
-    }
-
-    func testEmergencyHotkeyReturnsControlDuringNetworkInterruption() async throws {
-        let local = DeviceID()
-        let remote = DeviceID()
-        let capture = CaptureSpy()
-        let coordinator = ControlSessionCoordinator(
-            localDeviceID: local,
-            workspaceID: WorkspaceID(),
-            capture: capture,
-            injector: InjectorSpy(),
-            transport: TransportSpy()
-        )
-        _ = await coordinator.makeLocalController()
-        try await coordinator.activate(
-            target: remote,
-            displayID: DisplayID(),
-            entryEdge: .left,
-            normalizedPosition: 0.5
-        )
-        await coordinator.peerDisconnected(remote)
-
-        _ = await coordinator.handleCaptured(.flags(rawValue: ControlSessionCoordinator.emergencyFlags))
-        let result = await coordinator.handleCaptured(.key(
-            code: ControlSessionCoordinator.emergencyKeyCode,
-            isDown: true,
-            isRepeat: false
-        ))
-        let finalState = await coordinator.currentState()
-
-        XCTAssertEqual(result, .emergencyStop)
-        XCTAssertEqual(finalState, .idle)
-        XCTAssertFalse(capture.suppressed)
     }
 
     func testEmergencyHotkeyReturnsControlLocallyAndReleasesPeer() async throws {
