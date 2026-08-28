@@ -279,6 +279,14 @@ final class ProtocolCoverageTests: XCTestCase {
             .key(usage: 0x04, isDown: true, isRepeat: false)
         )
         XCTAssertEqual(
+            PortableInputMapper.map(.key(code: 36, isDown: true, isRepeat: false)),
+            .key(usage: 0x28, isDown: true, isRepeat: false)
+        )
+        XCTAssertEqual(
+            PortableInputMapper.map(.key(code: 36, isDown: false, isRepeat: false)),
+            .key(usage: 0x28, isDown: false, isRepeat: false)
+        )
+        XCTAssertEqual(
             PortableInputMapper.map(.flags(rawValue: 0x001F_0000)),
             .modifiers([.shift, .control, .option, .command, .capsLock])
         )
