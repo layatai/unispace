@@ -61,6 +61,11 @@ final class AppModel: ObservableObject {
         if ProcessInfo.processInfo.arguments.contains("--ui-testing-onboarding") {
             return
         }
+        if ProcessInfo.processInfo.arguments.contains("--ui-testing-hosting") {
+            setupState = .hostingPairing
+            statusMessage = "Visible to nearby devices"
+            return
+        }
         if ProcessInfo.processInfo.arguments.contains("--ui-testing-configured") {
             let device = localDevice
             workspace = WorkspaceSnapshot(

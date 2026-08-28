@@ -7,6 +7,10 @@ import UniSpaceInfrastructure
 /// Everything the user sees before a workspace exists: the welcome screen,
 /// workspace discovery, and the two-sided pairing confirmation.
 struct SetupFlowView: View {
+    private static let macifierDownloadURL = URL(
+        string: "https://github.com/layatai/macifier-app/releases/latest"
+    )!
+
     @ObservedObject var model: AppModel
     @State private var directAddress = ""
 
@@ -250,15 +254,37 @@ struct SetupFlowView: View {
                 .controlSize(.large)
                 .padding(.bottom, 20)
 
-            Text("Waiting for another Mac")
+            Text("Waiting for another device")
                 .font(.title2.bold())
 
-            Text("On the other Mac, open UniSpace and choose Join Workspace.")
+            Text("Keep this screen open, then continue on the Mac or Windows PC you want to add.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
-                .frame(maxWidth: 380)
+                .frame(maxWidth: 480)
                 .padding(.top, 6)
+
+            HStack(alignment: .top, spacing: 12) {
+                pairingGuide(
+                    title: "Add another Mac",
+                    systemImage: "macbook",
+                    instructions: "Open UniSpace, then choose Join Workspace."
+                )
+
+                pairingGuide(
+                    title: "Add a Windows PC",
+                    systemImage: "pc",
+                    instructions: "Open Macifier, then choose UniSpace → Set up → Join workspace."
+                ) {
+                    Link(destination: Self.macifierDownloadURL) {
+                        Label("Download Macifier", systemImage: "arrow.up.right.square")
+                            .font(.callout.weight(.semibold))
+                    }
+                    .accessibilityIdentifier("download-macifier")
+                }
+            }
+            .frame(maxWidth: 560)
+            .padding(.top, 22)
 
             if let address = model.tailnetAddresses.first {
                 VStack(spacing: 7) {
@@ -281,7 +307,7 @@ struct SetupFlowView: View {
                 }
                 .card()
                 .frame(maxWidth: 380)
-                .padding(.top, 18)
+                .padding(.top, 14)
             } else {
                 Text("Tailscale was not detected. Nearby LAN pairing is still available.")
                     .font(.caption)
@@ -297,6 +323,38 @@ struct SetupFlowView: View {
             Spacer(minLength: 0)
         }
         .padding(36)
+    }
+
+    private func pairingGuide(
+        title: String,
+        systemImage: String,
+        instructions: String
+    ) -> some View {
+        pairingGuide(
+            title: title,
+            systemImage: systemImage,
+            instructions: instructions,
+            accessory: { EmptyView() }
+        )
+    }
+
+    private func pairingGuide(
+        title: String,
+        systemImage: String,
+        instructions: String,
+        @ViewBuilder accessory: () -> some View
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label(title, systemImage: systemImage)
+                .font(.headline)
+            Text(instructions)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            accessory()
+        }
+        .frame(maxWidth: .infinity, minHeight: 88, alignment: .topLeading)
+        .card(padding: 14)
     }
 
     /// A soft accent wash so the pre-workspace screens feel distinct from the
