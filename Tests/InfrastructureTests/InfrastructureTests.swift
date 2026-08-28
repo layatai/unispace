@@ -50,17 +50,81 @@ final class InfrastructureTests: XCTestCase {
                 .smartMagnify
             ].map { UInt32($0.rawValue) })
         )
+        XCTAssertTrue(Set(CGEventInputCapture.gestureEventTypes).isSubset(
+            of: Set(CGEventInputCapture.capturedEventTypes)
+        ))
         let gestureType = try XCTUnwrap(
-            CGEventType(rawValue: UInt32(NSEvent.EventType.magnify.rawValue))
+            CGEventType(rawValue: UInt32(NSEvent.EventType.gesture.rawValue))
         )
         let sourceEvent = try XCTUnwrap(CGEvent(source: nil))
         sourceEvent.type = gestureType
+        sourceEvent.setIntegerValueField(CGEventField(rawValue: 110)!, value: 8)
+        sourceEvent.setIntegerValueField(CGEventField(rawValue: 132)!, value: 2)
+        sourceEvent.setDoubleValueField(CGEventField(rawValue: 113)!, value: 0.125)
 
         let input = try XCTUnwrap(CGEventInputCapture.convert(type: gestureType, event: sourceEvent))
         guard case let .gesture(serializedEvent, portable) = input else {
             return XCTFail("Expected a serialized gesture event")
         }
-        XCTAssertEqual(portable?.kind, .magnify)
+        XCTAssertEqual(
+            portable,
+            PortableGesture(kind: .magnify, phase: .changed, value: 0.125)
+        )
+
+        let swipe = try XCTUnwrap(CGEvent(source: nil))
+        swipe.type = gestureType
+        swipe.setIntegerValueField(CGEventField(rawValue: 110)!, value: 16)
+        swipe.setIntegerValueField(CGEventField(rawValue: 132)!, value: 4)
+        swipe.setIntegerValueField(CGEventField(rawValue: 134)!, value: 0x04)
+        XCTAssertEqual(
+            CGEventInputCapture.portableGesture(type: gestureType, event: swipe),
+            PortableGesture(kind: .swipe, phase: .ended, deltaX: 1)
+        )
+
+        let rotation = try XCTUnwrap(CGEvent(source: nil))
+        rotation.type = gestureType
+        rotation.setIntegerValueField(CGEventField(rawValue: 110)!, value: 5)
+        rotation.setIntegerValueField(CGEventField(rawValue: 132)!, value: 1)
+        rotation.setDoubleValueField(CGEventField(rawValue: 114)!, value: 12.5)
+        XCTAssertEqual(
+            CGEventInputCapture.portableGesture(type: gestureType, event: rotation),
+            PortableGesture(kind: .rotate, phase: .began, value: 12.5)
+        )
+
+        let dockType = try XCTUnwrap(CGEventType(rawValue: 30))
+        let missionControl = try XCTUnwrap(CGEvent(source: nil))
+        missionControl.type = dockType
+        missionControl.setIntegerValueField(CGEventField(rawValue: 110)!, value: 23)
+        missionControl.setIntegerValueField(CGEventField(rawValue: 123)!, value: 2)
+        missionControl.setIntegerValueField(CGEventField(rawValue: 132)!, value: 2)
+        missionControl.setDoubleValueField(CGEventField(rawValue: 124)!, value: 0.75)
+        XCTAssertEqual(
+            CGEventInputCapture.portableGesture(type: dockType, event: missionControl),
+            PortableGesture(kind: .workspaceSwipe, phase: .changed, deltaY: 1)
+        )
+
+        let appExpose = try XCTUnwrap(missionControl.copy())
+        appExpose.setDoubleValueField(CGEventField(rawValue: 124)!, value: -0.75)
+        appExpose.setIntegerValueField(CGEventField(rawValue: 132)!, value: 4)
+        XCTAssertEqual(
+            CGEventInputCapture.portableGesture(type: dockType, event: appExpose),
+            PortableGesture(kind: .workspaceSwipe, phase: .ended, deltaY: -1)
+        )
+
+        let showDesktop = try XCTUnwrap(missionControl.copy())
+        showDesktop.setIntegerValueField(CGEventField(rawValue: 123)!, value: 3)
+        showDesktop.setDoubleValueField(CGEventField(rawValue: 124)!, value: 0.75)
+        XCTAssertEqual(
+            CGEventInputCapture.portableGesture(type: dockType, event: showDesktop),
+            PortableGesture(kind: .desktopPinch, phase: .changed, value: 1)
+        )
+
+        let launchpad = try XCTUnwrap(showDesktop.copy())
+        launchpad.setDoubleValueField(CGEventField(rawValue: 124)!, value: -0.75)
+        XCTAssertEqual(
+            CGEventInputCapture.portableGesture(type: dockType, event: launchpad),
+            PortableGesture(kind: .desktopPinch, phase: .changed, value: -1)
+        )
 
         let targetPosition = CGPoint(x: 320, y: 240)
         let rebuilt = try XCTUnwrap(
@@ -68,6 +132,17 @@ final class InfrastructureTests: XCTestCase {
         )
         XCTAssertEqual(rebuilt.type.rawValue, gestureType.rawValue)
         XCTAssertEqual(rebuilt.location, targetPosition)
+        XCTAssertEqual(rebuilt.getIntegerValueField(CGEventField(rawValue: 110)!), 8)
+        XCTAssertEqual(rebuilt.getDoubleValueField(CGEventField(rawValue: 113)!), 0.125)
+
+        let capture = CGEventInputCapture(
+            mouseAssociationHandler: { _ in },
+            handler: { event in
+                if case .gesture = event { return true }
+                return false
+            }
+        )
+        XCTAssertTrue(capture.handle(type: gestureType, event: sourceEvent))
     }
 
     func testInjectedCursorCannotAccumulateBeyondAHorizontalDisplayEdge() {

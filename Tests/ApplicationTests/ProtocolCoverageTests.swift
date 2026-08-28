@@ -191,6 +191,16 @@ final class ProtocolCoverageTests: XCTestCase {
                 deltaX: 1,
                 deltaY: 0
             )),
+            .gesture(PortableGesture(
+                kind: .workspaceSwipe,
+                phase: .changed,
+                deltaY: 1
+            )),
+            .gesture(PortableGesture(
+                kind: .desktopPinch,
+                phase: .changed,
+                value: 1
+            )),
         ]
 
         for (sequence, event) in events.enumerated() {

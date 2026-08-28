@@ -32,6 +32,8 @@ public enum PortableGestureKind: UInt8, Codable, CaseIterable, Sendable {
     case smartMagnify = 4
     case begin = 5
     case end = 6
+    case workspaceSwipe = 7
+    case desktopPinch = 8
 }
 
 public enum PortableGesturePhase: UInt8, Codable, CaseIterable, Sendable {
