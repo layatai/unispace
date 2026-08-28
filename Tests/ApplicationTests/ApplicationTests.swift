@@ -31,6 +31,131 @@ final class ApplicationTests: XCTestCase {
         XCTAssertEqual(transition?.normalizedPosition, 0.25)
     }
 
+    func testEdgeRouterBypassesOfflineDisplayAndTargetsNextAvailableDevice() throws {
+        let localID = DeviceID()
+        let offlineID = DeviceID()
+        let liveID = DeviceID()
+        let localDisplay = display(device: localID, frame: .init(x: 0, y: 0, width: 100, height: 100))
+        let offlineDisplay = display(device: offlineID, frame: .init(x: 0, y: 0, width: 100, height: 100))
+        let liveDisplay = display(device: liveID, frame: .init(x: 0, y: 0, width: 100, height: 100))
+        var topology = DisplayTopology()
+        topology.connect(
+            .init(displayID: localDisplay.id, edge: .right),
+            to: .init(displayID: offlineDisplay.id, edge: .left)
+        )
+        topology.connect(
+            .init(displayID: offlineDisplay.id, edge: .right),
+            to: .init(displayID: liveDisplay.id, edge: .left)
+        )
+        let devices = [
+            DeviceDescriptor(id: localID, name: "Local", displays: [localDisplay]),
+            DeviceDescriptor(id: offlineID, name: "Offline", displays: [offlineDisplay]),
+            DeviceDescriptor(id: liveID, name: "Live", displays: [liveDisplay])
+        ]
+
+        let transition = try XCTUnwrap(EdgeRouter.transition(
+            x: 100,
+            y: 25,
+            localDeviceID: localID,
+            devices: devices,
+            topology: topology,
+            availableDeviceIDs: [liveID]
+        ))
+
+        XCTAssertEqual(transition.sourceDisplayID, localDisplay.id)
+        XCTAssertEqual(transition.sourceEdge, .right)
+        XCTAssertEqual(transition.targetDeviceID, liveID)
+        XCTAssertEqual(transition.targetDisplayID, liveDisplay.id)
+        XCTAssertEqual(transition.entryEdge, .left)
+        XCTAssertEqual(transition.normalizedPosition, 0.25)
+
+        let overshotTransition = try XCTUnwrap(EdgeRouter.transition(
+            x: 112,
+            y: 25,
+            localDeviceID: localID,
+            devices: devices,
+            topology: topology,
+            availableDeviceIDs: [liveID]
+        ))
+        XCTAssertEqual(overshotTransition.targetDeviceID, liveID)
+        XCTAssertEqual(overshotTransition.targetDisplayID, liveDisplay.id)
+
+        let returnDestination = try XCTUnwrap(EdgeRouter.reachableDestination(
+            from: liveDisplay.id,
+            edge: .left,
+            devices: devices,
+            topology: topology,
+            availableDeviceIDs: [localID]
+        ))
+        XCTAssertEqual(returnDestination.displayID, localDisplay.id)
+        XCTAssertEqual(returnDestination.edge, .right)
+    }
+
+    func testEdgeRouterDoesNotEnterOfflineChainWithoutAvailableDestination() {
+        let localID = DeviceID()
+        let offlineID = DeviceID()
+        let localDisplay = display(device: localID, frame: .init(x: 0, y: 0, width: 100, height: 100))
+        let offlineDisplay = display(device: offlineID, frame: .init(x: 0, y: 0, width: 100, height: 100))
+        var topology = DisplayTopology()
+        topology.connect(
+            .init(displayID: localDisplay.id, edge: .right),
+            to: .init(displayID: offlineDisplay.id, edge: .left)
+        )
+
+        XCTAssertNil(EdgeRouter.transition(
+            x: 100,
+            y: 50,
+            localDeviceID: localID,
+            devices: [
+                .init(id: localID, name: "Local", displays: [localDisplay]),
+                .init(id: offlineID, name: "Offline", displays: [offlineDisplay])
+            ],
+            topology: topology,
+            availableDeviceIDs: []
+        ))
+    }
+
+    func testReachableDestinationStopsOnMalformedOfflineCycle() {
+        let localID = DeviceID()
+        let firstOfflineID = DeviceID()
+        let secondOfflineID = DeviceID()
+        let localDisplay = display(device: localID, frame: .init(x: 0, y: 0, width: 100, height: 100))
+        let firstOfflineDisplay = display(
+            device: firstOfflineID,
+            frame: .init(x: 0, y: 0, width: 100, height: 100)
+        )
+        let secondOfflineDisplay = display(
+            device: secondOfflineID,
+            frame: .init(x: 0, y: 0, width: 100, height: 100)
+        )
+        let topology = DisplayTopology(links: [
+            .init(
+                source: .init(displayID: localDisplay.id, edge: .right),
+                destination: .init(displayID: firstOfflineDisplay.id, edge: .left)
+            ),
+            .init(
+                source: .init(displayID: firstOfflineDisplay.id, edge: .right),
+                destination: .init(displayID: secondOfflineDisplay.id, edge: .left)
+            ),
+            .init(
+                source: .init(displayID: secondOfflineDisplay.id, edge: .right),
+                destination: .init(displayID: firstOfflineDisplay.id, edge: .left)
+            )
+        ])
+
+        XCTAssertNil(EdgeRouter.reachableDestination(
+            from: localDisplay.id,
+            edge: .right,
+            devices: [
+                .init(id: localID, name: "Local", displays: [localDisplay]),
+                .init(id: firstOfflineID, name: "Offline 1", displays: [firstOfflineDisplay]),
+                .init(id: secondOfflineID, name: "Offline 2", displays: [secondOfflineDisplay])
+            ],
+            topology: topology,
+            availableDeviceIDs: []
+        ))
+    }
+
     func testEntryEdgeHysteresisRequiresInwardMovementBeforeReturningThroughEntryEdge() {
         let deviceID = DeviceID()
         let source = display(device: deviceID, frame: .init(x: 0, y: 0, width: 100, height: 100))

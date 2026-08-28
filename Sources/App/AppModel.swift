@@ -510,9 +510,9 @@ final class AppModel: ObservableObject {
                     y: y,
                     localDeviceID: localDeviceID,
                     devices: workspace.devices,
-                    topology: workspace.topology
+                    topology: workspace.topology,
+                    availableDeviceIDs: connectedDevices
                ), controlTransferGuard.allows(transition),
-               connectedDevices.contains(transition.targetDeviceID),
                let sourceDisplay = workspace.devices.flatMap(\.displays).first(where: {
                    $0.id == transition.sourceDisplayID
                }),
@@ -760,7 +760,13 @@ final class AppModel: ObservableObject {
               case let .controlling(_, activeTarget, activeSession) = await coordinator.currentState(),
               activeTarget == source, activeSession == sessionID,
               let workspace,
-              let destination = workspace.topology.destination(from: displayID, edge: edge),
+              let destination = EdgeRouter.reachableDestination(
+                  from: displayID,
+                  edge: edge,
+                  devices: workspace.devices,
+                  topology: workspace.topology,
+                  availableDeviceIDs: connectedDevices.union([localDeviceID])
+              ),
               let targetDisplay = workspace.devices.flatMap(\.displays).first(where: { $0.id == destination.displayID }) else { return }
         await coordinator.deactivateCurrentSession()
         if targetDisplay.deviceID == localDeviceID {
