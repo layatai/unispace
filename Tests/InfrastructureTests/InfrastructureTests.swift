@@ -57,9 +57,10 @@ final class InfrastructureTests: XCTestCase {
         sourceEvent.type = gestureType
 
         let input = try XCTUnwrap(CGEventInputCapture.convert(type: gestureType, event: sourceEvent))
-        guard case let .gesture(serializedEvent) = input else {
+        guard case let .gesture(serializedEvent, portable) = input else {
             return XCTFail("Expected a serialized gesture event")
         }
+        XCTAssertEqual(portable?.kind, .magnify)
 
         let targetPosition = CGPoint(x: 320, y: 240)
         let rebuilt = try XCTUnwrap(

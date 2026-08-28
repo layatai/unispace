@@ -96,7 +96,13 @@ final class AppModel: ObservableObject {
             name: Host.current().localizedName ?? "Mac",
             displays: displayCatalog.currentDisplays(for: localDeviceID),
             peerAddresses: tailnetAddressProvider.currentAddresses(),
-            capabilities: [.publicTrackpadGestures, .crossPlatformInputV2, .quicStreamV2, .udpPointerV2],
+            capabilities: [
+                .publicTrackpadGestures,
+                .portableTrackpadGestures,
+                .crossPlatformInputV2,
+                .quicStreamV2,
+                .udpPointerV2,
+            ],
             platform: .macOS
         )
     }

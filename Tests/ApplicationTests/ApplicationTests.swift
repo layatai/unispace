@@ -732,6 +732,37 @@ final class ApplicationTests: XCTestCase {
         await coordinator.stop()
     }
 
+    func testCoordinatorForwardsNormalizedGesturesToPortablePeer() async throws {
+        let local = DeviceID()
+        let remote = DeviceID()
+        let transport = TransportSpy()
+        let coordinator = ControlSessionCoordinator(
+            localDeviceID: local,
+            workspaceID: WorkspaceID(),
+            capture: CaptureSpy(),
+            injector: InjectorSpy(),
+            transport: transport
+        )
+        _ = await coordinator.makeLocalController()
+        try await coordinator.activate(
+            target: remote,
+            displayID: DisplayID(),
+            entryEdge: .left,
+            normalizedPosition: 0.5,
+            targetCapabilities: [.portableTrackpadGestures]
+        )
+        let gesture = InputEvent.gesture(
+            serializedEvent: Data([1, 2, 3]),
+            portable: PortableGesture(kind: .magnify, phase: .changed, value: 0.1)
+        )
+
+        _ = await coordinator.handleCaptured(gesture)
+        await coordinator.flushPendingInput()
+
+        XCTAssertEqual(transport.frames.map(\.event), [gesture])
+        await coordinator.stop()
+    }
+
     func testControllerDoesNotReturnLocallyAfterSingleInputSendFailure() async throws {
         let local = DeviceID()
         let remote = DeviceID()

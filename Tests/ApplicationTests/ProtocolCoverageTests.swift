@@ -70,7 +70,10 @@ final class ProtocolCoverageTests: XCTestCase {
             .mouseButton(button: .other, isDown: false, clickCount: 1),
             .scroll(deltaX: 1.5, deltaY: -3.25, isContinuous: true),
             .scroll(deltaX: 0, deltaY: 3, isContinuous: false),
-            .gesture(serializedEvent: Data([0, 1, 2, 255])),
+            .gesture(
+                serializedEvent: Data([0, 1, 2, 255]),
+                portable: PortableGesture(kind: .magnify, phase: .changed, value: 0.125)
+            ),
             .key(code: 53, isDown: true, isRepeat: false),
             .key(code: 12, isDown: false, isRepeat: true),
             .flags(rawValue: UInt64.max)
@@ -181,7 +184,13 @@ final class ProtocolCoverageTests: XCTestCase {
             .mouseButton(button: .other, isDown: false, clickCount: 1),
             .scroll(deltaX: 1.5, deltaY: -3.25, isContinuous: true),
             .key(usage: 0x04, isDown: true, isRepeat: false),
-            .modifiers([.shift, .command, .capsLock])
+            .modifiers([.shift, .command, .capsLock]),
+            .gesture(PortableGesture(
+                kind: .swipe,
+                phase: .ended,
+                deltaX: 1,
+                deltaY: 0
+            )),
         ]
 
         for (sequence, event) in events.enumerated() {
@@ -286,6 +295,34 @@ final class ProtocolCoverageTests: XCTestCase {
             PortableInputMapper.map(.key(code: 36, isDown: false, isRepeat: false)),
             .key(usage: 0x28, isDown: false, isRepeat: false)
         )
+        let portableGesture = PortableGesture(
+            kind: .magnify,
+            phase: .changed,
+            value: 0.125
+        )
+        XCTAssertEqual(
+            PortableInputMapper.map(.gesture(serializedEvent: Data([1]), portable: portableGesture)),
+            .gesture(portableGesture)
+        )
+        let specialKeyMappings: [(keyCode: UInt16, usage: UInt16)] = [
+            (10, 0x64),  // ISO Section -> Keyboard Non-US Backslash
+            (64, 0x6C),  // F17
+            (79, 0x6D),  // F18
+            (80, 0x6E),  // F19
+            (90, 0x6F),  // F20
+            (93, 0x89),  // JIS Yen -> International3
+            (94, 0x87),  // JIS Underscore -> International1
+            (95, 0x85),  // JIS Keypad Comma
+            (102, 0x91), // JIS Eisu -> LANG2
+            (104, 0x90), // JIS Kana -> LANG1
+            (110, 0x65), // Contextual Menu -> Application
+        ]
+        for mapping in specialKeyMappings {
+            XCTAssertEqual(
+                PortableInputMapper.map(.key(code: mapping.keyCode, isDown: true, isRepeat: false)),
+                .key(usage: mapping.usage, isDown: true, isRepeat: false)
+            )
+        }
         XCTAssertEqual(
             PortableInputMapper.map(.flags(rawValue: 0x001F_0000)),
             .modifiers([.shift, .control, .option, .command, .capsLock])
@@ -367,6 +404,30 @@ final class ProtocolCoverageTests: XCTestCase {
         portableInput[5 + 90] = 255
         let (_, badEventPayload) = try WireFrameCodec.decode(portableInput)
         XCTAssertThrowsError(try WireFrameCodec.decodePortableInput(badEventPayload)) { error in
+            XCTAssertEqual(error as? ControlProtocolError, .malformedFrame)
+        }
+
+        portableInput = try WireFrameCodec.encodePortableInput(
+            makePortableInputFrame(
+                sequence: 4,
+                event: .gesture(PortableGesture(kind: .swipe, phase: .changed, deltaX: 1))
+            )
+        )
+        portableInput[5 + 91] = 255
+        let (_, badGestureKindPayload) = try WireFrameCodec.decode(portableInput)
+        XCTAssertThrowsError(try WireFrameCodec.decodePortableInput(badGestureKindPayload)) { error in
+            XCTAssertEqual(error as? ControlProtocolError, .malformedFrame)
+        }
+
+        portableInput = try WireFrameCodec.encodePortableInput(
+            makePortableInputFrame(
+                sequence: 5,
+                event: .gesture(PortableGesture(kind: .swipe, phase: .changed, deltaX: 1))
+            )
+        )
+        portableInput[5 + 92] = 255
+        let (_, badGesturePhasePayload) = try WireFrameCodec.decode(portableInput)
+        XCTAssertThrowsError(try WireFrameCodec.decodePortableInput(badGesturePhasePayload)) { error in
             XCTAssertEqual(error as? ControlProtocolError, .malformedFrame)
         }
 

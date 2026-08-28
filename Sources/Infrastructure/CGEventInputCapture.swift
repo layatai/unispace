@@ -223,8 +223,48 @@ public final class CGEventInputCapture: InputCapture, @unchecked Sendable {
         default:
             guard gestureEventTypes.contains(where: { $0.rawValue == type.rawValue }),
                   let serializedEvent = event.data else { return nil }
-            return .gesture(serializedEvent: serializedEvent as Data)
+            return .gesture(
+                serializedEvent: serializedEvent as Data,
+                portable: portableGesture(event: event)
+            )
         }
+    }
+
+    static func portableGesture(event: CGEvent) -> PortableGesture? {
+        guard let appKitEvent = NSEvent(cgEvent: event) else { return nil }
+        let phase = portablePhase(appKitEvent.phase)
+        switch appKitEvent.type {
+        case .magnify:
+            return PortableGesture(kind: .magnify, phase: phase, value: appKitEvent.magnification)
+        case .swipe:
+            return PortableGesture(
+                kind: .swipe,
+                phase: phase,
+                deltaX: appKitEvent.deltaX,
+                deltaY: appKitEvent.deltaY
+            )
+        case .rotate:
+            return PortableGesture(kind: .rotate, phase: phase, value: Double(appKitEvent.rotation))
+        case .smartMagnify:
+            return PortableGesture(kind: .smartMagnify, phase: phase)
+        case .beginGesture:
+            return PortableGesture(kind: .begin, phase: .began)
+        case .endGesture:
+            return PortableGesture(kind: .end, phase: .ended)
+        case .gesture:
+            return PortableGesture(kind: .other, phase: phase)
+        default:
+            return nil
+        }
+    }
+
+    private static func portablePhase(_ phase: NSEvent.Phase) -> PortableGesturePhase {
+        if phase.contains(.cancelled) { return .cancelled }
+        if phase.contains(.ended) { return .ended }
+        if phase.contains(.began) { return .began }
+        if phase.contains(.changed) || phase.contains(.stationary) { return .changed }
+        if phase.contains(.mayBegin) { return .mayBegin }
+        return .none
     }
 }
 

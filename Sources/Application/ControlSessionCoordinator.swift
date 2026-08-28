@@ -165,9 +165,12 @@ public actor ControlSessionCoordinator {
 
     public func handleCaptured(_ event: InputEvent) async -> CapturedInputDisposition {
         guard case .controlling = state else { return .ignored }
-        if case .gesture = event,
-           activeControlRoute?.targetCapabilities.contains(.publicTrackpadGestures) != true {
-            return .forwarded
+        if case .gesture = event {
+            let capabilities = activeControlRoute?.targetCapabilities ?? []
+            guard capabilities.contains(.publicTrackpadGestures)
+                    || capabilities.contains(.portableTrackpadGestures) else {
+                return .forwarded
+            }
         }
         if case let .flags(rawValue) = event {
             currentFlags = rawValue
