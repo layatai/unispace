@@ -21,6 +21,8 @@
   <a href="#quick-start">Quick start</a>
   ·
   <a href="#networking">Networking</a>
+  ·
+  <a href="Documentation/Protocol/portable-gestures.md">Gesture support</a>
 </p>
 
 <p align="center">
@@ -81,7 +83,16 @@ Allow these ports through any host or tailnet firewall between participating dev
 
 ## Current scope
 
-UniSpace forwards standard pointer movement and buttons, scrolling, keyboard keys, modifiers, and shortcuts. When both Macs advertise gesture support, it also forwards public macOS trackpad gestures such as pinch, rotate, swipe, and smart magnify; Windows is receiver-only and does not receive gestures. Mixed versions keep normal input working without sending incompatible frames. UniSpace intentionally does not provide screen sharing, clipboard or file transfer, Windows-to-Mac control, an internet relay, Touch ID or power-button forwarding, login/UAC secure-desktop control, Secure Input bypasses, or OS-reserved Mission Control and desktop gestures.
+UniSpace forwards standard pointer movement and buttons, scrolling, keyboard keys,
+modifiers, shortcuts, and supported multi-finger trackpad gestures. Mac peers replay
+the original native gesture. Windows peers receive normalized portable gestures for
+pinch zoom, navigation, Mission Control/App Exposé, workspace switching, smart zoom,
+Launchpad, and Show Desktop. See the [gesture interoperability contract](Documentation/Protocol/portable-gestures.md)
+for the exact mappings and compatibility rules. Mixed versions keep normal input
+working without sending incompatible frames. UniSpace intentionally does not provide
+screen sharing, clipboard or file transfer, Windows-to-Mac control, an internet relay,
+Touch ID or power-button forwarding, login/UAC secure-desktop control, or Secure Input
+bypasses.
 
 <details>
 <summary><strong>Build and test from source</strong></summary>
