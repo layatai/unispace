@@ -29,6 +29,11 @@ public actor ClipboardCoordinator {
         self.limits = limits
     }
 
+    deinit {
+        transportTask?.cancel()
+        clipboardTask?.cancel()
+    }
+
     public func start(
         localDevice: DeviceDescriptor,
         workspace: WorkspaceSnapshot,
@@ -48,6 +53,7 @@ public actor ClipboardCoordinator {
         engine = ClipboardSyncEngine(localDeviceID: localDevice.id, limits: limits)
         started = true
 
+        startTransportObservationIfNeeded()
         do {
             try await transport.start(localDevice: localDevice, workspace: workspace, key: key)
         } catch {
@@ -58,21 +64,12 @@ public actor ClipboardCoordinator {
             throw error
         }
 
-        let transport = self.transport
-        transportTask = Task { [weak self, transport] in
-            for await event in transport.events() {
-                guard !Task.isCancelled else { return }
-                await self?.handle(event)
-            }
-        }
         if sharingEnabled { await startClipboardObservation() }
     }
 
     public func stop() async {
         started = false
-        transportTask?.cancel()
         clipboardTask?.cancel()
-        transportTask = nil
         clipboardTask = nil
         await clipboard.stop()
         connectedPeers.removeAll()
@@ -82,6 +79,17 @@ public actor ClipboardCoordinator {
         localDevice = nil
         workspace = nil
         await transport.stop()
+    }
+
+    private func startTransportObservationIfNeeded() {
+        guard transportTask == nil else { return }
+        let transport = self.transport
+        transportTask = Task { [weak self, transport] in
+            for await event in transport.events() {
+                guard !Task.isCancelled else { return }
+                await self?.handle(event)
+            }
+        }
     }
 
     public func setSharingEnabled(_ enabled: Bool) async {
@@ -152,6 +160,7 @@ public actor ClipboardCoordinator {
     }
 
     private func handle(_ event: ClipboardTransportEvent) async {
+        guard started else { return }
         switch event {
         case let .connected(deviceID):
             connectedPeers.insert(deviceID)

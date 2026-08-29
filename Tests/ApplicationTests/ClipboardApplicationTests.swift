@@ -195,6 +195,22 @@ final class ClipboardApplicationTests: XCTestCase {
         await fixture.coordinator.stop()
     }
 
+    @MainActor
+    func testCoordinatorKeepsSingleTransportSubscriptionAcrossRestart() async throws {
+        let fixture = ClipboardTestFixture()
+        try await fixture.start()
+        await fixture.coordinator.stop()
+        try await fixture.start()
+
+        XCTAssertEqual(fixture.transport.eventSubscriptionCount, 1)
+        fixture.transport.emit(.connected(fixture.remote.id))
+        let connected = await eventually {
+            await fixture.coordinator.connectedDeviceIDs().contains(fixture.remote.id)
+        }
+        XCTAssertTrue(connected)
+        await fixture.coordinator.stop()
+    }
+
     private func makePayload(
         origin: DeviceID,
         revision: UInt64,
@@ -265,6 +281,7 @@ private final class ClipboardTransportSpy: ClipboardTransport, @unchecked Sendab
     private var attempts = 0
     private var sent: [ClipboardEnvelope] = []
     private var stops = 0
+    private var eventSubscriptions = 0
     var failuresRemaining = 0
     var startError: Error?
 
@@ -277,13 +294,17 @@ private final class ClipboardTransportSpy: ClipboardTransport, @unchecked Sendab
     var sendAttemptCount: Int { lock.withLock { attempts } }
     var sentEnvelopes: [ClipboardEnvelope] { lock.withLock { sent } }
     var stopCount: Int { lock.withLock { stops } }
+    var eventSubscriptionCount: Int { lock.withLock { eventSubscriptions } }
 
     func start(localDevice: DeviceDescriptor, workspace: WorkspaceSnapshot, key: Data) async throws {
         if let startError { throw startError }
     }
 
     func stop() async { lock.withLock { stops += 1 } }
-    func events() -> AsyncStream<ClipboardTransportEvent> { stream }
+    func events() -> AsyncStream<ClipboardTransportEvent> {
+        lock.withLock { eventSubscriptions += 1 }
+        return stream
+    }
 
     func send(_ envelope: ClipboardEnvelope, to deviceID: DeviceID) async throws {
         let shouldFail = lock.withLock { () -> Bool in
