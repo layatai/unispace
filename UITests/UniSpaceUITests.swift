@@ -49,6 +49,33 @@ final class UniSpaceUITests: XCTestCase {
     }
 
     @MainActor
+    func testStatusMenuContinuityOpensInConsolidatedWindow() {
+        let app = launchApp(mode: "--ui-testing-configured")
+
+        openStatusMenuItem("Continuity…", in: app)
+
+        let mainWindow = app.windows["UniSpace"]
+        XCTAssertTrue(mainWindow.waitForExistence(timeout: 5))
+        XCTAssertTrue(mainWindow.switches["clipboard-sharing-toggle"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.windows["UniSpace Continuity"].exists)
+        app.terminate()
+    }
+
+    @MainActor
+    func testStatusMenuFileTransfersOpensInConsolidatedWindow() {
+        let app = launchApp(mode: "--ui-testing-configured")
+
+        openStatusMenuItem("File Transfers…", in: app)
+
+        let mainWindow = app.windows["UniSpace"]
+        XCTAssertTrue(mainWindow.waitForExistence(timeout: 5))
+        dismissSheetIfPresent("File Transfer", in: app)
+        XCTAssertTrue(mainWindow.buttons["send-files"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.windows["UniSpace Transfers"].exists)
+        app.terminate()
+    }
+
+    @MainActor
     func testJoinWorkspaceOffersTailscaleAddressEntry() {
         let app = launchApp(mode: "--ui-testing-onboarding")
 
@@ -56,6 +83,23 @@ final class UniSpaceUITests: XCTestCase {
 
         XCTAssertTrue(app.textFields["tailscale-address"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["Connect through Tailscale"].exists)
+        app.terminate()
+    }
+
+    @MainActor
+    func testHostingGuideOffersMacAndWindowsSetupWithMacifierDownload() {
+        let app = launchApp(mode: "--ui-testing-hosting")
+
+        XCTAssertTrue(app.staticTexts["Waiting for another device"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Add another Mac"].exists)
+        XCTAssertTrue(app.staticTexts["Add a Windows PC"].exists)
+        let downloadLink = app.descendants(matching: .any)["download-macifier"]
+        XCTAssertTrue(downloadLink.exists)
+        XCTAssertTrue(downloadLink.isHittable)
+        let screenshot = XCTAttachment(screenshot: app.windows["UniSpace"].screenshot())
+        screenshot.name = "Mac and Windows pairing guide"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
         app.terminate()
     }
 
@@ -68,9 +112,46 @@ final class UniSpaceUITests: XCTestCase {
     }
 
     @MainActor
+    func testConfiguredWorkspaceSurfacesContinuityAndTransfersInSidebar() {
+        let app = launchApp(mode: "--ui-testing-configured")
+
+        let continuity = app.staticTexts["section-continuity"]
+        XCTAssertTrue(continuity.waitForExistence(timeout: 5))
+        continuity.click()
+        XCTAssertTrue(app.switches["clipboard-sharing-toggle"].waitForExistence(timeout: 5))
+        dismissSheetIfPresent("Clipboard sharing unavailable", in: app)
+
+        let transfers = app.staticTexts["section-transfers"]
+        XCTAssertTrue(transfers.waitForExistence(timeout: 5))
+        transfers.click()
+        dismissSheetIfPresent("File Transfer", in: app)
+        XCTAssertTrue(app.buttons["send-files"].waitForExistence(timeout: 5))
+        app.terminate()
+    }
+
+    @MainActor
+    func testConfiguredWorkspaceCardsFillContentWidth() {
+        let app = launchApp(mode: "--ui-testing-configured")
+
+        let launchAtLoginCard = app.switches["launch-at-login"]
+        let leaveWorkspaceButton = app.buttons["leave-workspace"]
+        XCTAssertTrue(launchAtLoginCard.waitForExistence(timeout: 5))
+        XCTAssertTrue(leaveWorkspaceButton.waitForExistence(timeout: 5))
+        let expectedTrailingEdge = leaveWorkspaceButton.frame.maxX
+        assertTrailingEdge(of: launchAtLoginCard, equals: expectedTrailingEdge)
+
+        app.staticTexts["section-continuity"].click()
+        let sharingCard = app.switches["clipboard-sharing-toggle"]
+        XCTAssertTrue(sharingCard.waitForExistence(timeout: 5))
+        dismissSheetIfPresent("Clipboard sharing unavailable", in: app)
+        assertTrailingEdge(of: sharingCard, equals: expectedTrailingEdge)
+        app.terminate()
+    }
+
+    @MainActor
     private func launchApp(mode: String) -> XCUIApplication {
         let app = XCUIApplication()
-        app.launchArguments = [mode]
+        app.launchArguments = [mode, "-ApplePersistenceIgnoreState", "YES"]
         app.launch()
         openMainWindowIfNeeded(in: app)
         return app
@@ -80,10 +161,34 @@ final class UniSpaceUITests: XCTestCase {
     private func openMainWindowIfNeeded(in app: XCUIApplication) {
         guard !app.windows["UniSpace"].waitForExistence(timeout: 1) else { return }
 
+        openStatusMenuItem("Open UniSpace…", in: app)
+        XCTAssertTrue(app.windows["UniSpace"].waitForExistence(timeout: 5))
+    }
+
+    @MainActor
+    private func openStatusMenuItem(_ title: String, in app: XCUIApplication) {
         let statusItem = app.statusItems.firstMatch
         XCTAssertTrue(statusItem.waitForExistence(timeout: 5))
         statusItem.click()
-        app.menuItems["Open UniSpace…"].click()
-        XCTAssertTrue(app.windows["UniSpace"].waitForExistence(timeout: 5))
+        let menuItem = app.menuItems[title]
+        XCTAssertTrue(menuItem.waitForExistence(timeout: 5))
+        menuItem.click()
+    }
+
+    @MainActor
+    private func dismissSheetIfPresent(_ title: String, in app: XCUIApplication) {
+        let sheet = app.sheets.firstMatch
+        if sheet.waitForExistence(timeout: 1), sheet.staticTexts[title].exists {
+            sheet.buttons["OK"].click()
+        }
+    }
+
+    private func assertTrailingEdge(
+        of element: XCUIElement,
+        equals expected: CGFloat,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        XCTAssertEqual(element.frame.maxX, expected, accuracy: 1, file: file, line: line)
     }
 }

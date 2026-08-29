@@ -31,6 +31,131 @@ final class ApplicationTests: XCTestCase {
         XCTAssertEqual(transition?.normalizedPosition, 0.25)
     }
 
+    func testEdgeRouterBypassesOfflineDisplayAndTargetsNextAvailableDevice() throws {
+        let localID = DeviceID()
+        let offlineID = DeviceID()
+        let liveID = DeviceID()
+        let localDisplay = display(device: localID, frame: .init(x: 0, y: 0, width: 100, height: 100))
+        let offlineDisplay = display(device: offlineID, frame: .init(x: 0, y: 0, width: 100, height: 100))
+        let liveDisplay = display(device: liveID, frame: .init(x: 0, y: 0, width: 100, height: 100))
+        var topology = DisplayTopology()
+        topology.connect(
+            .init(displayID: localDisplay.id, edge: .right),
+            to: .init(displayID: offlineDisplay.id, edge: .left)
+        )
+        topology.connect(
+            .init(displayID: offlineDisplay.id, edge: .right),
+            to: .init(displayID: liveDisplay.id, edge: .left)
+        )
+        let devices = [
+            DeviceDescriptor(id: localID, name: "Local", displays: [localDisplay]),
+            DeviceDescriptor(id: offlineID, name: "Offline", displays: [offlineDisplay]),
+            DeviceDescriptor(id: liveID, name: "Live", displays: [liveDisplay])
+        ]
+
+        let transition = try XCTUnwrap(EdgeRouter.transition(
+            x: 100,
+            y: 25,
+            localDeviceID: localID,
+            devices: devices,
+            topology: topology,
+            availableDeviceIDs: [liveID]
+        ))
+
+        XCTAssertEqual(transition.sourceDisplayID, localDisplay.id)
+        XCTAssertEqual(transition.sourceEdge, .right)
+        XCTAssertEqual(transition.targetDeviceID, liveID)
+        XCTAssertEqual(transition.targetDisplayID, liveDisplay.id)
+        XCTAssertEqual(transition.entryEdge, .left)
+        XCTAssertEqual(transition.normalizedPosition, 0.25)
+
+        let overshotTransition = try XCTUnwrap(EdgeRouter.transition(
+            x: 112,
+            y: 25,
+            localDeviceID: localID,
+            devices: devices,
+            topology: topology,
+            availableDeviceIDs: [liveID]
+        ))
+        XCTAssertEqual(overshotTransition.targetDeviceID, liveID)
+        XCTAssertEqual(overshotTransition.targetDisplayID, liveDisplay.id)
+
+        let returnDestination = try XCTUnwrap(EdgeRouter.reachableDestination(
+            from: liveDisplay.id,
+            edge: .left,
+            devices: devices,
+            topology: topology,
+            availableDeviceIDs: [localID]
+        ))
+        XCTAssertEqual(returnDestination.displayID, localDisplay.id)
+        XCTAssertEqual(returnDestination.edge, .right)
+    }
+
+    func testEdgeRouterDoesNotEnterOfflineChainWithoutAvailableDestination() {
+        let localID = DeviceID()
+        let offlineID = DeviceID()
+        let localDisplay = display(device: localID, frame: .init(x: 0, y: 0, width: 100, height: 100))
+        let offlineDisplay = display(device: offlineID, frame: .init(x: 0, y: 0, width: 100, height: 100))
+        var topology = DisplayTopology()
+        topology.connect(
+            .init(displayID: localDisplay.id, edge: .right),
+            to: .init(displayID: offlineDisplay.id, edge: .left)
+        )
+
+        XCTAssertNil(EdgeRouter.transition(
+            x: 100,
+            y: 50,
+            localDeviceID: localID,
+            devices: [
+                .init(id: localID, name: "Local", displays: [localDisplay]),
+                .init(id: offlineID, name: "Offline", displays: [offlineDisplay])
+            ],
+            topology: topology,
+            availableDeviceIDs: []
+        ))
+    }
+
+    func testReachableDestinationStopsOnMalformedOfflineCycle() {
+        let localID = DeviceID()
+        let firstOfflineID = DeviceID()
+        let secondOfflineID = DeviceID()
+        let localDisplay = display(device: localID, frame: .init(x: 0, y: 0, width: 100, height: 100))
+        let firstOfflineDisplay = display(
+            device: firstOfflineID,
+            frame: .init(x: 0, y: 0, width: 100, height: 100)
+        )
+        let secondOfflineDisplay = display(
+            device: secondOfflineID,
+            frame: .init(x: 0, y: 0, width: 100, height: 100)
+        )
+        let topology = DisplayTopology(links: [
+            .init(
+                source: .init(displayID: localDisplay.id, edge: .right),
+                destination: .init(displayID: firstOfflineDisplay.id, edge: .left)
+            ),
+            .init(
+                source: .init(displayID: firstOfflineDisplay.id, edge: .right),
+                destination: .init(displayID: secondOfflineDisplay.id, edge: .left)
+            ),
+            .init(
+                source: .init(displayID: secondOfflineDisplay.id, edge: .right),
+                destination: .init(displayID: firstOfflineDisplay.id, edge: .left)
+            )
+        ])
+
+        XCTAssertNil(EdgeRouter.reachableDestination(
+            from: localDisplay.id,
+            edge: .right,
+            devices: [
+                .init(id: localID, name: "Local", displays: [localDisplay]),
+                .init(id: firstOfflineID, name: "Offline 1", displays: [firstOfflineDisplay]),
+                .init(id: secondOfflineID, name: "Offline 2", displays: [secondOfflineDisplay])
+            ],
+            topology: topology,
+            availableDeviceIDs: []
+        ))
+    }
+
     func testEntryEdgeHysteresisRequiresInwardMovementBeforeReturningThroughEntryEdge() {
         let deviceID = DeviceID()
         let source = display(device: deviceID, frame: .init(x: 0, y: 0, width: 100, height: 100))
@@ -568,7 +693,7 @@ final class ApplicationTests: XCTestCase {
         await coordinator.stop()
     }
 
-    func testControllerKeepsPointerSuppressedAndReactivatesAfterTransientDisconnect() async throws {
+    func testControllerImmediatelyReturnsFocusWhenActiveTargetDisconnects() async throws {
         let local = DeviceID()
         let remote = DeviceID()
         let capture = CaptureSpy()
@@ -590,60 +715,17 @@ final class ApplicationTests: XCTestCase {
 
         await coordinator.peerDisconnected(remote)
 
-        guard case let .controlling(_, target, _) = await coordinator.currentState() else {
-            return XCTFail("A transient network interruption must not return control locally")
-        }
-        XCTAssertEqual(target, remote)
-        XCTAssertTrue(capture.suppressed)
-
-        _ = await coordinator.handleCaptured(.pointerMove(
+        let state = await coordinator.currentState()
+        XCTAssertEqual(state, .idle)
+        XCTAssertFalse(capture.suppressed)
+        let disposition = await coordinator.handleCaptured(.pointerMove(
             deltaX: 20,
             deltaY: 0,
             absoluteX: 40,
             absoluteY: 20
         ))
-        try await Task.sleep(for: .milliseconds(20))
+        XCTAssertEqual(disposition, .ignored)
         XCTAssertTrue(transport.frames.isEmpty)
-
-        let resumed = await coordinator.peerConnected(remote)
-        XCTAssertTrue(resumed)
-        await coordinator.flushPendingInput()
-        guard case let .controlling(_, resumedTarget, _) = await coordinator.currentState() else {
-            return XCTFail("The controller must resume after the peer reconnects")
-        }
-        XCTAssertEqual(resumedTarget, remote)
-        XCTAssertTrue(capture.suppressed)
-        XCTAssertEqual(transport.controlMessages.filter(\.isActivation).count, 2)
-        XCTAssertEqual(transport.frames.map(\.event), [.flags(rawValue: 0)])
-        await coordinator.stop()
-    }
-
-    func testControllerReturnsLocallyAfterReconnectGraceExpires() async throws {
-        let local = DeviceID()
-        let remote = DeviceID()
-        let capture = CaptureSpy()
-        let coordinator = ControlSessionCoordinator(
-            localDeviceID: local,
-            workspaceID: WorkspaceID(),
-            capture: capture,
-            injector: InjectorSpy(),
-            transport: TransportSpy(),
-            reconnectGrace: .milliseconds(50)
-        )
-        _ = await coordinator.makeLocalController()
-        try await coordinator.activate(
-            target: remote,
-            displayID: DisplayID(),
-            entryEdge: .left,
-            normalizedPosition: 0.5
-        )
-
-        await coordinator.peerDisconnected(remote)
-        try await Task.sleep(for: .milliseconds(100))
-
-        let state = await coordinator.currentState()
-        XCTAssertEqual(state, .idle)
-        XCTAssertFalse(capture.suppressed)
     }
 
     func testCoordinatorCoalescesContinuousScrollWithoutLosingDistance() async throws {
@@ -732,6 +814,37 @@ final class ApplicationTests: XCTestCase {
         await coordinator.stop()
     }
 
+    func testCoordinatorForwardsNormalizedGesturesToPortablePeer() async throws {
+        let local = DeviceID()
+        let remote = DeviceID()
+        let transport = TransportSpy()
+        let coordinator = ControlSessionCoordinator(
+            localDeviceID: local,
+            workspaceID: WorkspaceID(),
+            capture: CaptureSpy(),
+            injector: InjectorSpy(),
+            transport: transport
+        )
+        _ = await coordinator.makeLocalController()
+        try await coordinator.activate(
+            target: remote,
+            displayID: DisplayID(),
+            entryEdge: .left,
+            normalizedPosition: 0.5,
+            targetCapabilities: [.portableTrackpadGestures]
+        )
+        let gesture = InputEvent.gesture(
+            serializedEvent: Data([1, 2, 3]),
+            portable: PortableGesture(kind: .magnify, phase: .changed, value: 0.1)
+        )
+
+        _ = await coordinator.handleCaptured(gesture)
+        await coordinator.flushPendingInput()
+
+        XCTAssertEqual(transport.frames.map(\.event), [gesture])
+        await coordinator.stop()
+    }
+
     func testControllerDoesNotReturnLocallyAfterSingleInputSendFailure() async throws {
         let local = DeviceID()
         let remote = DeviceID()
@@ -793,39 +906,6 @@ final class ApplicationTests: XCTestCase {
         XCTAssertEqual(Array(capture.suppressionHistory.dropFirst(historyStart)), [true])
         XCTAssertTrue(capture.suppressed)
         await coordinator.stop()
-    }
-
-    func testEmergencyHotkeyReturnsControlDuringNetworkInterruption() async throws {
-        let local = DeviceID()
-        let remote = DeviceID()
-        let capture = CaptureSpy()
-        let coordinator = ControlSessionCoordinator(
-            localDeviceID: local,
-            workspaceID: WorkspaceID(),
-            capture: capture,
-            injector: InjectorSpy(),
-            transport: TransportSpy()
-        )
-        _ = await coordinator.makeLocalController()
-        try await coordinator.activate(
-            target: remote,
-            displayID: DisplayID(),
-            entryEdge: .left,
-            normalizedPosition: 0.5
-        )
-        await coordinator.peerDisconnected(remote)
-
-        _ = await coordinator.handleCaptured(.flags(rawValue: ControlSessionCoordinator.emergencyFlags))
-        let result = await coordinator.handleCaptured(.key(
-            code: ControlSessionCoordinator.emergencyKeyCode,
-            isDown: true,
-            isRepeat: false
-        ))
-        let finalState = await coordinator.currentState()
-
-        XCTAssertEqual(result, .emergencyStop)
-        XCTAssertEqual(finalState, .idle)
-        XCTAssertFalse(capture.suppressed)
     }
 
     func testEmergencyHotkeyReturnsControlLocallyAndReleasesPeer() async throws {

@@ -1,0 +1,32 @@
+{
+  "protocolVersion": 1,
+  "header": {
+    "versionBytes": 2,
+    "kindBytes": 1,
+    "workspaceUUIDBytes": 16,
+    "senderUUIDBytes": 16,
+    "payloadLengthBytes": 4,
+    "integerByteOrder": "big-endian",
+    "uuidByteOrder": "RFC-4122 network order"
+  },
+  "fixtures": [
+    {
+      "name": "cancellation",
+      "workspaceID": "00112233-4455-6677-8899-AABBCCDDEEFF",
+      "senderDeviceID": "10213243-5465-7687-98A9-BACBDCEDFE0F",
+      "transferID": "11223344-5566-7788-99AA-BBCCDDEEFF00",
+      "reason": "cancelled",
+      "encodedHex": "00010800112233445566778899aabbccddeeff102132435465768798a9bacbdcedfe0f000000577b22726561736f6e223a2263616e63656c6c6564222c227472616e736665724944223a7b2272617756616c7565223a2231313232333334342d353536362d373738382d393941412d424243434444454546463030227d7d"
+    },
+    {
+      "name": "chunk",
+      "workspaceID": "00112233-4455-6677-8899-AABBCCDDEEFF",
+      "senderDeviceID": "10213243-5465-7687-98A9-BACBDCEDFE0F",
+      "transferID": "11223344-5566-7788-99AA-BBCCDDEEFF00",
+      "entryID": "22334455-6677-8899-AABB-CCDDEEFF0011",
+      "offset": "0x0102030405060708",
+      "dataHex": "deadbeef",
+      "encodedHex": "00010300112233445566778899aabbccddeeff102132435465768798a9bacbdcedfe0f00000030112233445566778899aabbccddeeff002233445566778899aabbccddeeff0011010203040506070800000004deadbeef"
+    }
+  ]
+}

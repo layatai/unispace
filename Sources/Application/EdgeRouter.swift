@@ -180,9 +180,11 @@ public enum EdgeRouter {
         localDeviceID: DeviceID,
         devices: [DeviceDescriptor],
         topology: DisplayTopology,
-        tolerance: Double = 1.5
+        tolerance: Double = 1.5,
+        availableDeviceIDs: Set<DeviceID>? = nil
     ) -> EdgeTransition? {
         let displays = devices.flatMap(\.displays)
+        let displaysByID = index(displays)
         let localDisplays = displays.filter { $0.deviceID == localDeviceID }
         if let source = localDisplays.first(where: {
             x >= $0.frame.minX - tolerance && x <= $0.frame.maxX + tolerance
@@ -202,14 +204,25 @@ public enum EdgeRouter {
                 y: y,
                 localDeviceID: localDeviceID,
                 displays: displays,
-                topology: topology
+                displaysByID: displaysByID,
+                topology: topology,
+                availableDeviceIDs: availableDeviceIDs
             )
         }
 
         let overshotEdges = localDisplays.flatMap { source in
             DisplayEdge.allCases.compactMap { edge -> (DisplayDescriptor, DisplayEdge, Double)? in
-                guard topology.destination(from: source.id, edge: edge) != nil,
-                      isBeyond(edge, of: source.frame, x: x, y: y, tolerance: tolerance) else { return nil }
+                guard topology.destination(from: source.id, edge: edge) != nil else { return nil }
+                if let availableDeviceIDs {
+                    guard resolveReachableDestination(
+                        from: source.id,
+                        edge: edge,
+                        displaysByID: displaysByID,
+                        topology: topology,
+                        availableDeviceIDs: availableDeviceIDs
+                    ) != nil else { return nil }
+                }
+                guard isBeyond(edge, of: source.frame, x: x, y: y, tolerance: tolerance) else { return nil }
                 return (source, edge, distance(to: edge, of: source.frame, x: x, y: y))
             }
         }
@@ -221,8 +234,62 @@ public enum EdgeRouter {
             y: y,
             localDeviceID: localDeviceID,
             displays: displays,
-            topology: topology
+            displaysByID: displaysByID,
+            topology: topology,
+            availableDeviceIDs: availableDeviceIDs
         )
+    }
+
+    /// Follows a display chain through unavailable devices and returns the first
+    /// reachable destination. Entering an unavailable display through one edge
+    /// continues through its opposite edge, matching physical pointer travel.
+    /// Malformed cycles and missing display descriptors fail closed.
+    public static func reachableDestination(
+        from sourceDisplayID: DisplayID,
+        edge sourceEdge: DisplayEdge,
+        devices: [DeviceDescriptor],
+        topology: DisplayTopology,
+        availableDeviceIDs: Set<DeviceID>
+    ) -> DisplayEndpoint? {
+        resolveReachableDestination(
+            from: sourceDisplayID,
+            edge: sourceEdge,
+            displaysByID: index(devices.flatMap(\.displays)),
+            topology: topology,
+            availableDeviceIDs: availableDeviceIDs
+        )
+    }
+
+    private static func resolveReachableDestination(
+        from sourceDisplayID: DisplayID,
+        edge sourceEdge: DisplayEdge,
+        displaysByID: [DisplayID: DisplayDescriptor],
+        topology: DisplayTopology,
+        availableDeviceIDs: Set<DeviceID>
+    ) -> DisplayEndpoint? {
+        var cursor = DisplayEndpoint(displayID: sourceDisplayID, edge: sourceEdge)
+        var visited: Set<DisplayEndpoint> = []
+
+        while visited.insert(cursor).inserted {
+            guard let destination = topology.destination(
+                from: cursor.displayID,
+                edge: cursor.edge
+            ), let display = displaysByID[destination.displayID] else { return nil }
+            if availableDeviceIDs.contains(display.deviceID) { return destination }
+            cursor = DisplayEndpoint(
+                displayID: destination.displayID,
+                edge: destination.edge.opposite
+            )
+        }
+        return nil
+    }
+
+    private static func index(_ displays: [DisplayDescriptor]) -> [DisplayID: DisplayDescriptor] {
+        var result: [DisplayID: DisplayDescriptor] = [:]
+        for display in displays where result[display.id] == nil {
+            result[display.id] = display
+        }
+        return result
     }
 
     private static func makeTransition(
@@ -232,9 +299,23 @@ public enum EdgeRouter {
         y: Double,
         localDeviceID: DeviceID,
         displays: [DisplayDescriptor],
-        topology: DisplayTopology
+        displaysByID: [DisplayID: DisplayDescriptor],
+        topology: DisplayTopology,
+        availableDeviceIDs: Set<DeviceID>?
     ) -> EdgeTransition? {
-        guard let destination = topology.destination(from: source.id, edge: edge),
+        let destination: DisplayEndpoint?
+        if let availableDeviceIDs {
+            destination = resolveReachableDestination(
+                from: source.id,
+                edge: edge,
+                displaysByID: displaysByID,
+                topology: topology,
+                availableDeviceIDs: availableDeviceIDs
+            )
+        } else {
+            destination = topology.destination(from: source.id, edge: edge)
+        }
+        guard let destination,
               let target = displays.first(where: { $0.id == destination.displayID }),
               target.deviceID != localDeviceID else { return nil }
 

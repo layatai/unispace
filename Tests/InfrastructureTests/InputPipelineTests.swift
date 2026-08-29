@@ -181,6 +181,8 @@ final class InputPipelineTests: XCTestCase {
 
         injector.inject(.flags(rawValue: CGEventFlags.maskCommand.rawValue))
         injector.inject(.key(code: 12, isDown: true, isRepeat: false))
+        injector.inject(.key(code: 12, isDown: false, isRepeat: false))
+        injector.inject(.flags(rawValue: 0))
         injector.inject(.mouseButton(button: .left, isDown: true, clickCount: 2))
         injector.inject(.pointerMove(deltaX: 500, deltaY: 0, absoluteX: 0, absoluteY: 0))
         injector.inject(.scroll(deltaX: 2.4, deltaY: -4.6, isContinuous: true))
@@ -200,6 +202,12 @@ final class InputPipelineTests: XCTestCase {
         XCTAssertTrue(snapshots.contains { $0.type == .scrollWheel })
         XCTAssertTrue(snapshots.contains { $0.type.rawValue == gestureType.rawValue })
         XCTAssertTrue(snapshots.contains { $0.type == .keyUp && $0.keyCode == 12 })
+        let commandEvents = snapshots.filter {
+            $0.type == .flagsChanged && $0.keyCode == 55
+        }
+        XCTAssertEqual(commandEvents.count, 2)
+        XCTAssertTrue(commandEvents[0].flags.contains(.maskCommand))
+        XCTAssertFalse(commandEvents[1].flags.contains(.maskCommand))
     }
 
     func testInjectorConstrainsToNearestDisplayAndRejectsInvalidGestureData() {
@@ -227,6 +235,7 @@ private struct EventSnapshot: Sendable {
     let marker: Int64
     let clickCount: Int64
     let keyCode: Int64
+    let flags: CGEventFlags
 
     init(_ event: CGEvent) {
         type = event.type
@@ -234,6 +243,7 @@ private struct EventSnapshot: Sendable {
         marker = event.getIntegerValueField(.eventSourceUserData)
         clickCount = event.getIntegerValueField(.mouseEventClickState)
         keyCode = event.getIntegerValueField(.keyboardEventKeycode)
+        flags = event.flags
     }
 }
 

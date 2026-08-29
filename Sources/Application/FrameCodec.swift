@@ -203,6 +203,7 @@ private enum PortableBinaryCodec {
     private static let scroll: UInt8 = 3
     private static let key: UInt8 = 4
     private static let modifiers: UInt8 = 5
+    private static let gesture: UInt8 = 6
 
     static func encode(_ frame: PortableInputFrame) throws -> Data {
         var writer = BinaryWriter()
@@ -240,6 +241,13 @@ private enum PortableBinaryCodec {
         case let .modifiers(mask):
             writer.append(modifiers)
             writer.append(mask.rawValue)
+        case let .gesture(value):
+            writer.append(gesture)
+            writer.append(value.kind.rawValue)
+            writer.append(value.phase.rawValue)
+            writer.append(value.deltaX)
+            writer.append(value.deltaY)
+            writer.append(value.value)
         }
         return writer.data
     }
@@ -292,6 +300,18 @@ private enum PortableBinaryCodec {
             )
         case modifiers:
             event = .modifiers(PortableModifierMask(rawValue: try reader.readUInt16()))
+        case gesture:
+            guard let kind = PortableGestureKind(rawValue: try reader.readUInt8()),
+                  let phase = PortableGesturePhase(rawValue: try reader.readUInt8()) else {
+                throw ControlProtocolError.malformedFrame
+            }
+            event = .gesture(PortableGesture(
+                kind: kind,
+                phase: phase,
+                deltaX: try reader.readDouble(),
+                deltaY: try reader.readDouble(),
+                value: try reader.readDouble()
+            ))
         default:
             throw ControlProtocolError.malformedFrame
         }

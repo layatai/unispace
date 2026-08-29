@@ -50,16 +50,81 @@ final class InfrastructureTests: XCTestCase {
                 .smartMagnify
             ].map { UInt32($0.rawValue) })
         )
+        XCTAssertTrue(Set(CGEventInputCapture.gestureEventTypes).isSubset(
+            of: Set(CGEventInputCapture.capturedEventTypes)
+        ))
         let gestureType = try XCTUnwrap(
-            CGEventType(rawValue: UInt32(NSEvent.EventType.magnify.rawValue))
+            CGEventType(rawValue: UInt32(NSEvent.EventType.gesture.rawValue))
         )
         let sourceEvent = try XCTUnwrap(CGEvent(source: nil))
         sourceEvent.type = gestureType
+        sourceEvent.setIntegerValueField(CGEventField(rawValue: 110)!, value: 8)
+        sourceEvent.setIntegerValueField(CGEventField(rawValue: 132)!, value: 2)
+        sourceEvent.setDoubleValueField(CGEventField(rawValue: 113)!, value: 0.125)
 
         let input = try XCTUnwrap(CGEventInputCapture.convert(type: gestureType, event: sourceEvent))
-        guard case let .gesture(serializedEvent) = input else {
+        guard case let .gesture(serializedEvent, portable) = input else {
             return XCTFail("Expected a serialized gesture event")
         }
+        XCTAssertEqual(
+            portable,
+            PortableGesture(kind: .magnify, phase: .changed, value: 0.125)
+        )
+
+        let swipe = try XCTUnwrap(CGEvent(source: nil))
+        swipe.type = gestureType
+        swipe.setIntegerValueField(CGEventField(rawValue: 110)!, value: 16)
+        swipe.setIntegerValueField(CGEventField(rawValue: 132)!, value: 4)
+        swipe.setIntegerValueField(CGEventField(rawValue: 134)!, value: 0x04)
+        XCTAssertEqual(
+            CGEventInputCapture.portableGesture(type: gestureType, event: swipe),
+            PortableGesture(kind: .swipe, phase: .ended, deltaX: 1)
+        )
+
+        let rotation = try XCTUnwrap(CGEvent(source: nil))
+        rotation.type = gestureType
+        rotation.setIntegerValueField(CGEventField(rawValue: 110)!, value: 5)
+        rotation.setIntegerValueField(CGEventField(rawValue: 132)!, value: 1)
+        rotation.setDoubleValueField(CGEventField(rawValue: 114)!, value: 12.5)
+        XCTAssertEqual(
+            CGEventInputCapture.portableGesture(type: gestureType, event: rotation),
+            PortableGesture(kind: .rotate, phase: .began, value: 12.5)
+        )
+
+        let dockType = try XCTUnwrap(CGEventType(rawValue: 30))
+        let missionControl = try XCTUnwrap(CGEvent(source: nil))
+        missionControl.type = dockType
+        missionControl.setIntegerValueField(CGEventField(rawValue: 110)!, value: 23)
+        missionControl.setIntegerValueField(CGEventField(rawValue: 123)!, value: 2)
+        missionControl.setIntegerValueField(CGEventField(rawValue: 132)!, value: 2)
+        missionControl.setDoubleValueField(CGEventField(rawValue: 124)!, value: 0.75)
+        XCTAssertEqual(
+            CGEventInputCapture.portableGesture(type: dockType, event: missionControl),
+            PortableGesture(kind: .workspaceSwipe, phase: .changed, deltaY: 1)
+        )
+
+        let appExpose = try XCTUnwrap(missionControl.copy())
+        appExpose.setDoubleValueField(CGEventField(rawValue: 124)!, value: -0.75)
+        appExpose.setIntegerValueField(CGEventField(rawValue: 132)!, value: 4)
+        XCTAssertEqual(
+            CGEventInputCapture.portableGesture(type: dockType, event: appExpose),
+            PortableGesture(kind: .workspaceSwipe, phase: .ended, deltaY: -1)
+        )
+
+        let showDesktop = try XCTUnwrap(missionControl.copy())
+        showDesktop.setIntegerValueField(CGEventField(rawValue: 123)!, value: 3)
+        showDesktop.setDoubleValueField(CGEventField(rawValue: 124)!, value: 0.75)
+        XCTAssertEqual(
+            CGEventInputCapture.portableGesture(type: dockType, event: showDesktop),
+            PortableGesture(kind: .desktopPinch, phase: .changed, value: 1)
+        )
+
+        let launchpad = try XCTUnwrap(showDesktop.copy())
+        launchpad.setDoubleValueField(CGEventField(rawValue: 124)!, value: -0.75)
+        XCTAssertEqual(
+            CGEventInputCapture.portableGesture(type: dockType, event: launchpad),
+            PortableGesture(kind: .desktopPinch, phase: .changed, value: -1)
+        )
 
         let targetPosition = CGPoint(x: 320, y: 240)
         let rebuilt = try XCTUnwrap(
@@ -67,6 +132,17 @@ final class InfrastructureTests: XCTestCase {
         )
         XCTAssertEqual(rebuilt.type.rawValue, gestureType.rawValue)
         XCTAssertEqual(rebuilt.location, targetPosition)
+        XCTAssertEqual(rebuilt.getIntegerValueField(CGEventField(rawValue: 110)!), 8)
+        XCTAssertEqual(rebuilt.getDoubleValueField(CGEventField(rawValue: 113)!), 0.125)
+
+        let capture = CGEventInputCapture(
+            mouseAssociationHandler: { _ in },
+            handler: { event in
+                if case .gesture = event { return true }
+                return false
+            }
+        )
+        XCTAssertTrue(capture.handle(type: gestureType, event: sourceEvent))
     }
 
     func testInjectedCursorCannotAccumulateBeyondAHorizontalDisplayEdge() {
@@ -175,6 +251,21 @@ final class InfrastructureTests: XCTestCase {
         }
     }
 
+    func testPeerTransportErrorsExposeActionableDescriptions() {
+        XCTAssertEqual(
+            PeerTransportError.peerUnavailable(DeviceID()).errorDescription,
+            "The selected device is not connected. Wait until it appears online, then try again."
+        )
+        XCTAssertEqual(
+            PeerTransportError.authenticationFailed.errorDescription,
+            "The peer could not authenticate with this workspace. Pair the device again."
+        )
+        XCTAssertEqual(
+            PeerTransportError.sendFailed("offline").errorDescription,
+            "The connection failed while sending data: offline"
+        )
+    }
+
     func testApplicationDeclaresEveryBonjourServiceAndLocalNetworkPurpose() throws {
         let repositoryRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -191,6 +282,8 @@ final class InfrastructureTests: XCTestCase {
                 NetworkPeerTransport.serviceType,
                 NetworkPeerTransport.quicServiceType,
                 QUICRealtimeTransport.serviceType,
+                NetworkFileTransferTransport.serviceType,
+                NetworkClipboardTransport.serviceType,
                 PairingNetworkService.serviceType
             ]
         )
@@ -823,20 +916,90 @@ final class InfrastructureTests: XCTestCase {
         defer { try? store.removeWorkspaceKey(for: workspaceID) }
         let first = Data(repeating: 0x11, count: 32)
         let second = Data(repeating: 0x22, count: 32)
+        let third = Data(repeating: 0x33, count: 32)
+        let fourth = Data(repeating: 0x44, count: 32)
+        let fifth = Data(repeating: 0x55, count: 32)
 
         XCTAssertNil(try store.workspaceKey(for: workspaceID))
         try store.storeWorkspaceKey(first, for: workspaceID)
         XCTAssertEqual(try store.workspaceKey(for: workspaceID), first)
-        try store.storeWorkspaceKey(second, for: workspaceID)
+        try store.rotateWorkspaceKey(second, for: workspaceID)
         XCTAssertEqual(try store.workspaceKey(for: workspaceID), second)
+        XCTAssertEqual(
+            try store.workspaceKeyring(for: workspaceID),
+            WorkspaceKeyring(current: second, previous: [first])
+        )
+        try store.rotateWorkspaceKey(third, for: workspaceID)
+        try store.rotateWorkspaceKey(fourth, for: workspaceID)
+        try store.rotateWorkspaceKey(fifth, for: workspaceID)
+        XCTAssertEqual(
+            try store.workspaceKeyring(for: workspaceID),
+            WorkspaceKeyring(current: fifth, previous: [fourth, third, second])
+        )
+        try store.storeWorkspaceKey(first, for: workspaceID)
+        XCTAssertEqual(
+            try store.workspaceKeyring(for: workspaceID),
+            WorkspaceKeyring(current: first)
+        )
         try store.removeWorkspaceKey(for: workspaceID)
         XCTAssertNil(try store.workspaceKey(for: workspaceID))
+        XCTAssertNil(try store.workspaceKeyring(for: workspaceID))
         XCTAssertNoThrow(try store.removeWorkspaceKey(for: workspaceID))
     }
 
     func testCrossPlatformQUICParametersUsePeerToPeerTLSBootstrap() throws {
         let parameters = try NetworkPeerTransport.makeCrossPlatformQUICParameters()
         XCTAssertTrue(parameters.includePeerToPeer)
+    }
+
+    func testSecureChannelHelloUsesPortableWindowsUUIDShape() throws {
+        let workspaceID = WorkspaceID(
+            rawValue: try XCTUnwrap(UUID(uuidString: "11111111-2222-3333-4444-555555555555"))
+        )
+        let deviceID = DeviceID(
+            rawValue: try XCTUnwrap(UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE"))
+        )
+        let nonce = Data(repeating: 0x11, count: 32)
+        let proof = Data(repeating: 0x22, count: 32)
+        let hello = SecureChannelHello(
+            version: 1,
+            workspaceID: workspaceID,
+            deviceID: deviceID,
+            nonce: nonce,
+            proof: proof,
+            supportedWireVersions: [1, 2]
+        )
+
+        let encoded = try JSONEncoder().encode(hello)
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+        )
+        XCTAssertEqual(object["workspaceID"] as? String, workspaceID.rawValue.uuidString)
+        XCTAssertEqual(object["deviceID"] as? String, deviceID.rawValue.uuidString)
+        XCTAssertEqual(object["supportedWireVersions"] as? [Int], [1, 2])
+
+        let windowsJSON = Data("""
+        {"version":1,"workspaceID":"11111111-2222-3333-4444-555555555555","deviceID":"AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE","nonce":"\(nonce.base64EncodedString())","proof":"\(proof.base64EncodedString())","supportedWireVersions":[1,2]}
+        """.utf8)
+        let decoded = try JSONDecoder().decode(SecureChannelHello.self, from: windowsJSON)
+        XCTAssertEqual(decoded.workspaceID, workspaceID)
+        XCTAssertEqual(decoded.deviceID, deviceID)
+        XCTAssertEqual(decoded.nonce, nonce)
+        XCTAssertEqual(decoded.proof, proof)
+        XCTAssertEqual(decoded.supportedWireVersions, [1, 2])
+
+        let installedWindowsJSON = Data("""
+        {"version":1,"workspaceID":{"rawValue":"11111111-2222-3333-4444-555555555555"},"deviceID":{"rawValue":"AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE"},"nonce":"\(nonce.base64EncodedString())","proof":"\(proof.base64EncodedString())","supportedWireVersions":[1,2]}
+        """.utf8)
+        let installedWindowsHello = try JSONDecoder().decode(
+            SecureChannelHello.self,
+            from: installedWindowsJSON
+        )
+        XCTAssertEqual(installedWindowsHello.workspaceID, workspaceID)
+        XCTAssertEqual(installedWindowsHello.deviceID, deviceID)
+        XCTAssertEqual(installedWindowsHello.nonce, nonce)
+        XCTAssertEqual(installedWindowsHello.proof, proof)
+        XCTAssertEqual(installedWindowsHello.supportedWireVersions, [1, 2])
     }
 
     @MainActor
@@ -922,6 +1085,348 @@ final class InfrastructureTests: XCTestCase {
         listener.cancel()
     }
 
+    func testSecureChannelRecoversKnownPeerWithPreviousWorkspaceKey() throws {
+        let workspaceID = WorkspaceID()
+        let currentKey = PairingCryptoSession.randomData(count: 32)
+        let previousKey = PairingCryptoSession.randomData(count: 32)
+        let serverDevice = DeviceID()
+        let clientDevice = DeviceID()
+        let listener = try NWListener(using: NetworkPeerTransport.makeParameters(), on: .any)
+        let listenerReady = expectation(description: "listener ready")
+        let serverAuthenticated = expectation(description: "server authenticated previous key")
+        let clientAuthenticated = expectation(description: "client authenticated server recovery hello")
+        let frameReceived = expectation(description: "recovered channel transfers encrypted data")
+        let sendCompleted = expectation(description: "recovered channel send completes")
+        let queue = DispatchQueue(label: "UniSpaceInfrastructureTests.KeyRecovery")
+        let retainer = SecureConnectionRetainer()
+
+        listener.stateUpdateHandler = { state in
+            if case .ready = state { listenerReady.fulfill() }
+        }
+        listener.newConnectionHandler = { connection in
+            let secure = SecurePeerConnection(
+                connection: connection,
+                localDeviceID: serverDevice,
+                workspaceID: workspaceID,
+                workspaceKeys: [currentKey, previousKey],
+                expectedDeviceID: clientDevice
+            )
+            secure.authenticatedHandler = { id in
+                XCTAssertEqual(id, clientDevice)
+                XCTAssertTrue(secure.authenticatedWithPreviousWorkspaceKey)
+                serverAuthenticated.fulfill()
+            }
+            secure.frameHandler = { kind, payload in
+                XCTAssertEqual(kind, .controlJSON)
+                do {
+                    _ = try WireFrameCodec.decodeControl(payload)
+                } catch {
+                    XCTFail("Could not decode recovered channel frame: \(error)")
+                }
+                frameReceived.fulfill()
+            }
+            retainer.connection = secure
+            connection.start(queue: queue)
+        }
+        listener.start(queue: queue)
+        wait(for: [listenerReady], timeout: 3)
+
+        let port = try XCTUnwrap(listener.port)
+        let rawClient = NWConnection(
+            host: "127.0.0.1",
+            port: port,
+            using: NetworkPeerTransport.makeParameters()
+        )
+        let client = SecurePeerConnection(
+            connection: rawClient,
+            localDeviceID: clientDevice,
+            workspaceID: workspaceID,
+            workspaceKey: previousKey,
+            expectedDeviceID: serverDevice
+        )
+        client.authenticatedHandler = { id in
+            XCTAssertEqual(id, serverDevice)
+            XCTAssertFalse(client.authenticatedWithPreviousWorkspaceKey)
+            clientAuthenticated.fulfill()
+        }
+        rawClient.start(queue: queue)
+        wait(for: [serverAuthenticated, clientAuthenticated], timeout: 5)
+
+        let frame = try WireFrameCodec.encodeControl(
+            ControlEnvelope(message: .controllerClaim(.init(
+                generation: 1,
+                controllerID: clientDevice
+            )))
+        )
+        client.send(frame) { error in
+            XCTAssertNil(error)
+            sendCompleted.fulfill()
+        }
+        wait(for: [frameReceived, sendCompleted], timeout: 3)
+        client.cancel()
+        listener.cancel()
+    }
+
+    func testUnknownInboundWindowsPeerNegotiatesPortableHelloBeforeConnected() async throws {
+        let workspaceID = WorkspaceID()
+        let key = PairingCryptoSession.randomData(count: 32)
+        let macID = DeviceID()
+        let windowsID = DeviceID()
+        let mac = DeviceDescriptor(
+            id: macID,
+            name: "Mac",
+            capabilities: [.crossPlatformInputV2, .quicStreamV2, .udpPointerV2],
+            platform: .macOS
+        )
+        let windows = DeviceDescriptor(
+            id: windowsID,
+            name: "Windows PC",
+            capabilities: [.crossPlatformInputV2, .quicStreamV2, .udpPointerV2],
+            platform: .windows
+        )
+        let workspace = WorkspaceSnapshot(
+            id: workspaceID,
+            name: "Unknown Windows recovery",
+            localDeviceID: macID,
+            devices: [mac]
+        )
+        let transport = NetworkPeerTransport(
+            listenPort: .any,
+            directPort: .any,
+            enableBonjour: false,
+            enableQUIC: false,
+            enableRealtime: false
+        )
+        let peerHelloObserved = expectation(description: "Windows hello observed before connection announcement")
+        let connected = expectation(description: "unknown Windows peer announced connected")
+        let macHelloReceived = expectation(description: "Windows peer receives a portable Mac hello")
+        let eventOrder = StringRecorder()
+        let events = Task {
+            for await event in transport.events() {
+                switch event {
+                case let .control(source, envelope):
+                    guard source == windowsID, case let .hello(device) = envelope.message else { continue }
+                    XCTAssertEqual(device, windows)
+                    eventOrder.append("hello")
+                    peerHelloObserved.fulfill()
+                case let .connected(deviceID) where deviceID == windowsID:
+                    eventOrder.append("connected")
+                    connected.fulfill()
+                default:
+                    break
+                }
+            }
+        }
+
+        try await transport.start(localDevice: mac, workspace: workspace, key: key)
+        let port = try await waitForPort(of: transport)
+        let rawClient = NWConnection(
+            host: "127.0.0.1",
+            port: port,
+            using: NetworkPeerTransport.makeParameters()
+        )
+        let client = SecurePeerConnection(
+            connection: rawClient,
+            localDeviceID: windowsID,
+            workspaceID: workspaceID,
+            workspaceKey: key,
+            expectedDeviceID: macID,
+            isOutbound: true
+        )
+        client.authenticatedHandler = { deviceID in
+            XCTAssertEqual(deviceID, macID)
+            do {
+                let hello = try WireFrameCodec.encodePortableControl(
+                    ControlEnvelope(message: .hello(windows))
+                )
+                client.send(hello, completion: nil)
+            } catch {
+                XCTFail("Could not encode the Windows hello: \(error)")
+            }
+        }
+        client.frameHandler = { kind, payload in
+            do {
+                XCTAssertEqual(kind, .controlJSONV2)
+                let envelope = try WireFrameCodec.decodePortableControl(payload)
+                guard case let .hello(device) = envelope.message else {
+                    return XCTFail("Expected the Mac hello")
+                }
+                XCTAssertEqual(device, mac)
+                macHelloReceived.fulfill()
+            } catch {
+                XCTFail("Could not decode the portable Mac hello: \(error)")
+            }
+        }
+        rawClient.start(queue: DispatchQueue(label: "UniSpaceInfrastructureTests.UnknownWindows"))
+
+        await fulfillment(of: [peerHelloObserved, connected, macHelloReceived], timeout: 5)
+        XCTAssertEqual(Array(eventOrder.values.prefix(2)), ["hello", "connected"])
+
+        client.cancel()
+        events.cancel()
+        await transport.stop()
+    }
+
+    func testKnownPeerUsingPreviousWorkspaceKeyRequestsAutomaticUpgrade() async throws {
+        let workspaceID = WorkspaceID()
+        let currentKey = PairingCryptoSession.randomData(count: 32)
+        let previousKey = PairingCryptoSession.randomData(count: 32)
+        let serverID = DeviceID()
+        let clientID = DeviceID()
+        let server = DeviceDescriptor(id: serverID, name: "Current Mac", platform: .macOS)
+        let clientDevice = DeviceDescriptor(id: clientID, name: "Stale Mac", platform: .macOS)
+        let workspace = WorkspaceSnapshot(
+            id: workspaceID,
+            name: "Upgrade",
+            localDeviceID: serverID,
+            devices: [server, clientDevice]
+        )
+        let transport = NetworkPeerTransport(
+            listenPort: .any,
+            directPort: .any,
+            enableBonjour: false,
+            enableQUIC: false,
+            enableRealtime: false
+        )
+        let connected = expectation(description: "known stale peer connected")
+        let upgradeRequired = expectation(description: "known stale peer requests workspace upgrade")
+        let serverHelloReceived = expectation(description: "stale peer receives server hello")
+        let eventOrder = StringRecorder()
+        let events = Task {
+            for await event in transport.events() {
+                switch event {
+                case let .connected(deviceID) where deviceID == clientID:
+                    eventOrder.append("connected")
+                    connected.fulfill()
+                case let .workspaceUpgradeRequired(deviceID) where deviceID == clientID:
+                    eventOrder.append("upgrade")
+                    upgradeRequired.fulfill()
+                default:
+                    break
+                }
+            }
+        }
+
+        try await transport.start(
+            localDevice: server,
+            workspace: workspace,
+            workspaceKeys: [currentKey, previousKey]
+        )
+        let port = try await waitForPort(of: transport)
+        let rawClient = NWConnection(
+            host: "127.0.0.1",
+            port: port,
+            using: NetworkPeerTransport.makeParameters()
+        )
+        let client = SecurePeerConnection(
+            connection: rawClient,
+            localDeviceID: clientID,
+            workspaceID: workspaceID,
+            workspaceKey: previousKey,
+            expectedDeviceID: serverID,
+            isOutbound: true
+        )
+        client.authenticatedHandler = { _ in
+            do {
+                client.send(
+                    try WireFrameCodec.encodeControl(
+                        ControlEnvelope(message: .hello(clientDevice))
+                    ),
+                    completion: nil
+                )
+            } catch {
+                XCTFail("Could not encode stale peer hello: \(error)")
+            }
+        }
+        client.frameHandler = { kind, payload in
+            guard kind == .controlJSON,
+                  let envelope = try? WireFrameCodec.decodeControl(payload),
+                  case .hello = envelope.message else { return }
+            serverHelloReceived.fulfill()
+        }
+        rawClient.start(queue: DispatchQueue(label: "UniSpaceInfrastructureTests.WorkspaceUpgrade"))
+
+        await fulfillment(of: [connected, upgradeRequired, serverHelloReceived], timeout: 5)
+        XCTAssertEqual(Array(eventOrder.values.prefix(2)), ["connected", "upgrade"])
+        client.cancel()
+        events.cancel()
+        await transport.stop()
+    }
+
+    func testRemovedPeerCannotRecoverWithPreviousWorkspaceKey() async throws {
+        let workspaceID = WorkspaceID()
+        let currentKey = PairingCryptoSession.randomData(count: 32)
+        let previousKey = PairingCryptoSession.randomData(count: 32)
+        let serverID = DeviceID()
+        let removedID = DeviceID()
+        let server = DeviceDescriptor(id: serverID, name: "Current Mac", platform: .macOS)
+        let removed = DeviceDescriptor(id: removedID, name: "Removed Mac", platform: .macOS)
+        let workspace = WorkspaceSnapshot(
+            id: workspaceID,
+            name: "Removal",
+            localDeviceID: serverID,
+            devices: [server]
+        )
+        let transport = NetworkPeerTransport(
+            listenPort: .any,
+            directPort: .any,
+            enableBonjour: false,
+            enableQUIC: false,
+            enableRealtime: false,
+            authenticationTimeout: 0.5
+        )
+        let forbiddenConnection = expectation(description: "removed peer is never connected")
+        forbiddenConnection.isInverted = true
+        let events = Task {
+            for await event in transport.events() {
+                switch event {
+                case let .connected(deviceID) where deviceID == removedID:
+                    forbiddenConnection.fulfill()
+                case let .workspaceUpgradeRequired(deviceID) where deviceID == removedID:
+                    forbiddenConnection.fulfill()
+                default:
+                    break
+                }
+            }
+        }
+
+        try await transport.start(
+            localDevice: server,
+            workspace: workspace,
+            workspaceKeys: [currentKey, previousKey]
+        )
+        let port = try await waitForPort(of: transport)
+        let rawClient = NWConnection(
+            host: "127.0.0.1",
+            port: port,
+            using: NetworkPeerTransport.makeParameters()
+        )
+        let client = SecurePeerConnection(
+            connection: rawClient,
+            localDeviceID: removedID,
+            workspaceID: workspaceID,
+            workspaceKey: previousKey,
+            expectedDeviceID: serverID,
+            isOutbound: true
+        )
+        client.authenticatedHandler = { _ in
+            do {
+                client.send(
+                    try WireFrameCodec.encodeControl(ControlEnvelope(message: .hello(removed))),
+                    completion: nil
+                )
+            } catch {
+                XCTFail("Could not encode removed peer hello: \(error)")
+            }
+        }
+        rawClient.start(queue: DispatchQueue(label: "UniSpaceInfrastructureTests.RemovedPeer"))
+
+        await fulfillment(of: [forbiddenConnection], timeout: 1)
+        client.cancel()
+        events.cancel()
+        await transport.stop()
+    }
+
     func testCrossPlatformPointerLaneAuthenticatesAndDeliversLatestState() async throws {
         let workspaceID = WorkspaceID()
         let key = PairingCryptoSession.randomData(count: 32)
@@ -940,13 +1445,14 @@ final class InfrastructureTests: XCTestCase {
             localDeviceID: macID,
             devices: [mac, windows]
         )
-        let transport = CrossPlatformPointerTransport()
+        let transport = CrossPlatformPointerTransport(listenPort: .any)
         try transport.start(localDevice: mac, workspace: workspace, key: key)
         defer { transport.stop() }
+        let pointerPort = try await waitForCrossPlatformPointerPort(of: transport)
 
         let rawClient = NWConnection(
             host: "127.0.0.1",
-            port: NetworkPeerTransport.crossPlatformPointerPort,
+            port: pointerPort,
             using: .udp
         )
         let client = SecurePeerConnection(
@@ -1045,6 +1551,17 @@ private final class MouseAssociationRecorder: @unchecked Sendable {
     }
 }
 
+private final class StringRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storedValues: [String] = []
+
+    var values: [String] { lock.withLock { storedValues } }
+
+    func append(_ value: String) {
+        lock.withLock { storedValues.append(value) }
+    }
+}
+
 private func waitForPort(of transport: NetworkPeerTransport) async throws -> NWEndpoint.Port {
     for _ in 0..<100 {
         if let port = transport.activeControlPort { return port }
@@ -1067,6 +1584,20 @@ private func waitForRealtimePort(of transport: QUICRealtimeTransport) async thro
         try await Task.sleep(for: .milliseconds(20))
     }
     throw XCTSkip("Realtime QUIC listener did not become ready")
+}
+
+private func waitForCrossPlatformPointerPort(
+    of transport: CrossPlatformPointerTransport
+) async throws -> NWEndpoint.Port {
+    for _ in 0..<100 {
+        if let port = transport.activePort { return port }
+        try await Task.sleep(for: .milliseconds(20))
+    }
+    throw InfrastructureTestFailure.listenerNotReady("Windows pointer listener")
+}
+
+private enum InfrastructureTestFailure: Error {
+    case listenerNotReady(String)
 }
 
 private func waitForPairingPort(of service: PairingNetworkService) throws -> NWEndpoint.Port {

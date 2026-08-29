@@ -32,6 +32,7 @@ extension View {
     /// Wraps content in the standard UniSpace card surface.
     func card(radius: Double = Metrics.cardRadius, padding: Double = 16) -> some View {
         self
+            .frame(maxWidth: .infinity, alignment: .leading)
             .padding(padding)
             .background(Theme.surface, in: .rect(cornerRadius: radius, style: .continuous))
             .overlay(

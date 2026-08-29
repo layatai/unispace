@@ -24,11 +24,54 @@ public enum PointerButton: UInt8, Codable, CaseIterable, Hashable, Sendable {
     case other = 3
 }
 
+public enum PortableGestureKind: UInt8, Codable, CaseIterable, Sendable {
+    case other = 0
+    case magnify = 1
+    case swipe = 2
+    case rotate = 3
+    case smartMagnify = 4
+    case begin = 5
+    case end = 6
+    case workspaceSwipe = 7
+    case desktopPinch = 8
+}
+
+public enum PortableGesturePhase: UInt8, Codable, CaseIterable, Sendable {
+    case none = 0
+    case mayBegin = 1
+    case began = 2
+    case changed = 3
+    case ended = 4
+    case cancelled = 5
+}
+
+public struct PortableGesture: Codable, Equatable, Sendable {
+    public let kind: PortableGestureKind
+    public let phase: PortableGesturePhase
+    public let deltaX: Double
+    public let deltaY: Double
+    public let value: Double
+
+    public init(
+        kind: PortableGestureKind,
+        phase: PortableGesturePhase = .none,
+        deltaX: Double = 0,
+        deltaY: Double = 0,
+        value: Double = 0
+    ) {
+        self.kind = kind
+        self.phase = phase
+        self.deltaX = deltaX
+        self.deltaY = deltaY
+        self.value = value
+    }
+}
+
 public enum InputEvent: Codable, Equatable, Sendable {
     case pointerMove(deltaX: Double, deltaY: Double, absoluteX: Double, absoluteY: Double)
     case mouseButton(button: PointerButton, isDown: Bool, clickCount: Int)
     case scroll(deltaX: Double, deltaY: Double, isContinuous: Bool)
-    case gesture(serializedEvent: Data)
+    case gesture(serializedEvent: Data, portable: PortableGesture? = nil)
     case key(code: UInt16, isDown: Bool, isRepeat: Bool)
     case flags(rawValue: UInt64)
 }
@@ -202,6 +245,7 @@ public enum PortableInputEvent: Equatable, Sendable {
     case scroll(deltaX: Double, deltaY: Double, isContinuous: Bool)
     case key(usage: UInt16, isDown: Bool, isRepeat: Bool)
     case modifiers(PortableModifierMask)
+    case gesture(PortableGesture)
 }
 
 public struct PortableInputFrame: Equatable, Sendable {
