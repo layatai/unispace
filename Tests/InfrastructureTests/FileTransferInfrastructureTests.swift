@@ -164,7 +164,14 @@ final class FileTransferInfrastructureTests: XCTestCase {
     }
 
     @MainActor
-    func testPasteboardMarksReceivedFilesAndDoesNotReemitThem() async {
+    func testPasteboardMarksReceivedFilesAndDoesNotReemitThem() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("UniSpace-Pasteboard-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let receivedURL = root.appendingPathComponent("received.txt")
+        try Data("received".utf8).write(to: receivedURL)
+
         let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
         defer { pasteboard.releaseGlobally() }
         let adapter = SystemFilePasteboard(
@@ -174,7 +181,7 @@ final class FileTransferInfrastructureTests: XCTestCase {
         let stream = adapter.events()
         let transferID = TransferID()
         adapter.publishFiles(
-            [URL(fileURLWithPath: "/tmp/received.txt")],
+            [receivedURL],
             transferID: transferID
         )
 
