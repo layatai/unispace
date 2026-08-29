@@ -425,12 +425,56 @@ private enum FileTransferPacketKind: UInt8 {
     case sealed = 2
 }
 
-private struct FileTransferChannelHello: Codable, Sendable {
+struct FileTransferChannelHello: Codable, Sendable {
     let version: UInt16
     let workspaceID: WorkspaceID
     let deviceID: DeviceID
     let nonce: Data
     let proof: Data
+
+    private enum CodingKeys: String, CodingKey {
+        case version
+        case workspaceID
+        case deviceID
+        case nonce
+        case proof
+    }
+
+    init(
+        version: UInt16,
+        workspaceID: WorkspaceID,
+        deviceID: DeviceID,
+        nonce: Data,
+        proof: Data
+    ) {
+        self.version = version
+        self.workspaceID = workspaceID
+        self.deviceID = deviceID
+        self.nonce = nonce
+        self.proof = proof
+    }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        version = try container.decode(UInt16.self, forKey: .version)
+        workspaceID = WorkspaceID(
+            rawValue: try container.decode(UUID.self, forKey: .workspaceID)
+        )
+        deviceID = DeviceID(
+            rawValue: try container.decode(UUID.self, forKey: .deviceID)
+        )
+        nonce = try container.decode(Data.self, forKey: .nonce)
+        proof = try container.decode(Data.self, forKey: .proof)
+    }
+
+    func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(version, forKey: .version)
+        try container.encode(workspaceID.rawValue, forKey: .workspaceID)
+        try container.encode(deviceID.rawValue, forKey: .deviceID)
+        try container.encode(nonce, forKey: .nonce)
+        try container.encode(proof, forKey: .proof)
+    }
 }
 
 final class SecureFileTransferConnection: @unchecked Sendable {
