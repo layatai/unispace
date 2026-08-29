@@ -96,10 +96,28 @@ public struct PasteboardFileSelection: Sendable, Equatable {
     }
 }
 
+public enum FilePasteboardPublicationError: Error, Equatable, Sendable {
+    case invalidFileSet
+    case writeRejected
+}
+
 @MainActor
 public protocol FilePasteboard: AnyObject, Sendable {
     func events() -> AsyncStream<PasteboardFileSelection>
+
+    /// Legacy fire-and-forget publication entry point retained for existing
+    /// adapters and test doubles. Production coordinators use the checked form.
     func publishFiles(_ urls: [URL], transferID: TransferID)
+
+    /// Publishes receiver-local files and reports validation or platform write
+    /// failures so the sender is never told a failed Finder write succeeded.
+    func publishFilesChecked(_ urls: [URL], transferID: TransferID) throws
+}
+
+public extension FilePasteboard {
+    func publishFilesChecked(_ urls: [URL], transferID: TransferID) throws {
+        publishFiles(urls, transferID: transferID)
+    }
 }
 
 public struct FileTransferSnapshot: Identifiable, Sendable, Equatable {

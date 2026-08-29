@@ -42,7 +42,13 @@ public final class SystemFilePasteboard: FilePasteboard {
     }
 
     public func publishFiles(_ urls: [URL], transferID: TransferID) {
-        guard let urls = validatedLocalFiles(urls) else { return }
+        try? publishFilesChecked(urls, transferID: transferID)
+    }
+
+    public func publishFilesChecked(_ urls: [URL], transferID: TransferID) throws {
+        guard let urls = validatedLocalFiles(urls) else {
+            throw FilePasteboardPublicationError.invalidFileSet
+        }
         let items: [NSPasteboardItem] = urls.map { url in
             let item = NSPasteboardItem()
             item.setString(url.absoluteString, forType: .fileURL)
@@ -51,7 +57,9 @@ public final class SystemFilePasteboard: FilePasteboard {
         }
 
         pasteboard.clearContents()
-        guard pasteboard.writeObjects(items) else { return }
+        guard pasteboard.writeObjects(items) else {
+            throw FilePasteboardPublicationError.writeRejected
+        }
         lastObservedChangeCount = pasteboard.changeCount
     }
 

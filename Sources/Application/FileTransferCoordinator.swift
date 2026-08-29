@@ -575,9 +575,46 @@ public actor FileTransferCoordinator {
             return
         }
 
-        setState(.verifying, for: completion.transferID)
+        // A failed Finder publication can be retried without retransmitting file
+        // bytes, so permit this verified terminal step to re-enter verification.
+        setState(.verifying, for: completion.transferID, enforceTransition: false)
         let urls = try await store.finalizeTransfer(completion.transferID)
-        await pasteboard.publishFiles(urls, transferID: completion.transferID)
+
+        do {
+            try await pasteboard.publishFilesChecked(urls, transferID: completion.transferID)
+        } catch {
+            let code: FileTransferFailureCode
+            if let publicationError = error as? FilePasteboardPublicationError {
+                switch publicationError {
+                case .invalidFileSet:
+                    code = .fileUnavailable
+                case .writeRejected:
+                    code = .stagingFailure
+                }
+            } else {
+                code = .stagingFailure
+            }
+
+            record = records[completion.transferID] ?? record
+            record.state = .failed
+            record.failureCode = code
+            record.completedAt = Date()
+            record.stagedURLs = urls
+            record.verifiedOffsets = fullOffsets(for: record.manifest)
+            records[completion.transferID] = record
+            emit(completion.transferID)
+
+            try await send(
+                .verification(TransferVerification(
+                    transferID: completion.transferID,
+                    accepted: false,
+                    failureCode: code
+                )),
+                to: peer
+            )
+            return
+        }
+
         record = records[completion.transferID] ?? record
         record.state = .completed
         record.failureCode = nil
@@ -944,6 +981,12 @@ public actor FileTransferCoordinator {
                 return .hashMismatch
             case .workspaceMismatch, .peerMismatch, .unsupportedVersion, .malformedEnvelope:
                 return .protocolViolation
+            }
+        }
+        if let error = error as? FilePasteboardPublicationError {
+            switch error {
+            case .invalidFileSet: return .fileUnavailable
+            case .writeRejected: return .stagingFailure
             }
         }
         if let code = error as? FileTransferFailureCode { return code }

@@ -1,12 +1,10 @@
 name: Finder File Continuity
 
 on:
+  pull_request:
   push:
     branches:
-      - agent/finder-file-copy-paste-continuity
-  pull_request:
-    branches:
-      - agent/continuity-clipboard-sharing
+      - master
 
 permissions:
   contents: read
@@ -24,6 +22,16 @@ jobs:
 
       - name: Generate project
         run: ./Scripts/bootstrap.sh
+
+      - name: Upload generated Xcode project
+        uses: actions/upload-artifact@v4
+        with:
+          name: generated-xcode-project
+          path: UniSpace.xcodeproj/project.pbxproj
+          if-no-files-found: error
+
+      - name: Verify generated project is checked in
+        run: git diff --exit-code -- UniSpace.xcodeproj/project.pbxproj
 
       - name: Run unit and Finder continuity tests
         run: |
