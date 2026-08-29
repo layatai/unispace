@@ -292,12 +292,15 @@ struct GeneralView: View {
                 get: { model.launchAtLogin },
                 set: { model.setLaunchAtLogin($0) }
             )) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Open at login")
-                        .font(.body.weight(.medium))
-                    Text("Keep UniSpace ready as soon as you sign in to this Mac.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                HStack(spacing: 12) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Open at login")
+                            .font(.body.weight(.medium))
+                        Text("Keep UniSpace ready as soon as you sign in to this Mac.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 0)
                 }
             }
             .toggleStyle(.switch)

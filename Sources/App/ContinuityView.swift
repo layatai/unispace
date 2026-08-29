@@ -54,6 +54,7 @@ struct ContinuityView: View {
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
+                Spacer(minLength: 0)
             }
         }
         .toggleStyle(.switch)

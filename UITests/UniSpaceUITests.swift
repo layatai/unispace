@@ -103,6 +103,25 @@ final class UniSpaceUITests: XCTestCase {
     }
 
     @MainActor
+    func testConfiguredWorkspaceCardsFillContentWidth() {
+        let app = launchApp(mode: "--ui-testing-configured")
+
+        let launchAtLoginCard = app.switches["launch-at-login"]
+        let leaveWorkspaceButton = app.buttons["leave-workspace"]
+        XCTAssertTrue(launchAtLoginCard.waitForExistence(timeout: 5))
+        XCTAssertTrue(leaveWorkspaceButton.waitForExistence(timeout: 5))
+        let expectedTrailingEdge = leaveWorkspaceButton.frame.maxX
+        assertTrailingEdge(of: launchAtLoginCard, equals: expectedTrailingEdge)
+
+        app.staticTexts["section-continuity"].click()
+        let sharingCard = app.switches["clipboard-sharing-toggle"]
+        XCTAssertTrue(sharingCard.waitForExistence(timeout: 5))
+        dismissSheetIfPresent("Clipboard sharing unavailable", in: app)
+        assertTrailingEdge(of: sharingCard, equals: expectedTrailingEdge)
+        app.terminate()
+    }
+
+    @MainActor
     private func launchApp(mode: String) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = [mode, "-ApplePersistenceIgnoreState", "YES"]
@@ -128,5 +147,14 @@ final class UniSpaceUITests: XCTestCase {
         if sheet.waitForExistence(timeout: 1), sheet.staticTexts[title].exists {
             sheet.buttons["OK"].click()
         }
+    }
+
+    private func assertTrailingEdge(
+        of element: XCUIElement,
+        equals expected: CGFloat,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        XCTAssertEqual(element.frame.maxX, expected, accuracy: 1, file: file, line: line)
     }
 }
