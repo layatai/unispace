@@ -1,0 +1,62 @@
+name: Apply deterministic Finder test fixes
+
+on:
+  push:
+    branches:
+      - agent/finder-file-copy-paste-continuity
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/finder-file-copy-paste-continuity
+          fetch-depth: 0
+
+      - name: Patch failing test fixtures
+        shell: bash
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          application = Path("Tests/ApplicationTests/ApplicationTests.swift")
+          text = application.read_text()
+          old = "        try await Task.sleep(for: .milliseconds(40))\n\n        XCTAssertEqual(transport.frames.map(\\.event), ["
+          new = "        for _ in 0..<50 {\n            if !transport.frames.isEmpty { break }\n            try await Task.sleep(for: .milliseconds(20))\n        }\n\n        XCTAssertEqual(transport.frames.map(\\.event), ["
+          if old in text:
+              text = text.replace(old, new, 1)
+          elif new not in text:
+              raise SystemExit("Continuous-scroll test block was not found")
+          application.write_text(text)
+
+          infrastructure = Path("Tests/InfrastructureTests/FileTransferInfrastructureTests.swift")
+          text = infrastructure.read_text()
+          old = "    func testPasteboardMarksReceivedFilesAndDoesNotReemitThem() async {\n        let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))"
+          new = "    func testPasteboardMarksReceivedFilesAndDoesNotReemitThem() async throws {\n        let root = FileManager.default.temporaryDirectory\n            .appendingPathComponent(\"UniSpace-Pasteboard-\\(UUID().uuidString)\", isDirectory: true)\n        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)\n        defer { try? FileManager.default.removeItem(at: root) }\n        let receivedURL = root.appendingPathComponent(\"received.txt\")\n        try Data(\"received\".utf8).write(to: receivedURL)\n\n        let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))"
+          if old in text:
+              text = text.replace(old, new, 1)
+          elif new not in text:
+              raise SystemExit("Pasteboard test fixture block was not found")
+
+          old = "            [URL(fileURLWithPath: \"/tmp/received.txt\")],"
+          new = "            [receivedURL],"
+          if old in text:
+              text = text.replace(old, new, 1)
+          elif new not in text:
+              raise SystemExit("Pasteboard received URL was not found")
+          infrastructure.write_text(text)
+          PY
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Tests/ApplicationTests/ApplicationTests.swift Tests/InfrastructureTests/FileTransferInfrastructureTests.swift
+          if git diff --cached --quiet; then
+            echo "Tests are already patched"
+            exit 0
+          fi
+          git commit -m "test: make Finder and scroll checks deterministic"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
