@@ -932,6 +932,43 @@ final class InfrastructureTests: XCTestCase {
         XCTAssertTrue(parameters.includePeerToPeer)
     }
 
+    func testSecureChannelHelloUsesPortableWindowsUUIDShape() throws {
+        let workspaceID = WorkspaceID(
+            rawValue: try XCTUnwrap(UUID(uuidString: "11111111-2222-3333-4444-555555555555"))
+        )
+        let deviceID = DeviceID(
+            rawValue: try XCTUnwrap(UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE"))
+        )
+        let nonce = Data(repeating: 0x11, count: 32)
+        let proof = Data(repeating: 0x22, count: 32)
+        let hello = SecureChannelHello(
+            version: 1,
+            workspaceID: workspaceID,
+            deviceID: deviceID,
+            nonce: nonce,
+            proof: proof,
+            supportedWireVersions: [1, 2]
+        )
+
+        let encoded = try JSONEncoder().encode(hello)
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+        )
+        XCTAssertEqual(object["workspaceID"] as? String, workspaceID.rawValue.uuidString)
+        XCTAssertEqual(object["deviceID"] as? String, deviceID.rawValue.uuidString)
+        XCTAssertEqual(object["supportedWireVersions"] as? [Int], [1, 2])
+
+        let windowsJSON = Data("""
+        {"version":1,"workspaceID":"11111111-2222-3333-4444-555555555555","deviceID":"AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE","nonce":"\(nonce.base64EncodedString())","proof":"\(proof.base64EncodedString())","supportedWireVersions":[1,2]}
+        """.utf8)
+        let decoded = try JSONDecoder().decode(SecureChannelHello.self, from: windowsJSON)
+        XCTAssertEqual(decoded.workspaceID, workspaceID)
+        XCTAssertEqual(decoded.deviceID, deviceID)
+        XCTAssertEqual(decoded.nonce, nonce)
+        XCTAssertEqual(decoded.proof, proof)
+        XCTAssertEqual(decoded.supportedWireVersions, [1, 2])
+    }
+
     @MainActor
     func testDisplayCatalogReturnsStableUniqueIdentifiers() {
         let displays = SystemDisplayCatalog().currentDisplays(for: DeviceID())

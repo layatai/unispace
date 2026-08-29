@@ -457,12 +457,8 @@ struct FileTransferChannelHello: Codable, Sendable {
     init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         version = try container.decode(UInt16.self, forKey: .version)
-        workspaceID = WorkspaceID(
-            rawValue: try container.decode(UUID.self, forKey: .workspaceID)
-        )
-        deviceID = DeviceID(
-            rawValue: try container.decode(UUID.self, forKey: .deviceID)
-        )
+        workspaceID = try container.decodeUUIDIdentifier(WorkspaceID.self, forKey: .workspaceID)
+        deviceID = try container.decodeUUIDIdentifier(DeviceID.self, forKey: .deviceID)
         nonce = try container.decode(Data.self, forKey: .nonce)
         proof = try container.decode(Data.self, forKey: .proof)
     }
@@ -470,8 +466,8 @@ struct FileTransferChannelHello: Codable, Sendable {
     func encode(to encoder: any Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(version, forKey: .version)
-        try container.encode(workspaceID.rawValue, forKey: .workspaceID)
-        try container.encode(deviceID.rawValue, forKey: .deviceID)
+        try container.encodeUUIDIdentifier(workspaceID, forKey: .workspaceID)
+        try container.encodeUUIDIdentifier(deviceID, forKey: .deviceID)
         try container.encode(nonce, forKey: .nonce)
         try container.encode(proof, forKey: .proof)
     }

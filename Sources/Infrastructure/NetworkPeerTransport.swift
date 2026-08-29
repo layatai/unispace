@@ -973,7 +973,7 @@ enum SecureChannelSecurityProfile: Equatable {
     var infoPrefix: String { self == .reliableV1 ? "UniSpace channel v1" : "UniSpace pointer lane v2" }
 }
 
-private struct SecureChannelHello: Codable, Sendable {
+struct SecureChannelHello: Codable, Sendable {
     let version: UInt16
     let workspaceID: WorkspaceID
     let deviceID: DeviceID
@@ -1004,11 +1004,21 @@ private struct SecureChannelHello: Codable, Sendable {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         version = try container.decode(UInt16.self, forKey: .version)
-        workspaceID = try container.decode(WorkspaceID.self, forKey: .workspaceID)
-        deviceID = try container.decode(DeviceID.self, forKey: .deviceID)
+        workspaceID = try container.decodeUUIDIdentifier(WorkspaceID.self, forKey: .workspaceID)
+        deviceID = try container.decodeUUIDIdentifier(DeviceID.self, forKey: .deviceID)
         nonce = try container.decode(Data.self, forKey: .nonce)
         proof = try container.decode(Data.self, forKey: .proof)
         supportedWireVersions = try container.decodeIfPresent([UInt16].self, forKey: .supportedWireVersions) ?? [1]
+    }
+
+    func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(version, forKey: .version)
+        try container.encodeUUIDIdentifier(workspaceID, forKey: .workspaceID)
+        try container.encodeUUIDIdentifier(deviceID, forKey: .deviceID)
+        try container.encode(nonce, forKey: .nonce)
+        try container.encode(proof, forKey: .proof)
+        try container.encode(supportedWireVersions, forKey: .supportedWireVersions)
     }
 }
 
