@@ -20,6 +20,7 @@ final class FileTransferViewModel: ObservableObject {
     private var bindingTask: Task<Void, Never>?
     private var eventTask: Task<Void, Never>?
     private var configuredWorkspace: ContinuityWorkspaceConfiguration?
+    private var reportedConfigurationFailureWorkspaceID: WorkspaceID?
 
     init(
         trustStore: KeychainTrustStore = KeychainTrustStore(),
@@ -91,6 +92,7 @@ final class FileTransferViewModel: ObservableObject {
         bindingTask?.cancel()
         bindingTask = nil
         configuredWorkspace = nil
+        reportedConfigurationFailureWorkspaceID = nil
         candidateDevices = []
         knownDevices = []
         connectedDeviceIDs = []
@@ -232,6 +234,7 @@ final class FileTransferViewModel: ObservableObject {
         await coordinator.setAutomaticDestination(selectedDestinationID ?? appModel.continuityTargetID)
 
         guard let workspace = appModel.workspace else {
+            reportedConfigurationFailureWorkspaceID = nil
             if configuredWorkspace != nil {
                 configuredWorkspace = nil
                 records.removeAll()
@@ -257,13 +260,17 @@ final class FileTransferViewModel: ObservableObject {
                 key: configuration.key
             )
             configuredWorkspace = configuration
+            reportedConfigurationFailureWorkspaceID = nil
             let recovered = await coordinator.snapshots()
             records = Dictionary(uniqueKeysWithValues: recovered.map { ($0.id, $0) })
             sortTransfers()
         } catch {
             configuredWorkspace = nil
             await coordinator.stop()
-            lastError = userMessage(for: error)
+            if reportedConfigurationFailureWorkspaceID != workspace.id {
+                reportedConfigurationFailureWorkspaceID = workspace.id
+                lastError = userMessage(for: error)
+            }
         }
     }
 

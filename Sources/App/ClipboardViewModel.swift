@@ -19,6 +19,7 @@ final class ClipboardViewModel: ObservableObject {
     private let coordinator: ClipboardCoordinator
     private var bindingTask: Task<Void, Never>?
     private var configuredWorkspace: ContinuityWorkspaceConfiguration?
+    private var reportedConfigurationFailureWorkspaceID: WorkspaceID?
 
     init(
         defaults: UserDefaults = .standard,
@@ -80,6 +81,7 @@ final class ClipboardViewModel: ObservableObject {
         bindingTask?.cancel()
         bindingTask = nil
         configuredWorkspace = nil
+        reportedConfigurationFailureWorkspaceID = nil
         connectedDeviceIDs = []
         activeDestinationID = nil
         knownDevices = []
@@ -92,6 +94,7 @@ final class ClipboardViewModel: ObservableObject {
         connectedDeviceIDs = await coordinator.connectedDeviceIDs()
 
         guard let workspace = appModel.workspace else {
+            reportedConfigurationFailureWorkspaceID = nil
             if configuredWorkspace != nil {
                 configuredWorkspace = nil
                 activeDestinationID = nil
@@ -119,12 +122,16 @@ final class ClipboardViewModel: ObservableObject {
                 )
                 await coordinator.setSharingEnabled(sharingEnabled)
                 configuredWorkspace = configuration
+                reportedConfigurationFailureWorkspaceID = nil
             }
         } catch {
             configuredWorkspace = nil
             connectedDeviceIDs = []
             await coordinator.stop()
-            lastError = "UniSpace could not start its encrypted clipboard connection."
+            if reportedConfigurationFailureWorkspaceID != workspace.id {
+                reportedConfigurationFailureWorkspaceID = workspace.id
+                lastError = "UniSpace could not start its encrypted clipboard connection."
+            }
             return
         }
 

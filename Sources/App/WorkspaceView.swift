@@ -6,18 +6,25 @@ import UniSpaceDomain
 /// The configured-workspace shell: a source list on the left, one detail page
 /// on the right, and the controller action promoted into the toolbar.
 struct WorkspaceView: View {
-    enum Section: String, Hashable, CaseIterable, Identifiable {
+    enum Destination: String, Hashable, Identifiable {
         case general
         case displays
-        case macs
+        case devices
+        case continuity
+        case transfers
 
         var id: String { rawValue }
+
+        static let workspace: [Self] = [.general, .displays, .devices]
+        static let sharing: [Self] = [.continuity, .transfers]
 
         var title: String {
             switch self {
             case .general: "General"
             case .displays: "Displays"
-            case .macs: "Devices"
+            case .devices: "Devices"
+            case .continuity: "Continuity"
+            case .transfers: "File Transfers"
             }
         }
 
@@ -25,13 +32,17 @@ struct WorkspaceView: View {
             switch self {
             case .general: "gearshape"
             case .displays: "rectangle.3.group"
-            case .macs: "laptopcomputer"
+            case .devices: "laptopcomputer"
+            case .continuity: "doc.on.clipboard"
+            case .transfers: "arrow.left.arrow.right.circle"
             }
         }
     }
 
     @ObservedObject var model: AppModel
-    @State private var selection: Section = .general
+    @ObservedObject var clipboardModel: ClipboardViewModel
+    @ObservedObject var transferModel: FileTransferViewModel
+    @State private var selection: Destination = .general
 
     var body: some View {
         NavigationSplitView {
@@ -47,15 +58,40 @@ struct WorkspaceView: View {
 
     private var sidebar: some View {
         List(selection: $selection) {
-            ForEach(Section.allCases) { section in
-                Label(section.title, systemImage: section.systemImage)
-                    .badge(section == .macs ? model.devices.count : 0)
-                    .tag(section)
-                    .accessibilityIdentifier("section-\(section.rawValue)")
+            SwiftUI.Section("Workspace") {
+                ForEach(Destination.workspace) { destination in
+                    sidebarRow(destination)
+                }
+            }
+            SwiftUI.Section("Sharing") {
+                ForEach(Destination.sharing) { destination in
+                    sidebarRow(destination)
+                }
             }
         }
         .navigationSplitViewColumnWidth(min: 190, ideal: 210, max: 260)
         .safeAreaInset(edge: .bottom) { sidebarFooter }
+    }
+
+    @ViewBuilder
+    private func sidebarRow(_ destination: Destination) -> some View {
+        HStack(spacing: 8) {
+            Label(destination.title, systemImage: destination.systemImage)
+                .accessibilityIdentifier("section-\(destination.rawValue)")
+            Spacer(minLength: 0)
+            if destination == .continuity, clipboardModel.sharingEnabled {
+                Circle()
+                    .fill(Color.green)
+                    .frame(width: 7, height: 7)
+                    .accessibilityLabel("Enabled")
+            }
+        }
+        .badge(destination == .devices ? model.devices.count : transferBadge(destination))
+        .tag(destination)
+    }
+
+    private func transferBadge(_ destination: Destination) -> Int {
+        destination == .transfers ? transferModel.activeTransferCount : 0
     }
 
     private var sidebarFooter: some View {
@@ -89,8 +125,12 @@ struct WorkspaceView: View {
             GeneralView(model: model)
         case .displays:
             DisplaysView(model: model)
-        case .macs:
+        case .devices:
             DevicesView(model: model)
+        case .continuity:
+            ContinuityView(model: clipboardModel)
+        case .transfers:
+            TransferCenterView(model: transferModel)
         }
     }
 

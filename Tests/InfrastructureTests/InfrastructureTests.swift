@@ -1133,13 +1133,14 @@ final class InfrastructureTests: XCTestCase {
             localDeviceID: macID,
             devices: [mac, windows]
         )
-        let transport = CrossPlatformPointerTransport()
+        let transport = CrossPlatformPointerTransport(listenPort: .any)
         try transport.start(localDevice: mac, workspace: workspace, key: key)
         defer { transport.stop() }
+        let pointerPort = try await waitForCrossPlatformPointerPort(of: transport)
 
         let rawClient = NWConnection(
             host: "127.0.0.1",
-            port: NetworkPeerTransport.crossPlatformPointerPort,
+            port: pointerPort,
             using: .udp
         )
         let client = SecurePeerConnection(
@@ -1271,6 +1272,20 @@ private func waitForRealtimePort(of transport: QUICRealtimeTransport) async thro
         try await Task.sleep(for: .milliseconds(20))
     }
     throw XCTSkip("Realtime QUIC listener did not become ready")
+}
+
+private func waitForCrossPlatformPointerPort(
+    of transport: CrossPlatformPointerTransport
+) async throws -> NWEndpoint.Port {
+    for _ in 0..<100 {
+        if let port = transport.activePort { return port }
+        try await Task.sleep(for: .milliseconds(20))
+    }
+    throw InfrastructureTestFailure.listenerNotReady("Windows pointer listener")
+}
+
+private enum InfrastructureTestFailure: Error {
+    case listenerNotReady(String)
 }
 
 private func waitForPairingPort(of service: PairingNetworkService) throws -> NWEndpoint.Port {

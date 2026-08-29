@@ -11,7 +11,7 @@ struct DisplaysView: View {
         VStack(alignment: .leading, spacing: Metrics.stackSpacing) {
             PageHeader(
                 title: "Display Topology",
-                detail: "Arrange displays the way they sit on your desk. The pointer crosses between touching edges."
+                detail: "Arrange displays the way they sit on your desk. Offline devices stay in place and are bypassed until they reconnect."
             ) {
                 Button("Reset Layout") { resetToken += 1 }
                     .controlSize(.small)
@@ -31,12 +31,43 @@ struct DisplaysView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
+                topologyLegend
                 TopologyCanvas(model: model, resetToken: resetToken)
                     .frame(minHeight: 300)
                 ConnectionList(model: model)
             }
         }
         .padding(Metrics.pageInset)
+    }
+
+    private var topologyLegend: some View {
+        HStack(spacing: 16) {
+            DisplayLegendItem(title: "This Mac", color: .accentColor)
+            DisplayLegendItem(title: "Online", color: .green)
+            DisplayLegendItem(title: "Offline", color: .secondary)
+            Spacer(minLength: 8)
+            Label("Drag cards together to connect edges", systemImage: "hand.draw")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .accessibilityElement(children: .combine)
+    }
+}
+
+private struct DisplayLegendItem: View {
+    let title: String
+    let color: Color
+
+    var body: some View {
+        Label {
+            Text(title)
+        } icon: {
+            Circle()
+                .fill(color)
+                .frame(width: 7, height: 7)
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
     }
 }
 
@@ -152,13 +183,15 @@ private struct TopologyCanvas: View {
 
     private func card(_ display: DisplayDescriptor) -> some View {
         let isLocal = display.deviceID == model.localDeviceID
+        let isOnline = isLocal || model.connectedDevices.contains(display.deviceID)
         let isDragging = dragging == display.id
         let isTarget = snapTarget == display.id
+        let tint: Color = isLocal ? .accentColor : (isOnline ? .green : .secondary)
 
         return VStack(spacing: 5) {
             Image(systemName: isLocal ? "laptopcomputer" : "display")
                 .font(.system(size: 17, weight: .medium))
-                .foregroundStyle(isLocal ? Color.accentColor : .secondary)
+                .foregroundStyle(tint)
             VStack(spacing: 1) {
                 Text(deviceName(display.deviceID))
                     .font(.caption.weight(.semibold))
@@ -179,17 +212,27 @@ private struct TopologyCanvas: View {
             RoundedRectangle(cornerRadius: Metrics.smallRadius, style: .continuous)
                 .strokeBorder(isTarget ? Color.accentColor : Theme.hairline, lineWidth: isTarget ? 2 : 1)
         )
+        .overlay(alignment: .topTrailing) {
+            Circle()
+                .fill(tint)
+                .frame(width: 7, height: 7)
+                .padding(9)
+                .accessibilityHidden(true)
+        }
         .shadow(
             color: .black.opacity(isDragging ? 0.28 : 0.12),
             radius: isDragging ? 12 : 3,
             y: isDragging ? 6 : 1
         )
         .scaleEffect(isDragging ? 1.04 : (hovered == display.id ? 1.015 : 1))
+        .opacity(isOnline ? 1 : 0.72)
         .animation(reduceMotion ? nil : .unispace, value: isDragging)
         .animation(reduceMotion ? nil : .unispace, value: isTarget)
         .animation(reduceMotion ? nil : .unispace, value: hovered)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(deviceName(display.deviceID)), \(display.name)")
+        .accessibilityLabel(
+            "\(deviceName(display.deviceID)), \(display.name), \(isOnline ? "online" : "offline")"
+        )
         .accessibilityHint("Drag next to a display on another device to connect them.")
     }
 

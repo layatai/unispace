@@ -85,9 +85,27 @@ final class UniSpaceUITests: XCTestCase {
     }
 
     @MainActor
+    func testConfiguredWorkspaceSurfacesContinuityAndTransfersInSidebar() {
+        let app = launchApp(mode: "--ui-testing-configured")
+
+        let continuity = app.staticTexts["section-continuity"]
+        XCTAssertTrue(continuity.waitForExistence(timeout: 5))
+        continuity.click()
+        XCTAssertTrue(app.switches["clipboard-sharing-toggle"].waitForExistence(timeout: 5))
+        dismissSheetIfPresent("Clipboard sharing unavailable", in: app)
+
+        let transfers = app.staticTexts["section-transfers"]
+        XCTAssertTrue(transfers.waitForExistence(timeout: 5))
+        transfers.click()
+        dismissSheetIfPresent("File Transfer", in: app)
+        XCTAssertTrue(app.buttons["send-files"].waitForExistence(timeout: 5))
+        app.terminate()
+    }
+
+    @MainActor
     private func launchApp(mode: String) -> XCUIApplication {
         let app = XCUIApplication()
-        app.launchArguments = [mode]
+        app.launchArguments = [mode, "-ApplePersistenceIgnoreState", "YES"]
         app.launch()
         openMainWindowIfNeeded(in: app)
         return app
@@ -102,5 +120,13 @@ final class UniSpaceUITests: XCTestCase {
         statusItem.click()
         app.menuItems["Open UniSpace…"].click()
         XCTAssertTrue(app.windows["UniSpace"].waitForExistence(timeout: 5))
+    }
+
+    @MainActor
+    private func dismissSheetIfPresent(_ title: String, in app: XCUIApplication) {
+        let sheet = app.sheets.firstMatch
+        if sheet.waitForExistence(timeout: 1), sheet.staticTexts[title].exists {
+            sheet.buttons["OK"].click()
+        }
     }
 }

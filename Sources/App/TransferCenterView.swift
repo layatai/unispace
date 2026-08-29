@@ -29,43 +29,52 @@ struct TransferCenterView: View {
     }
 
     private var header: some View {
-        HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text("Transfers")
-                    .font(.title2.bold())
-                Text("Encrypted, resumable file delivery between your paired Macs.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            Spacer(minLength: 16)
-            if model.candidateDevices.count > 1 {
-                Picker("Destination", selection: $model.selectedDestinationID) {
-                    Text("Choose a Mac").tag(DeviceID?.none)
-                    ForEach(model.candidateDevices) { device in
-                        Text(device.name).tag(DeviceID?.some(device.id))
-                    }
+        VStack(alignment: .leading, spacing: 14) {
+            PageHeader(
+                title: "Transfers",
+                detail: "Encrypted, resumable file delivery between paired Macs and Windows PCs."
+            )
+
+            HStack(spacing: 12) {
+                destinationControl
+                Spacer(minLength: 16)
+                Button {
+                    model.chooseFiles()
+                } label: {
+                    Label("Send Files…", systemImage: "paperplane")
                 }
-                .frame(maxWidth: 220)
-                .accessibilityIdentifier("transfer-destination")
-            } else if let destination = model.candidateDevices.first {
-                Label(destination.name, systemImage: "laptopcomputer")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                .buttonStyle(.borderedProminent)
+                .disabled(model.effectiveDestinationID == nil)
+                .accessibilityIdentifier("send-files")
+                Button("Clear Completed") {
+                    model.clearCompleted()
+                }
+                .disabled(!model.transfers.contains(where: { $0.state.isTerminal }))
             }
-            Button {
-                model.chooseFiles()
-            } label: {
-                Label("Send Files…", systemImage: "paperplane")
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(model.effectiveDestinationID == nil)
-            .accessibilityIdentifier("send-files")
-            Button("Clear Completed") {
-                model.clearCompleted()
-            }
-            .disabled(!model.transfers.contains(where: { $0.state.isTerminal }))
         }
         .padding(20)
+    }
+
+    @ViewBuilder
+    private var destinationControl: some View {
+        if model.candidateDevices.count > 1 {
+            Picker("Send to", selection: $model.selectedDestinationID) {
+                Text("Choose a device").tag(DeviceID?.none)
+                ForEach(model.candidateDevices) { device in
+                    Text(device.name).tag(DeviceID?.some(device.id))
+                }
+            }
+            .frame(maxWidth: 240)
+            .accessibilityIdentifier("transfer-destination")
+        } else if let destination = model.candidateDevices.first {
+            Label(destination.name, systemImage: deviceIcon(destination))
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+        } else {
+            Label("No compatible device online", systemImage: "wifi.slash")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+        }
     }
 
     private var emptyState: some View {
@@ -73,11 +82,11 @@ struct TransferCenterView: View {
             Label("No File Transfers", systemImage: "arrow.left.arrow.right.circle")
         } description: {
             if model.candidateDevices.isEmpty {
-                Text("Connect another paired Mac, then copy files in Finder or use Send Files.")
+                Text("Bring a paired Mac or Windows PC online, then copy files or use Send Files.")
             } else if model.effectiveDestinationID == nil {
-                Text("The paired Mac is online, but its encrypted file-transfer channel is not ready yet.")
+                Text("The paired device is online, but its encrypted file-transfer channel is not ready yet.")
             } else {
-                Text("Copy files in Finder while controlling another Mac, or choose Send Files to start an encrypted transfer.")
+                Text("Copy files while controlling another device, or choose Send Files to start an encrypted transfer.")
             }
         } actions: {
             Button("Send Files…") { model.chooseFiles() }
@@ -86,6 +95,10 @@ struct TransferCenterView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .accessibilityIdentifier("transfer-empty-state")
+    }
+
+    private func deviceIcon(_ device: DeviceDescriptor) -> String {
+        device.platform == .windows ? "pc" : "laptopcomputer"
     }
 
     private var transferList: some View {

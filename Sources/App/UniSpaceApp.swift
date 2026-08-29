@@ -11,7 +11,11 @@ struct UniSpaceApp: App {
 
     var body: some Scene {
         Window("UniSpace", id: "main") {
-            SettingsRootView(model: model)
+            SettingsRootView(
+                model: model,
+                clipboardModel: clipboardModel,
+                transferModel: transferModel
+            )
                 .frame(minWidth: 760, minHeight: 540)
                 .onAppear {
                     DockIconVisibility.show()

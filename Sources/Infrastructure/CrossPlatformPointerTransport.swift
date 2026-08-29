@@ -8,19 +8,34 @@ import UniSpaceDomain
 final class CrossPlatformPointerTransport: @unchecked Sendable {
     private let queue = DispatchQueue(label: "com.layatai.unispace.windows-pointer", qos: .userInteractive)
     private let lock = NSLock()
+    private let listenPort: NWEndpoint.Port
     private var localDevice: DeviceDescriptor?
     private var workspaceID: WorkspaceID?
     private var key: Data?
     private var listener: NWListener?
+    private var readyPort: NWEndpoint.Port?
     private var connections: [DeviceID: SecurePeerConnection] = [:]
     private var pending: [ObjectIdentifier: SecurePeerConnection] = [:]
 
+    init(listenPort: NWEndpoint.Port = NetworkPeerTransport.crossPlatformPointerPort) {
+        self.listenPort = listenPort
+    }
+
+    var activePort: NWEndpoint.Port? { lock.withLock { readyPort } }
+
     func start(localDevice: DeviceDescriptor, workspace: WorkspaceSnapshot, key: Data) throws {
         stop()
-        let listener = try NWListener(using: .udp, on: NetworkPeerTransport.crossPlatformPointerPort)
+        let listener = try NWListener(using: .udp, on: listenPort)
         listener.newConnectionHandler = { [weak self] connection in self?.accept(connection) }
-        listener.stateUpdateHandler = { [weak self] state in
-            if case .failed = state { self?.stop() }
+        listener.stateUpdateHandler = { [weak self, weak listener] state in
+            switch state {
+            case .ready:
+                if let port = listener?.port { self?.lock.withLock { self?.readyPort = port } }
+            case .failed:
+                self?.stop()
+            default:
+                break
+            }
         }
         lock.withLock {
             self.localDevice = localDevice
@@ -35,6 +50,7 @@ final class CrossPlatformPointerTransport: @unchecked Sendable {
         let values = lock.withLock { () -> (NWListener?, [SecurePeerConnection]) in
             let values = (listener, Array(connections.values) + Array(pending.values))
             listener = nil
+            readyPort = nil
             connections.removeAll()
             pending.removeAll()
             localDevice = nil
