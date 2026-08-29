@@ -25,34 +25,34 @@ jobs:
 
           path = Path("Sources/App/AppModel.swift")
           text = path.read_text()
-          old = r'''                switch status {
-                case .ready:
-                    statusMessage = setupState == .hostingPairing
-                        ? "Visible to nearby devices as \(localDevice.name)"
-                        : "Searching the local network"
-                case let .waiting(message):
-                    statusMessage = "Waiting for local network access: \(message)"
-                case let .failed(message):
-                    lastError = "Local network discovery failed: \(message)"
-                    setupState = workspace == nil ? .needsWorkspace : .ready
-                }
-'''
-          new = r'''                switch status {
-                case .ready:
-                    self.statusMessage = self.setupState == .hostingPairing
-                        ? "Visible to nearby devices as \(self.localDevice.name)"
-                        : "Searching the local network"
-                case let .waiting(message):
-                    self.statusMessage = "Waiting for local network access: \(message)"
-                case let .failed(message):
-                    self.lastError = "Local network discovery failed: \(message)"
-                    self.setupState = self.workspace == nil ? .needsWorkspace : .ready
-                }
-'''
-          if old in text:
-              path.write_text(text.replace(old, new, 1))
-          elif new not in text:
-              raise SystemExit("Expected AppModel callback block was not found")
+          replacements = [
+              (
+                  "                    statusMessage = setupState == .hostingPairing",
+                  "                    self.statusMessage = self.setupState == .hostingPairing",
+              ),
+              (
+                  '                        ? "Visible to nearby devices as \\(localDevice.name)"',
+                  '                        ? "Visible to nearby devices as \\(self.localDevice.name)"',
+              ),
+              (
+                  '                    statusMessage = "Waiting for local network access: \\(message)"',
+                  '                    self.statusMessage = "Waiting for local network access: \\(message)"',
+              ),
+              (
+                  '                    lastError = "Local network discovery failed: \\(message)"',
+                  '                    self.lastError = "Local network discovery failed: \\(message)"',
+              ),
+              (
+                  "                    setupState = workspace == nil ? .needsWorkspace : .ready",
+                  "                    self.setupState = self.workspace == nil ? .needsWorkspace : .ready",
+              ),
+          ]
+          for old, new in replacements:
+              if old in text:
+                  text = text.replace(old, new, 1)
+              elif new not in text:
+                  raise SystemExit(f"Expected AppModel line was not found: {old}")
+          path.write_text(text)
           PY
 
           git config user.name "github-actions[bot]"
