@@ -189,11 +189,13 @@ private struct TemporaryFileFixture {
     let urls: [URL]
 
     init(names: [String]) throws {
-        root = FileManager.default.temporaryDirectory
+        let fixtureRoot = FileManager.default.temporaryDirectory
             .appendingPathComponent("UniSpace-Finder-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: fixtureRoot, withIntermediateDirectories: true)
+
+        root = fixtureRoot
         urls = try names.enumerated().map { index, name in
-            let url = root.appendingPathComponent(name)
+            let url = fixtureRoot.appendingPathComponent(name)
             try Data("payload-\(index)".utf8).write(to: url)
             return url
         }
