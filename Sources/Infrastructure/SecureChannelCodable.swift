@@ -6,7 +6,10 @@ extension KeyedDecodingContainer {
         _ type: Value.Type,
         forKey key: Key
     ) throws -> Value {
-        Value(rawValue: try decode(UUID.self, forKey: key))
+        if let rawValue = try? decode(UUID.self, forKey: key) {
+            return Value(rawValue: rawValue)
+        }
+        return try decode(Value.self, forKey: key)
     }
 }
 

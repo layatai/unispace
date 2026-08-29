@@ -967,6 +967,19 @@ final class InfrastructureTests: XCTestCase {
         XCTAssertEqual(decoded.nonce, nonce)
         XCTAssertEqual(decoded.proof, proof)
         XCTAssertEqual(decoded.supportedWireVersions, [1, 2])
+
+        let installedWindowsJSON = Data("""
+        {"version":1,"workspaceID":{"rawValue":"11111111-2222-3333-4444-555555555555"},"deviceID":{"rawValue":"AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE"},"nonce":"\(nonce.base64EncodedString())","proof":"\(proof.base64EncodedString())","supportedWireVersions":[1,2]}
+        """.utf8)
+        let installedWindowsHello = try JSONDecoder().decode(
+            SecureChannelHello.self,
+            from: installedWindowsJSON
+        )
+        XCTAssertEqual(installedWindowsHello.workspaceID, workspaceID)
+        XCTAssertEqual(installedWindowsHello.deviceID, deviceID)
+        XCTAssertEqual(installedWindowsHello.nonce, nonce)
+        XCTAssertEqual(installedWindowsHello.proof, proof)
+        XCTAssertEqual(installedWindowsHello.supportedWireVersions, [1, 2])
     }
 
     @MainActor

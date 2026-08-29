@@ -230,6 +230,19 @@ final class FileTransferInfrastructureTests: XCTestCase {
         XCTAssertEqual(decoded.deviceID, deviceID)
         XCTAssertEqual(decoded.nonce, nonce)
         XCTAssertEqual(decoded.proof, proof)
+
+        let installedWindowsJSON = Data("""
+        {"version":1,"workspaceID":{"rawValue":"11111111-2222-3333-4444-555555555555"},"deviceID":{"rawValue":"AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE"},"nonce":"\(nonce.base64EncodedString())","proof":"\(proof.base64EncodedString())"}
+        """.utf8)
+        let installedWindowsHello = try JSONDecoder().decode(
+            FileTransferChannelHello.self,
+            from: installedWindowsJSON
+        )
+        XCTAssertEqual(installedWindowsHello.version, 1)
+        XCTAssertEqual(installedWindowsHello.workspaceID, workspaceID)
+        XCTAssertEqual(installedWindowsHello.deviceID, deviceID)
+        XCTAssertEqual(installedWindowsHello.nonce, nonce)
+        XCTAssertEqual(installedWindowsHello.proof, proof)
     }
 
     func testEncryptedContentTransportCompletesLoopbackAndTransfersEnvelope() async throws {
