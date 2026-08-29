@@ -749,7 +749,10 @@ final class ApplicationTests: XCTestCase {
 
         _ = await coordinator.handleCaptured(.scroll(deltaX: 1, deltaY: 2, isContinuous: true))
         _ = await coordinator.handleCaptured(.scroll(deltaX: 3, deltaY: 4, isContinuous: true))
-        try await Task.sleep(for: .milliseconds(40))
+        for _ in 0..<50 {
+            if !transport.frames.isEmpty { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
 
         XCTAssertEqual(transport.frames.map(\.event), [
             .scroll(deltaX: 4, deltaY: 6, isContinuous: true)
