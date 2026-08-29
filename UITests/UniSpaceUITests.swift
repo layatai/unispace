@@ -49,6 +49,33 @@ final class UniSpaceUITests: XCTestCase {
     }
 
     @MainActor
+    func testStatusMenuContinuityOpensInConsolidatedWindow() {
+        let app = launchApp(mode: "--ui-testing-configured")
+
+        openStatusMenuItem("Continuity…", in: app)
+
+        let mainWindow = app.windows["UniSpace"]
+        XCTAssertTrue(mainWindow.waitForExistence(timeout: 5))
+        XCTAssertTrue(mainWindow.switches["clipboard-sharing-toggle"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.windows["UniSpace Continuity"].exists)
+        app.terminate()
+    }
+
+    @MainActor
+    func testStatusMenuFileTransfersOpensInConsolidatedWindow() {
+        let app = launchApp(mode: "--ui-testing-configured")
+
+        openStatusMenuItem("File Transfers…", in: app)
+
+        let mainWindow = app.windows["UniSpace"]
+        XCTAssertTrue(mainWindow.waitForExistence(timeout: 5))
+        dismissSheetIfPresent("File Transfer", in: app)
+        XCTAssertTrue(mainWindow.buttons["send-files"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.windows["UniSpace Transfers"].exists)
+        app.terminate()
+    }
+
+    @MainActor
     func testJoinWorkspaceOffersTailscaleAddressEntry() {
         let app = launchApp(mode: "--ui-testing-onboarding")
 
@@ -134,11 +161,18 @@ final class UniSpaceUITests: XCTestCase {
     private func openMainWindowIfNeeded(in app: XCUIApplication) {
         guard !app.windows["UniSpace"].waitForExistence(timeout: 1) else { return }
 
+        openStatusMenuItem("Open UniSpace…", in: app)
+        XCTAssertTrue(app.windows["UniSpace"].waitForExistence(timeout: 5))
+    }
+
+    @MainActor
+    private func openStatusMenuItem(_ title: String, in app: XCUIApplication) {
         let statusItem = app.statusItems.firstMatch
         XCTAssertTrue(statusItem.waitForExistence(timeout: 5))
         statusItem.click()
-        app.menuItems["Open UniSpace…"].click()
-        XCTAssertTrue(app.windows["UniSpace"].waitForExistence(timeout: 5))
+        let menuItem = app.menuItems[title]
+        XCTAssertTrue(menuItem.waitForExistence(timeout: 5))
+        menuItem.click()
     }
 
     @MainActor

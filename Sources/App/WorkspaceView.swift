@@ -42,7 +42,7 @@ struct WorkspaceView: View {
     @ObservedObject var model: AppModel
     @ObservedObject var clipboardModel: ClipboardViewModel
     @ObservedObject var transferModel: FileTransferViewModel
-    @State private var selection: Destination = .general
+    @Binding var selection: Destination
 
     var body: some View {
         NavigationSplitView {

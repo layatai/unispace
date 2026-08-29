@@ -14,15 +14,15 @@ final class FileTransferUITests: XCTestCase {
         app.launch()
 
         app.typeKey("t", modifierFlags: [.command, .shift])
-        let transferWindow = app.windows["UniSpace Transfers"]
-        XCTAssertTrue(transferWindow.waitForExistence(timeout: 3))
+        let mainWindow = app.windows["UniSpace"]
+        XCTAssertTrue(mainWindow.waitForExistence(timeout: 5))
         XCTAssertTrue(
-            app.descendants(matching: .any)["transfer-list"].waitForExistence(timeout: 2)
+            mainWindow.descendants(matching: .any)["transfer-list"].waitForExistence(timeout: 2)
         )
-        XCTAssertTrue(app.buttons["send-files"].exists)
-        XCTAssertTrue(app.staticTexts["Quarterly Report.pdf"].exists)
-        XCTAssertTrue(app.staticTexts["Transferring"].exists)
-        transferWindow.buttons[XCUIIdentifierCloseWindow].click()
+        XCTAssertTrue(mainWindow.buttons["send-files"].exists)
+        XCTAssertTrue(mainWindow.staticTexts["Quarterly Report.pdf"].exists)
+        XCTAssertTrue(mainWindow.staticTexts["Transferring"].exists)
+        mainWindow.buttons[XCUIIdentifierCloseWindow].click()
         app.terminate()
     }
 }

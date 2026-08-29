@@ -7,6 +7,7 @@ struct UniSpaceApp: App {
     @StateObject private var model = AppModel()
     @StateObject private var transferModel = FileTransferViewModel()
     @StateObject private var clipboardModel = ClipboardViewModel()
+    @State private var selection: WorkspaceView.Destination = .general
     @Environment(\.openWindow) private var openWindow
 
     var body: some Scene {
@@ -14,7 +15,8 @@ struct UniSpaceApp: App {
             SettingsRootView(
                 model: model,
                 clipboardModel: clipboardModel,
-                transferModel: transferModel
+                transferModel: transferModel,
+                selection: $selection
             )
                 .frame(minWidth: 760, minHeight: 540)
                 .onAppear {
@@ -36,38 +38,14 @@ struct UniSpaceApp: App {
                     .keyboardShortcut(.escape, modifiers: [.control, .option, .command])
                     .disabled(model.workspace == nil)
                 Divider()
-                Button("Continuity…") { openContinuity() }
+                Button("Show Continuity") { openContinuity() }
                     .keyboardShortcut("k", modifiers: [.command, .shift])
                     .disabled(model.workspace == nil)
-                Button("File Transfers…") { openTransferCenter() }
+                Button("Show File Transfers") { openTransferCenter() }
                     .keyboardShortcut("t", modifiers: [.command, .shift])
                     .disabled(model.workspace == nil)
             }
         }
-
-        Window("UniSpace Continuity", id: "continuity") {
-            ContinuityView(model: clipboardModel)
-                .frame(minWidth: 640, minHeight: 520)
-                .onAppear {
-                    DockIconVisibility.show()
-                    clipboardModel.bind(to: model)
-                }
-                .onDisappear { DockIconVisibility.hideWhenNoVisibleWindows() }
-        }
-        .defaultSize(width: 720, height: 620)
-        .windowToolbarStyle(.unified)
-
-        Window("UniSpace Transfers", id: "transfers") {
-            TransferCenterView(model: transferModel)
-                .frame(minWidth: 680, minHeight: 480)
-                .onAppear {
-                    DockIconVisibility.show()
-                    transferModel.bind(to: model)
-                }
-                .onDisappear { DockIconVisibility.hideWhenNoVisibleWindows() }
-        }
-        .defaultSize(width: 760, height: 560)
-        .windowToolbarStyle(.unified)
 
         MenuBarExtra {
             menuContent
@@ -120,17 +98,18 @@ struct UniSpaceApp: App {
     }
 
     private func openContinuity() {
-        DockIconVisibility.show()
-        NSApplication.shared.activate(ignoringOtherApps: true)
-        clipboardModel.bind(to: model)
-        openWindow(id: "continuity")
+        openMainWindow(selecting: .continuity)
     }
 
     private func openTransferCenter() {
+        openMainWindow(selecting: .transfers)
+    }
+
+    private func openMainWindow(selecting destination: WorkspaceView.Destination) {
+        selection = destination
         DockIconVisibility.show()
         NSApplication.shared.activate(ignoringOtherApps: true)
-        transferModel.bind(to: model)
-        openWindow(id: "transfers")
+        openWindow(id: "main")
     }
 }
 

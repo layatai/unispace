@@ -6,6 +6,7 @@ struct SettingsRootView: View {
     @ObservedObject var model: AppModel
     @ObservedObject var clipboardModel: ClipboardViewModel
     @ObservedObject var transferModel: FileTransferViewModel
+    @Binding var selection: WorkspaceView.Destination
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -14,7 +15,8 @@ struct SettingsRootView: View {
                 WorkspaceView(
                     model: model,
                     clipboardModel: clipboardModel,
-                    transferModel: transferModel
+                    transferModel: transferModel,
+                    selection: $selection
                 )
                     .transition(.opacity)
             } else {
