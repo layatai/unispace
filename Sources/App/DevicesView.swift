@@ -2,7 +2,7 @@ import SwiftUI
 import UniSpaceApplication
 import UniSpaceDomain
 
-/// The roster of Macs in the workspace, with online state, controller state,
+/// The roster of devices in the workspace, with online state, controller state,
 /// and removal.
 struct DevicesView: View {
     @ObservedObject var model: AppModel
@@ -16,8 +16,8 @@ struct DevicesView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: Metrics.stackSpacing) {
                 PageHeader(
-                    title: "Macs",
-                    detail: "\(model.devices.count) of \(capacity) Macs paired in this workspace."
+                    title: "Devices",
+                    detail: "\(model.devices.count) of \(capacity) devices paired in this workspace."
                 ) {
                     capacityMeter
                 }
@@ -38,14 +38,14 @@ struct DevicesView: View {
         }
         .scrollBounceBehavior(.basedOnSize)
         .confirmationDialog(
-            "Forget “\(pendingRemoval?.name ?? "this Mac")”?",
+            "Forget “\(pendingRemoval?.name ?? "this device")”?",
             isPresented: Binding(
                 get: { pendingRemoval != nil },
                 set: { if !$0 { pendingRemoval = nil } }
             ),
             titleVisibility: .visible
         ) {
-            Button("Forget Mac", role: .destructive) {
+            Button("Forget Device", role: .destructive) {
                 if let pendingRemoval {
                     model.removeDevice(pendingRemoval.id)
                 }
@@ -53,7 +53,7 @@ struct DevicesView: View {
             }
             Button("Cancel", role: .cancel) { pendingRemoval = nil }
         } message: {
-            Text("This Mac leaves the workspace and the shared key is replaced. You can pair it again later.")
+            Text("This device leaves the workspace and the shared key is replaced. You can pair it again later.")
         }
         .sheet(item: $addressDevice) { device in
             connectionAddressSheet(device)
@@ -92,7 +92,7 @@ struct DevicesView: View {
 
         return HStack(spacing: 14) {
             IconTile(
-                systemImage: "laptopcomputer",
+                systemImage: device.platform == .windows ? "pc" : "laptopcomputer",
                 tint: isLocal ? .accentColor : .secondary,
                 size: 46
             )
@@ -150,7 +150,7 @@ struct DevicesView: View {
                     Image(systemName: "trash")
                 }
                 .buttonStyle(.borderless)
-                .help("Forget this Mac and replace the workspace key")
+                .help("Forget this device and replace the workspace key")
                 .accessibilityLabel("Forget \(device.name)")
             }
         }
@@ -162,7 +162,7 @@ struct DevicesView: View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Connect to \(device.name)")
                 .font(.title2.bold())
-            Text("Enter this Mac’s MagicDNS name or Tailscale IP. UniSpace will keep Bonjour enabled for nearby connections.")
+            Text("Enter this device’s MagicDNS name or Tailscale IP. UniSpace will keep Bonjour enabled for nearby connections.")
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             TextField("macbook.tailnet.ts.net or 100.x.x.x", text: $connectionAddress)
@@ -194,10 +194,10 @@ struct DevicesView: View {
             HStack(spacing: 14) {
                 IconTile(systemImage: "plus", size: 46)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("Pair New Mac")
+                    Text("Pair New Device")
                         .font(.headline)
                         .foregroundStyle(.primary)
-                    Text("Show a pairing code another Mac can join over LAN or Tailscale.")
+                    Text("Show a pairing code another Mac or Windows PC can join over LAN or Tailscale.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

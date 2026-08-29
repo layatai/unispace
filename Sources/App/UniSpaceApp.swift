@@ -12,9 +12,11 @@ struct UniSpaceApp: App {
             SettingsRootView(model: model)
                 .frame(minWidth: 760, minHeight: 540)
                 .onAppear {
+                    DockIconVisibility.show()
                     model.refreshPermissions()
                     transferModel.bind(to: model)
                 }
+                .onDisappear { DockIconVisibility.hideWhenNoVisibleWindows() }
         }
         .defaultSize(width: 900, height: 640)
         .windowToolbarStyle(.unified)
@@ -27,18 +29,20 @@ struct UniSpaceApp: App {
                     .keyboardShortcut(.escape, modifiers: [.control, .option, .command])
                     .disabled(model.workspace == nil)
                 Divider()
-                Button("File Transfers…") {
-                    openTransferCenter()
-                }
-                .keyboardShortcut("t", modifiers: [.command, .shift])
-                .disabled(model.workspace == nil)
+                Button("File Transfers…") { openTransferCenter() }
+                    .keyboardShortcut("t", modifiers: [.command, .shift])
+                    .disabled(model.workspace == nil)
             }
         }
 
         Window("UniSpace Transfers", id: "transfers") {
             TransferCenterView(model: transferModel)
                 .frame(minWidth: 680, minHeight: 480)
-                .onAppear { transferModel.bind(to: model) }
+                .onAppear {
+                    DockIconVisibility.show()
+                    transferModel.bind(to: model)
+                }
+                .onDisappear { DockIconVisibility.hideWhenNoVisibleWindows() }
         }
         .defaultSize(width: 760, height: 560)
         .windowToolbarStyle(.unified)
@@ -80,6 +84,7 @@ struct UniSpaceApp: App {
         Divider()
 
         Button("Open UniSpace…") {
+            DockIconVisibility.show()
             NSApplication.shared.activate(ignoringOtherApps: true)
             openWindow(id: "main")
         }
@@ -92,8 +97,27 @@ struct UniSpaceApp: App {
     }
 
     private func openTransferCenter() {
+        DockIconVisibility.show()
         NSApplication.shared.activate(ignoringOtherApps: true)
         transferModel.bind(to: model)
         openWindow(id: "transfers")
+    }
+}
+
+@MainActor
+private enum DockIconVisibility {
+    static func show() {
+        NSApplication.shared.setActivationPolicy(.regular)
+    }
+
+    static func hideWhenNoVisibleWindows() {
+        DispatchQueue.main.async {
+            let hasVisibleWindow = NSApplication.shared.windows.contains {
+                $0.isVisible && !$0.isMiniaturized
+            }
+            if !hasVisibleWindow {
+                NSApplication.shared.setActivationPolicy(.accessory)
+            }
+        }
     }
 }

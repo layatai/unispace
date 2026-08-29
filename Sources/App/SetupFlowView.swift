@@ -40,11 +40,11 @@ struct SetupFlowView: View {
                 .foregroundStyle(.tint)
                 .padding(.bottom, 20)
 
-            Text("One keyboard. Every Mac.")
+            Text("One keyboard. Every device.")
                 .font(.system(size: 30, weight: .bold))
                 .multilineTextAlignment(.center)
 
-            Text("Move your pointer between Macs as if they shared one desk, over your LAN or private Tailscale network.")
+            Text("Move your pointer between devices as if they shared one desk, over your LAN or private Tailscale network.")
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -74,7 +74,7 @@ struct SetupFlowView: View {
 
             Spacer(minLength: 0)
 
-            Label("Pairing uses an encrypted private connection and a code you confirm on both Macs.", systemImage: "lock.shield")
+            Label("Pairing uses an encrypted private connection and a code you confirm on both devices.", systemImage: "lock.shield")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .padding(.bottom, 4)
@@ -195,7 +195,7 @@ struct SetupFlowView: View {
             Text("Confirm Pairing")
                 .font(.title.bold())
 
-            Text("Check that \(prompt.peer.name) is showing this same code, then approve on both Macs.")
+            Text("Check that \(prompt.peer.name) is showing this same code, then approve on both devices.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)

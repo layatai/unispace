@@ -22,10 +22,10 @@ struct DisplaysView: View {
                 ContentUnavailableView {
                     Label("Nothing to arrange yet", systemImage: "rectangle.3.group")
                 } description: {
-                    Text("Pair a second Mac and its displays will appear here, ready to be placed next to this one.")
+                    Text("Pair another device and its displays will appear here, ready to be placed next to this one.")
                 } actions: {
                     if model.isLocalController {
-                        Button("Pair New Mac") { model.startHostingPairing() }
+                        Button("Pair New Device") { model.startHostingPairing() }
                             .buttonStyle(.borderedProminent)
                     }
                 }
@@ -190,7 +190,7 @@ private struct TopologyCanvas: View {
         .animation(reduceMotion ? nil : .unispace, value: hovered)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(deviceName(display.deviceID)), \(display.name)")
-        .accessibilityHint("Drag next to a display on another Mac to connect them.")
+        .accessibilityHint("Drag next to a display on another device to connect them.")
     }
 
     // MARK: Gesture
@@ -336,7 +336,7 @@ private struct ConnectionList: View {
 
             if links.isEmpty {
                 Label(
-                    "No connections yet. Drag one display next to a display on another Mac.",
+                    "No connections yet. Drag one display next to a display on another device.",
                     systemImage: "hand.draw"
                 )
                 .font(.caption)

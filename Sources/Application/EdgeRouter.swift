@@ -75,6 +75,104 @@ public struct EntryEdgeHysteresis: Equatable, Sendable {
     }
 }
 
+/// Serializes local edge transfers and prevents a manual stop from being
+/// undone by an activation task that was already in flight.
+public struct ControlTransferGuard: Equatable, Sendable {
+    public struct ActivationAttempt: Equatable, Sendable {
+        fileprivate let id: UInt64
+    }
+
+    private struct ExitEdge: Equatable, Sendable {
+        let display: DisplayDescriptor
+        let edge: DisplayEdge
+    }
+
+    private enum Phase: Equatable, Sendable {
+        case idle
+        case activating(ActivationAttempt, ExitEdge)
+        case controlling(ExitEdge)
+        case stopping(ExitEdge?)
+    }
+
+    private var phase: Phase = .idle
+    private var nextAttemptID: UInt64 = 0
+    private var hysteresis: EntryEdgeHysteresis
+
+    public init(minimumInwardDistance: Double = EntryEdgeHysteresis.defaultInwardDistance) {
+        hysteresis = EntryEdgeHysteresis(minimumInwardDistance: minimumInwardDistance)
+    }
+
+    public mutating func observe(x: Double, y: Double) {
+        hysteresis.observe(x: x, y: y)
+    }
+
+    public var forwardsCapturedInput: Bool {
+        if case .controlling = phase { return true }
+        return false
+    }
+
+    public func allows(_ transition: EdgeTransition) -> Bool {
+        guard phase == .idle else { return false }
+        return hysteresis.allows(transition)
+    }
+
+    public mutating func beginActivation(
+        _ transition: EdgeTransition,
+        sourceDisplay: DisplayDescriptor
+    ) -> ActivationAttempt? {
+        guard allows(transition) else { return nil }
+        let attempt = ActivationAttempt(id: nextAttemptID)
+        nextAttemptID &+= 1
+        let exit = ExitEdge(display: sourceDisplay, edge: transition.sourceEdge)
+        hysteresis.arm(display: sourceDisplay, entryEdge: transition.sourceEdge)
+        phase = .activating(attempt, exit)
+        return attempt
+    }
+
+    /// Returns false when a stop superseded this activation attempt.
+    public mutating func activationSucceeded(_ attempt: ActivationAttempt) -> Bool {
+        guard case let .activating(activeAttempt, exit) = phase,
+              activeAttempt == attempt else { return false }
+        phase = .controlling(exit)
+        return true
+    }
+
+    public mutating func activationFailed(_ attempt: ActivationAttempt) {
+        guard case let .activating(activeAttempt, _) = phase,
+              activeAttempt == attempt else { return }
+        phase = .idle
+    }
+
+    public mutating func beginStop() {
+        switch phase {
+        case .idle:
+            phase = .stopping(nil)
+        case let .activating(_, exit), let .controlling(exit):
+            phase = .stopping(exit)
+        case .stopping:
+            break
+        }
+    }
+
+    public mutating func completeStop() {
+        guard case let .stopping(exit) = phase else { return }
+        if let exit {
+            hysteresis.arm(display: exit.display, entryEdge: exit.edge)
+        }
+        phase = .idle
+    }
+
+    public mutating func returned(to display: DisplayDescriptor, enteringFrom edge: DisplayEdge) {
+        hysteresis.arm(display: display, entryEdge: edge)
+        phase = .idle
+    }
+
+    public mutating func reset() {
+        phase = .idle
+        hysteresis.reset()
+    }
+}
+
 public enum EdgeRouter {
     public static func transition(
         x: Double,

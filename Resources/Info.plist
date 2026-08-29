@@ -31,6 +31,6 @@
 		<string>_unispace-pair._tcp</string>
 	</array>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>UniSpace discovers and connects to nearby Macs so you can control them and transfer files over your private network.</string>
+	<string>UniSpace discovers and connects to trusted Macs and Windows PCs so you can control them and transfer files over your private network.</string>
 </dict>
 </plist>

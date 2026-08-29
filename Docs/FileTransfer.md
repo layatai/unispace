@@ -1,42 +1,56 @@
 # UniSpace file transfer
 
-UniSpace transfers regular files between trusted Macs without sending file contents through the latency-critical keyboard and pointer connection.
+UniSpace transfers regular files between trusted macOS and Windows devices without sending file contents through the latency-critical keyboard and pointer connection. Windows support is provided by the paired Macifier UniSpace receiver.
 
-## Finder copy and paste
+## File Explorer and Finder copy/paste
 
-1. Pair both Macs in the same UniSpace workspace.
-2. Make one Mac the active controller, or choose a destination in **File Transfers**.
-3. Copy one or more regular files in Finder.
-4. UniSpace offers the selection to the active compatible Mac over the encrypted content channel.
-5. The receiver streams files into its application sandbox, verifies every SHA-256 digest, and only then places receiver-local file URLs on its pasteboard.
-6. Paste in Finder on the receiving Mac to copy the verified staged files to the selected Finder destination.
+1. Pair the Mac and Windows PC, or two Macs, in the same UniSpace workspace.
+2. Make a device the active control target, or choose it in **File Transfers** on macOS.
+3. Copy one or more regular files in Finder or File Explorer.
+4. UniSpace offers the selection to the active compatible device over the encrypted content channel.
+5. The receiver streams files into application-owned staging, verifies every SHA-256 digest, and only then publishes receiver-local file paths to the operating-system clipboard.
+6. Paste in Finder or File Explorer to copy the verified files to the chosen destination.
 
-The original source paths are never sent to the other Mac. Directories, packages, symbolic links, sockets, devices, and other special file types are intentionally rejected in this release.
+Source-machine paths are never sent to the receiving device. Directories, packages, symbolic links, reparse points, sockets, devices, and other special file types are intentionally rejected in this release.
 
 ## Transfer Center
 
-Open **File Transfers** from the app menu, menu-bar item, or with **Command-Shift-T**. The Transfer Center shows active, paused, verifying, completed, cancelled, and failed work. It supports cancellation, retry after an interruption, reveal, explicit export, and clearing completed entries.
+On macOS, open **File Transfers** from the app menu, menu-bar item, or with **Command-Shift-T**. It shows active, paused, verifying, completed, cancelled, and failed work, with cancellation, retry, reveal, explicit export, and cleanup actions.
+
+On Windows, Macifier runs the same transfer state machine in the UniSpace receiver. File Explorer copy/paste works automatically while the trusted workspace is connected. Received files are staged under the current user's local application data and remain available for normal File Explorer paste operations.
+
+## Portable protocol
+
+The file-transfer protocol is explicitly portable between Swift and .NET:
+
+- fixed big-endian envelope header with protocol version, message kind, workspace UUID, sender UUID, and payload length;
+- JSON metadata payloads using the existing Swift UUID wrapper representation;
+- binary chunk payloads containing transfer UUID, entry UUID, offset, byte count, and raw bytes;
+- 256 KiB default chunks and a 1 MiB maximum accepted chunk;
+- cumulative durable acknowledgements and verified-offset resume.
+
+The portable encoding replaces the former Swift binary-property-list boundary so Macifier can decode every message without platform-specific serialization behavior.
 
 ## Security model
 
-- File content uses a separate TCP connection advertised as `_unispace-xfer._tcp` on port `61340`.
-- The content connection authenticates the workspace and peer with an HMAC proof derived from the workspace key.
+- Content uses a separate TCP connection advertised as `_unispace-xfer._tcp` on TCP port `61340`. Windows initiates this outbound connection; the same numeric port may also carry UniSpace QUIC over UDP without conflict.
+- The content connection authenticates workspace and peer identity using an HMAC proof derived from the workspace key.
 - Each connection derives an independent ChaCha20-Poly1305 session key with HKDF and enforces a monotonically increasing replay sequence.
 - Incoming manifests, filenames, file counts, sizes, chunk lengths, and offsets are treated as untrusted.
-- Absolute paths, traversal components, duplicate destination names, invalid digests, unsafe file types, out-of-range chunks, and oversized transfers are rejected before materialization.
-- Files remain in the app sandbox until explicitly pasted, revealed, or exported.
-- Partial files are never exposed as complete files, and completed files are published only after SHA-256 verification.
+- Absolute paths, traversal components, duplicate destination names, Windows-reserved names, invalid digests, unsafe file types, out-of-range chunks, and oversized transfers are rejected.
+- Files remain in application-owned staging until explicitly pasted, revealed, or exported.
+- Partial files are never exposed as complete files; completed files are published only after SHA-256 verification.
 - Clipboard contents and file contents are not logged.
 
 ## Streaming, cancellation, and recovery
 
-The default chunk size is 256 KiB and the maximum accepted chunk is 1 MiB. The sender reads one bounded chunk at a time and the receiver persists cumulative durable offsets. A transient content-channel disconnect pauses the transfer without ending keyboard or pointer control. After reconnection, the receiver reports verified offsets and the sender resumes from those offsets.
+The sender reads one bounded chunk at a time and the receiver persists cumulative durable offsets. A transient content-channel disconnect pauses the transfer without ending keyboard or pointer control. After reconnection, the receiver reports verified offsets and the sender resumes from those offsets.
 
-Incoming partial-transfer metadata is stored atomically in Application Support and recovered after relaunch. Stale partial transfers and completed staged files are removed according to bounded retention periods. Cancelling a transfer removes its partial staging data.
+Incoming and outgoing resume metadata is stored atomically and recovered after relaunch. Stale partial transfers and completed staged files are removed according to bounded retention periods. Cancellation removes partial staging data.
 
 ## Compatibility and limits
 
-Older UniSpace releases continue to support keyboard and pointer control but do not advertise the transfer service. The Transfer Center reports an unavailable destination instead of attempting plaintext or control-channel fallback.
+Older UniSpace or Macifier releases keep keyboard and pointer control but do not expose file transfer. A compatible peer advertises `file-transfer-v1`; the content service still authenticates capabilities by successfully completing the dedicated encrypted handshake.
 
 Default defensive limits are centralized in `FileTransferLimits`:
 
@@ -47,4 +61,4 @@ Default defensive limits are centralized in `FileTransferLimits`:
 - seven-day retention for incomplete transfers;
 - one-day retention for completed staged files.
 
-One bulk transfer per peer is active at a time in this release. Directories, packages, rich drag-and-drop continuation, and automatic external destination folders remain out of scope.
+One bulk transfer per direction and peer is active at a time. Directories, packages, rich drag-and-drop continuation, and automatic external destination folders remain out of scope.
