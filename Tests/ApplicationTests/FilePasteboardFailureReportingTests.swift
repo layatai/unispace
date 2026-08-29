@@ -30,10 +30,11 @@ final class FilePasteboardFailureReportingTests: XCTestCase {
             key: Data(repeating: 7, count: 32)
         )
         transport.emit(.connected(remote.id))
-        XCTAssertTrue(await eventually {
+        let connected = await eventually {
             let connected = await coordinator.connectedDeviceIDs()
             return connected.contains(remote.id)
-        })
+        }
+        XCTAssertTrue(connected)
 
         let entry = TransferManifestEntry(
             filename: "received.txt",
@@ -54,14 +55,15 @@ final class FilePasteboardFailureReportingTests: XCTestCase {
                 message: .offer(TransferOffer(manifest: manifest))
             )
         ))
-        XCTAssertTrue(await eventually {
+        let requestSent = await eventually {
             transport.messages().contains {
                 if case let .request(request) = $0.message {
                     return request.transferID == manifest.transferID
                 }
                 return false
             }
-        })
+        }
+        XCTAssertTrue(requestSent)
 
         transport.emit(.message(
             remote.id,
@@ -74,7 +76,7 @@ final class FilePasteboardFailureReportingTests: XCTestCase {
             )
         ))
 
-        XCTAssertTrue(await eventually {
+        let rejectionSent = await eventually {
             transport.messages().contains {
                 if case let .verification(verification) = $0.message {
                     return verification.transferID == manifest.transferID &&
@@ -83,7 +85,8 @@ final class FilePasteboardFailureReportingTests: XCTestCase {
                 }
                 return false
             }
-        })
+        }
+        XCTAssertTrue(rejectionSent)
         let snapshot = (await coordinator.snapshots())
             .first(where: { $0.id == manifest.transferID })
         XCTAssertEqual(snapshot?.state, .failed)
