@@ -1,0 +1,39 @@
+name: Temporary regenerate Xcode project
+
+on:
+  push:
+    branches:
+      - agent/finder-file-copy-paste-continuity
+
+permissions:
+  contents: write
+
+jobs:
+  regenerate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - name: Check out feature branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/finder-file-copy-paste-continuity
+          fetch-depth: 0
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Regenerate project
+        run: ./Scripts/bootstrap.sh
+
+      - name: Commit generated project
+        run: |
+          if git diff --quiet -- UniSpace.xcodeproj/project.pbxproj; then
+            echo "Generated project is already current"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add UniSpace.xcodeproj/project.pbxproj
+          git commit -m "chore: regenerate Xcode project"
+          git push origin HEAD:agent/finder-file-copy-paste-continuity
