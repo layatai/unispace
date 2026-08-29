@@ -125,6 +125,7 @@ public final class SystemClipboardService: ClipboardService {
     private func supportedRepresentations(
         from item: NSPasteboardItem
     ) throws -> [ClipboardRepresentation] {
+        guard !item.types.contains(.fileURL) else { return [] }
         var values: [ClipboardRepresentation] = []
         var link: String?
 

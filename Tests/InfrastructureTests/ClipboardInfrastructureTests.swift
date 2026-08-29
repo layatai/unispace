@@ -225,6 +225,16 @@ final class ClipboardInfrastructureTests: XCTestCase {
         let third = await firstValue(from: stream)
         XCTAssertEqual(third?.representations.map(\.kind), [.plainText])
 
+        let finderFile = NSPasteboardItem()
+        let sourceFile = URL(fileURLWithPath: #filePath)
+        finderFile.setString(sourceFile.absoluteString, forType: .fileURL)
+        finderFile.setString(sourceFile.lastPathComponent, forType: .string)
+        pasteboard.clearContents()
+        XCTAssertTrue(pasteboard.writeObjects([finderFile]))
+        service.pollNowForTesting()
+        let ignoredFile = await firstValue(from: stream, timeout: .milliseconds(100))
+        XCTAssertNil(ignoredFile)
+
         service.apply(ClipboardPayload(
             originDeviceID: DeviceID(),
             revision: 2,
