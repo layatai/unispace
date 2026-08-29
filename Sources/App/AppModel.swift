@@ -373,14 +373,14 @@ final class AppModel: ObservableObject {
                 guard let self else { return }
                 switch status {
                 case .ready:
-                    statusMessage = setupState == .hostingPairing
-                        ? "Visible to nearby devices as \(localDevice.name)"
+                    self.statusMessage = self.setupState == .hostingPairing
+                        ? "Visible to nearby devices as \(self.localDevice.name)"
                         : "Searching the local network"
                 case let .waiting(message):
-                    statusMessage = "Waiting for local network access: \(message)"
+                    self.statusMessage = "Waiting for local network access: \(message)"
                 case let .failed(message):
-                    lastError = "Local network discovery failed: \(message)"
-                    setupState = workspace == nil ? .needsWorkspace : .ready
+                    self.lastError = "Local network discovery failed: \(message)"
+                    self.setupState = self.workspace == nil ? .needsWorkspace : .ready
                 }
             }
         }
