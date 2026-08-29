@@ -66,6 +66,7 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
     private var localDevice: DeviceDescriptor?
     private var workspaceID: WorkspaceID?
     private var key: Data?
+    private var workspaceKeys: [Data] = []
     private var knownPeers: [DeviceID: DeviceDescriptor] = [:]
     private var listener: NWListener?
     private var quicListener: NWListener?
@@ -120,12 +121,27 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
     public var activeQUICPort: NWEndpoint.Port? { lock.withLock { readyQUICPort } }
 
     public func start(localDevice: DeviceDescriptor, workspace: WorkspaceSnapshot, key: Data) async throws {
-        guard key.count >= 32 else { throw PeerTransportError.invalidConfiguration }
+        try await start(localDevice: localDevice, workspace: workspace, workspaceKeys: [key])
+    }
+
+    public func start(
+        localDevice: DeviceDescriptor,
+        workspace: WorkspaceSnapshot,
+        workspaceKeys: [Data]
+    ) async throws {
+        let uniqueKeys = workspaceKeys.reduce(into: [Data]()) { result, candidate in
+            if !result.contains(candidate) { result.append(candidate) }
+        }
+        guard let currentKey = uniqueKeys.first,
+              uniqueKeys.allSatisfy({ $0.count >= 32 }) else {
+            throw PeerTransportError.invalidConfiguration
+        }
         stopSynchronously()
         lock.withLock {
             self.localDevice = localDevice
             workspaceID = workspace.id
-            self.key = key
+            self.key = currentKey
+            self.workspaceKeys = uniqueKeys
             knownPeers = Dictionary(
                 uniqueKeysWithValues: workspace.devices
                     .filter { $0.id != localDevice.id }
@@ -154,7 +170,7 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
         let quicValues = makeQUICServices(
             localDevice: localDevice,
             workspaceID: workspace.id,
-            key: key,
+            key: currentKey,
             record: record
         )
         let crossPlatformQUICListener = makeCrossPlatformQUICListener()
@@ -196,7 +212,7 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
                 try realtime.start(
                     localDevice: localDevice,
                     workspace: workspace,
-                    key: key
+                    key: currentKey
                 )
                 lock.withLock { realtimeTransport = realtime }
             } catch {
@@ -213,7 +229,7 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
            }) {
             do {
                 let pointerTransport = CrossPlatformPointerTransport()
-                try pointerTransport.start(localDevice: localDevice, workspace: workspace, key: key)
+                try pointerTransport.start(localDevice: localDevice, workspace: workspace, key: currentKey)
                 lock.withLock { crossPlatformPointerTransport = pointerTransport }
             } catch {
                 emit(.health(nil, .init(
@@ -293,6 +309,10 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
             quicBrowser = nil
             realtimeTransport = nil
             crossPlatformPointerTransport = nil
+            localDevice = nil
+            workspaceID = nil
+            key = nil
+            workspaceKeys.removeAll()
             connections.removeAll()
             pendingConnections.removeAll()
             discoveredDevices.removeAll()
@@ -532,16 +552,16 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
         isOutbound: Bool,
         transport: TransportKind
     ) {
-        let configuration = lock.withLock { () -> (DeviceID, WorkspaceID, Data)? in
-            guard let localDevice, let workspaceID, let key else { return nil }
-            return (localDevice.id, workspaceID, key)
+        let configuration = lock.withLock { () -> (DeviceID, WorkspaceID, [Data])? in
+            guard let localDevice, let workspaceID, !workspaceKeys.isEmpty else { return nil }
+            return (localDevice.id, workspaceID, workspaceKeys)
         }
         guard let configuration else { connection.cancel(); return }
         let managed = SecurePeerConnection(
             connection: connection,
             localDeviceID: configuration.0,
             workspaceID: configuration.1,
-            workspaceKey: configuration.2,
+            workspaceKeys: configuration.2,
             expectedDeviceID: expectedDeviceID,
             isOutbound: isOutbound,
             transportKind: transport,
@@ -555,6 +575,11 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
         }
         managed.authenticatedHandler = { [weak self, weak managed] deviceID in
             guard let self, let managed else { return }
+            let isKnownPeer = self.lock.withLock { self.knownPeers[deviceID] != nil }
+            if managed.authenticatedWithPreviousWorkspaceKey && !isKnownPeer {
+                managed.cancel()
+                return
+            }
             // The dialer speaks first at the application layer. Waiting on every
             // accepted connection lets the peer's hello select the wire codec,
             // even when persisted platform metadata is stale or incomplete.
@@ -774,6 +799,9 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
             guard isCurrent else { return }
             self.emit(.health(deviceID, .init(health: .healthy, transport: managed.transportKind)))
             if shouldEmitConnected { self.emit(.connected(deviceID)) }
+            if managed.authenticatedWithPreviousWorkspaceKey {
+                self.emit(.workspaceUpgradeRequired(deviceID))
+            }
         }
     }
 
@@ -1036,7 +1064,7 @@ final class SecurePeerConnection: @unchecked Sendable {
 
     private let localDeviceID: DeviceID
     private let workspaceID: WorkspaceID
-    private let workspaceKey: SymmetricKey
+    private let workspaceKeys: [SymmetricKey]
     private let localNonce: Data
     private let securityProfile: SecureChannelSecurityProfile
     private let lock = NSLock()
@@ -1047,12 +1075,16 @@ final class SecurePeerConnection: @unchecked Sendable {
     private var buffer = Data()
     private var sessionKey: SymmetricKey?
     private var authenticatedDeviceID: DeviceID?
+    private var authenticatedKeyIndex: Int?
     private var outboundSequence: UInt64 = 0
     private var inboundSequence: UInt64?
 
     var deviceID: DeviceID? { lock.withLock { authenticatedDeviceID } }
+    var authenticatedWithPreviousWorkspaceKey: Bool {
+        lock.withLock { (authenticatedKeyIndex ?? 0) > 0 }
+    }
 
-    init(
+    convenience init(
         connection: NWConnection,
         localDeviceID: DeviceID,
         workspaceID: WorkspaceID,
@@ -1064,10 +1096,37 @@ final class SecurePeerConnection: @unchecked Sendable {
         securityProfile: SecureChannelSecurityProfile = .reliableV1,
         authenticationTimeout: TimeInterval = 8
     ) {
+        self.init(
+            connection: connection,
+            localDeviceID: localDeviceID,
+            workspaceID: workspaceID,
+            workspaceKeys: [workspaceKey],
+            expectedDeviceID: expectedDeviceID,
+            isOutbound: isOutbound,
+            transportKind: transportKind,
+            isDatagram: isDatagram,
+            securityProfile: securityProfile,
+            authenticationTimeout: authenticationTimeout
+        )
+    }
+
+    init(
+        connection: NWConnection,
+        localDeviceID: DeviceID,
+        workspaceID: WorkspaceID,
+        workspaceKeys: [Data],
+        expectedDeviceID: DeviceID?,
+        isOutbound: Bool = false,
+        transportKind: TransportKind = .tcp,
+        isDatagram: Bool = false,
+        securityProfile: SecureChannelSecurityProfile = .reliableV1,
+        authenticationTimeout: TimeInterval = 8
+    ) {
+        precondition(!workspaceKeys.isEmpty)
         self.connection = connection
         self.localDeviceID = localDeviceID
         self.workspaceID = workspaceID
-        self.workspaceKey = SymmetricKey(data: workspaceKey)
+        self.workspaceKeys = workspaceKeys.map { SymmetricKey(data: $0) }
         self.expectedDeviceID = expectedDeviceID
         self.isOutbound = isOutbound
         self.transportKind = transportKind
@@ -1126,23 +1185,25 @@ final class SecurePeerConnection: @unchecked Sendable {
 
     private func sendHello() {
         let unsigned = helloProofPayload(deviceID: localDeviceID, nonce: localNonce)
-        let proof = Data(HMAC<SHA256>.authenticationCode(for: unsigned, using: workspaceKey))
-        let hello = SecureChannelHello(
-            version: securityProfile.helloVersion,
-            workspaceID: workspaceID,
-            deviceID: localDeviceID,
-            nonce: localNonce,
-            proof: proof
-        )
-        guard let payload = try? JSONEncoder().encode(hello) else { cancel(); return }
-        connection.send(
-            content: Self.outerFrame(kind: .hello, payload: payload),
-            contentContext: isDatagram ? .defaultMessage : .defaultStream,
-            isComplete: isDatagram,
-            completion: .contentProcessed { [weak self] error in
-                if error != nil { self?.cancel() }
-            }
-        )
+        for workspaceKey in workspaceKeys {
+            let proof = Data(HMAC<SHA256>.authenticationCode(for: unsigned, using: workspaceKey))
+            let hello = SecureChannelHello(
+                version: securityProfile.helloVersion,
+                workspaceID: workspaceID,
+                deviceID: localDeviceID,
+                nonce: localNonce,
+                proof: proof
+            )
+            guard let payload = try? JSONEncoder().encode(hello) else { cancel(); return }
+            connection.send(
+                content: Self.outerFrame(kind: .hello, payload: payload),
+                contentContext: isDatagram ? .defaultMessage : .defaultStream,
+                isComplete: isDatagram,
+                completion: .contentProcessed { [weak self] error in
+                    if error != nil { self?.cancel() }
+                }
+            )
+        }
         if isDatagram {
             DispatchQueue.global(qos: .userInteractive).asyncAfter(deadline: .now() + 0.5) { [weak self] in
                 guard let self, self.deviceID == nil else { return }
@@ -1157,10 +1218,18 @@ final class SecurePeerConnection: @unchecked Sendable {
               expectedDeviceID == nil || expectedDeviceID == hello.deviceID else {
             throw PeerTransportError.authenticationFailed
         }
+        if lock.withLock({ sessionKey != nil }) { return }
         let proofPayload = helloProofPayload(deviceID: hello.deviceID, nonce: hello.nonce)
-        guard HMAC<SHA256>.isValidAuthenticationCode(hello.proof, authenticating: proofPayload, using: workspaceKey) else {
+        guard let keyIndex = workspaceKeys.firstIndex(where: {
+            HMAC<SHA256>.isValidAuthenticationCode(
+                hello.proof,
+                authenticating: proofPayload,
+                using: $0
+            )
+        }) else {
             throw PeerTransportError.authenticationFailed
         }
+        let workspaceKey = workspaceKeys[keyIndex]
         let localFirst = localDeviceID < hello.deviceID
         let derived = Self.deriveSessionKey(
             workspaceID: workspaceID,
@@ -1173,6 +1242,7 @@ final class SecurePeerConnection: @unchecked Sendable {
             guard sessionKey == nil else { return false }
             sessionKey = derived
             authenticatedDeviceID = hello.deviceID
+            authenticatedKeyIndex = keyIndex
             return true
         }
         if shouldNotify { authenticatedHandler?(hello.deviceID) }
@@ -1296,6 +1366,11 @@ final class SecurePeerConnection: @unchecked Sendable {
             } catch PeerTransportError.replayedFrame where isDatagram {
                 // Reordering is normal for QUIC DATAGRAM. Authentication succeeded,
                 // so silently discard an older packet without tearing down the lane.
+                continue
+            } catch PeerTransportError.authenticationFailed where kind == .hello && deviceID == nil {
+                // A peer can advertise several bounded workspace-key candidates.
+                // Ignore a non-matching proof until another hello succeeds or the
+                // authentication timeout closes the connection.
                 continue
             } catch {
                 cancel()
