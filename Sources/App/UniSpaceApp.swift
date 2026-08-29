@@ -5,6 +5,7 @@ import SwiftUI
 struct UniSpaceApp: App {
     @StateObject private var model = AppModel()
     @StateObject private var transferModel = FileTransferViewModel()
+    @StateObject private var clipboardModel = ClipboardViewModel()
     @Environment(\.openWindow) private var openWindow
 
     var body: some Scene {
@@ -15,6 +16,7 @@ struct UniSpaceApp: App {
                     DockIconVisibility.show()
                     model.refreshPermissions()
                     transferModel.bind(to: model)
+                    clipboardModel.bind(to: model)
                 }
                 .onDisappear { DockIconVisibility.hideWhenNoVisibleWindows() }
         }
@@ -29,11 +31,26 @@ struct UniSpaceApp: App {
                     .keyboardShortcut(.escape, modifiers: [.control, .option, .command])
                     .disabled(model.workspace == nil)
                 Divider()
+                Button("Continuity…") { openContinuity() }
+                    .keyboardShortcut("k", modifiers: [.command, .shift])
+                    .disabled(model.workspace == nil)
                 Button("File Transfers…") { openTransferCenter() }
                     .keyboardShortcut("t", modifiers: [.command, .shift])
                     .disabled(model.workspace == nil)
             }
         }
+
+        Window("UniSpace Continuity", id: "continuity") {
+            ContinuityView(model: clipboardModel)
+                .frame(minWidth: 640, minHeight: 520)
+                .onAppear {
+                    DockIconVisibility.show()
+                    clipboardModel.bind(to: model)
+                }
+                .onDisappear { DockIconVisibility.hideWhenNoVisibleWindows() }
+        }
+        .defaultSize(width: 720, height: 620)
+        .windowToolbarStyle(.unified)
 
         Window("UniSpace Transfers", id: "transfers") {
             TransferCenterView(model: transferModel)
@@ -65,6 +82,7 @@ struct UniSpaceApp: App {
             Button("Make This Mac Controller") { model.makeThisMacController() }
                 .disabled(model.isLocalController)
             Button("Stop Remote Control") { model.stopControlling() }
+            Button("Continuity…") { openContinuity() }
             Button {
                 openTransferCenter()
             } label: {
@@ -94,6 +112,13 @@ struct UniSpaceApp: App {
 
         Button("Quit UniSpace") { NSApplication.shared.terminate(nil) }
             .keyboardShortcut("q")
+    }
+
+    private func openContinuity() {
+        DockIconVisibility.show()
+        NSApplication.shared.activate(ignoringOtherApps: true)
+        clipboardModel.bind(to: model)
+        openWindow(id: "continuity")
     }
 
     private func openTransferCenter() {
