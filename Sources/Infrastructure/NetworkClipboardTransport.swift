@@ -25,6 +25,7 @@ public final class NetworkClipboardTransport: ClipboardTransport, @unchecked Sen
     private let configuredListenPort: NWEndpoint.Port
     private let configuredDirectPort: NWEndpoint.Port
     private let enableBonjour: Bool
+    private let listenerRetryDelays: [TimeInterval]
     private let stream: AsyncStream<ClipboardTransportEvent>
     private let continuation: AsyncStream<ClipboardTransportEvent>.Continuation
 
@@ -39,16 +40,20 @@ public final class NetworkClipboardTransport: ClipboardTransport, @unchecked Sen
     private var pendingConnections: [ObjectIdentifier: SecureClipboardConnection] = [:]
     private var retryAttempts: [DeviceID: Int] = [:]
     private var retryTokens: [DeviceID: UUID] = [:]
+    private var listenerRetryAttempt = 0
+    private var listenerRetryToken: UUID?
     private var running = false
 
     public init(
         listenPort: NWEndpoint.Port = NetworkClipboardTransport.clipboardPort,
         directPort: NWEndpoint.Port = NetworkClipboardTransport.clipboardPort,
-        enableBonjour: Bool = true
+        enableBonjour: Bool = true,
+        listenerRetryDelays: [TimeInterval] = [1, 2, 4, 8, 15]
     ) {
         configuredListenPort = listenPort
         configuredDirectPort = directPort
         self.enableBonjour = enableBonjour
+        self.listenerRetryDelays = listenerRetryDelays.isEmpty ? [1] : listenerRetryDelays
         var captured: AsyncStream<ClipboardTransportEvent>.Continuation?
         stream = AsyncStream { captured = $0 }
         continuation = captured!
@@ -81,35 +86,17 @@ public final class NetworkClipboardTransport: ClipboardTransport, @unchecked Sen
             knownPeers = Dictionary(uniqueKeysWithValues: workspace.devices
                 .filter { $0.id != localDevice.id }
                 .map { ($0.id, $0) })
+            listenerRetryAttempt = 0
+            listenerRetryToken = nil
             running = true
         }
 
-        let parameters = Self.makeParameters()
-        let listener = try NWListener(using: parameters, on: configuredListenPort)
-        if enableBonjour {
-            listener.service = NWListener.Service(
-                name: localDevice.name,
-                type: Self.serviceType,
-                txtRecord: NWTXTRecord([
-                    "device": localDevice.id.rawValue.uuidString,
-                    "workspace": workspace.id.rawValue.uuidString,
-                    "version": String(ClipboardEnvelope.protocolVersion)
-                ])
-            )
-        }
-        listener.stateUpdateHandler = { [weak self, weak listener] state in
-            self?.handleListenerState(state, listener: listener)
-        }
-        listener.newConnectionHandler = { [weak self] connection in
-            self?.accept(connection)
-        }
-        listener.start(queue: queue)
-
+        let listener = try makeListener(localDevice: localDevice, workspaceID: workspace.id)
         let browser: NWBrowser?
         if enableBonjour {
             let value = NWBrowser(
                 for: .bonjour(type: Self.serviceType, domain: nil),
-                using: parameters
+                using: Self.makeParameters()
             )
             value.stateUpdateHandler = { [weak self] state in
                 switch state {
@@ -122,7 +109,6 @@ public final class NetworkClipboardTransport: ClipboardTransport, @unchecked Sen
             value.browseResultsChangedHandler = { [weak self] results, _ in
                 self?.handle(results)
             }
-            value.start(queue: queue)
             browser = value
         } else {
             browser = nil
@@ -132,6 +118,8 @@ public final class NetworkClipboardTransport: ClipboardTransport, @unchecked Sen
             self.listener = listener
             self.browser = browser
         }
+        listener.start(queue: queue)
+        browser?.start(queue: queue)
 
         for peer in workspace.devices where peer.id != localDevice.id && !peer.peerAddresses.isEmpty {
             scheduleDirectConnection(to: peer.id, immediately: true)
@@ -161,6 +149,8 @@ public final class NetworkClipboardTransport: ClipboardTransport, @unchecked Sen
             pendingConnections.removeAll()
             retryAttempts.removeAll()
             retryTokens.removeAll()
+            listenerRetryAttempt = 0
+            listenerRetryToken = nil
             knownPeers.removeAll()
             localDevice = nil
             workspaceID = nil
@@ -176,11 +166,99 @@ public final class NetworkClipboardTransport: ClipboardTransport, @unchecked Sen
     private func handleListenerState(_ state: NWListener.State, listener: NWListener?) {
         switch state {
         case .ready:
-            lock.clipboardWithLock { readyPort = listener?.port }
-        case .failed:
+            lock.clipboardWithLock {
+                guard self.listener === listener else { return }
+                readyPort = listener?.port
+                listenerRetryAttempt = 0
+                listenerRetryToken = nil
+            }
+        case .failed, .waiting:
+            let shouldRetry = lock.clipboardWithLock { () -> Bool in
+                guard running, self.listener === listener else { return false }
+                self.listener = nil
+                readyPort = nil
+                return true
+            }
+            guard shouldRetry else { return }
+            listener?.cancel()
             emit(.failure(nil))
+            scheduleListenerRestart()
         default:
             break
+        }
+    }
+
+    private func makeListener(
+        localDevice: DeviceDescriptor,
+        workspaceID: WorkspaceID
+    ) throws -> NWListener {
+        let listener = try NWListener(using: Self.makeParameters(), on: configuredListenPort)
+        if enableBonjour {
+            listener.service = NWListener.Service(
+                name: localDevice.name,
+                type: Self.serviceType,
+                txtRecord: NWTXTRecord([
+                    "device": localDevice.id.rawValue.uuidString,
+                    "workspace": workspaceID.rawValue.uuidString,
+                    "version": String(ClipboardEnvelope.protocolVersion)
+                ])
+            )
+        }
+        listener.stateUpdateHandler = { [weak self, weak listener] state in
+            self?.handleListenerState(state, listener: listener)
+        }
+        listener.newConnectionHandler = { [weak self] connection in
+            self?.accept(connection)
+        }
+        return listener
+    }
+
+    private func scheduleListenerRestart() {
+        let schedule: (UUID, TimeInterval)? = lock.clipboardWithLock {
+            guard running,
+                  listener == nil,
+                  listenerRetryToken == nil else { return nil }
+            let token = UUID()
+            let delay = listenerRetryDelays[
+                min(listenerRetryAttempt, listenerRetryDelays.count - 1)
+            ]
+            listenerRetryAttempt += 1
+            listenerRetryToken = token
+            return (token, delay)
+        }
+        guard let (token, delay) = schedule else { return }
+        queue.asyncAfter(deadline: .now() + delay) { [weak self] in
+            self?.restartListener(token: token)
+        }
+    }
+
+    private func restartListener(token: UUID) {
+        let configuration: (DeviceDescriptor, WorkspaceID)? = lock.clipboardWithLock {
+            guard running,
+                  listener == nil,
+                  listenerRetryToken == token,
+                  let localDevice,
+                  let workspaceID else { return nil }
+            listenerRetryToken = nil
+            return (localDevice, workspaceID)
+        }
+        guard let (localDevice, workspaceID) = configuration else { return }
+
+        do {
+            let listener = try makeListener(localDevice: localDevice, workspaceID: workspaceID)
+            let installed = lock.clipboardWithLock { () -> Bool in
+                guard running, self.listener == nil else { return false }
+                self.listener = listener
+                return true
+            }
+            guard installed else {
+                listener.cancel()
+                return
+            }
+            listener.start(queue: queue)
+        } catch {
+            emit(.failure(nil))
+            scheduleListenerRestart()
         }
     }
 

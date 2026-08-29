@@ -468,6 +468,7 @@ final class FileTransferCoordinatorTests: XCTestCase {
         XCTAssertEqual(fixture.transport.startCount(), 2)
         XCTAssertGreaterThanOrEqual(fixture.transport.stopCount(), 1)
         XCTAssertEqual(fixture.transport.eventSubscriptionCount(), 1)
+        XCTAssertEqual(fixture.pasteboard.eventSubscriptionCount, 1)
         await fixture.coordinator.stop()
     }
 
@@ -562,6 +563,65 @@ final class FileTransferCoordinatorTests: XCTestCase {
         let stillPresent = await fixture.coordinator.snapshots().contains { $0.id == transferID }
         XCTAssertTrue(sourceRemoved)
         XCTAssertFalse(stillPresent)
+        await fixture.coordinator.stop()
+    }
+
+    @MainActor
+    func testPasteboardSelectionWaitsForRemoteFocusBeforeOffering() async throws {
+        let fixture = FileTransferFixture()
+        try await fixture.startAndConnect()
+
+        fixture.pasteboard.emit(PasteboardFileSelection(
+            changeCount: 1,
+            urls: [URL(fileURLWithPath: "/tmp/copied-before-focus.txt")]
+        ))
+        try? await Task.sleep(for: .milliseconds(100))
+        XCTAssertFalse(fixture.transport.messages().contains {
+            if case .offer = $0.message { return true }
+            return false
+        })
+
+        await fixture.coordinator.setAutomaticDestination(fixture.remote.id)
+
+        let offered = await eventually {
+            fixture.transport.messages().contains {
+                if case let .offer(value) = $0.message {
+                    return value.manifest.entries.first?.filename == "copied-before-focus.txt"
+                }
+                return false
+            }
+        }
+        XCTAssertTrue(offered)
+
+        let snapshots = await fixture.coordinator.snapshots()
+        let firstTransfer = try XCTUnwrap(snapshots.first)
+        fixture.transport.emit(.message(
+            fixture.remote.id,
+            fixture.envelope(from: fixture.remote.id, message: .resumeState(
+                TransferResumeState(
+                    transferID: firstTransfer.id,
+                    offsets: [],
+                    completed: true
+                )
+            ))
+        ))
+        let completed = await eventually {
+            await fixture.coordinator.snapshots()
+                .first(where: { $0.id == firstTransfer.id })?.state == .completed
+        }
+        XCTAssertTrue(completed)
+
+        fixture.pasteboard.emit(PasteboardFileSelection(
+            changeCount: 2,
+            urls: [URL(fileURLWithPath: "/tmp/copied-before-focus.txt")]
+        ))
+        let offeredAgain = await eventually {
+            fixture.transport.messages().filter {
+                if case .offer = $0.message { return true }
+                return false
+            }.count == 2
+        }
+        XCTAssertTrue(offeredAgain)
         await fixture.coordinator.stop()
     }
 
@@ -1034,6 +1094,7 @@ private final class FilePasteboardSpy: FilePasteboard {
     private let continuation: AsyncStream<PasteboardFileSelection>.Continuation
     private(set) var publishedURLs: [URL] = []
     private(set) var publishedTransferID: TransferID?
+    private(set) var eventSubscriptionCount = 0
 
     init() {
         var captured: AsyncStream<PasteboardFileSelection>.Continuation?
@@ -1041,7 +1102,10 @@ private final class FilePasteboardSpy: FilePasteboard {
         continuation = captured!
     }
 
-    func events() -> AsyncStream<PasteboardFileSelection> { stream }
+    func events() -> AsyncStream<PasteboardFileSelection> {
+        eventSubscriptionCount += 1
+        return stream
+    }
 
     func publishFiles(_ urls: [URL], transferID: TransferID) {
         publishedURLs = urls

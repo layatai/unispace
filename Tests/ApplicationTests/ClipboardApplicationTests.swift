@@ -63,7 +63,12 @@ final class ClipboardApplicationTests: XCTestCase {
             representations: representations,
             now: firstDate
         ))
-        XCTAssertNil(try engine.makeLocalPayload(representations: representations, now: firstDate))
+        let repeated = try XCTUnwrap(engine.makeLocalPayload(
+            representations: representations,
+            now: firstDate
+        ))
+        XCTAssertGreaterThan(repeated.revision, first.revision)
+        XCTAssertEqual(repeated.contentHash, first.contentHash)
         XCTAssertEqual(engine.recentPayloadCount, 1)
         XCTAssertEqual(engine.currentOrderingKey?.originDeviceID, local)
 
@@ -75,6 +80,17 @@ final class ClipboardApplicationTests: XCTestCase {
         )
         XCTAssertTrue(try engine.acceptRemote(remotePayload, from: remote, now: firstDate))
         XCTAssertFalse(try engine.acceptRemote(remotePayload, from: remote, now: firstDate))
+        let repeatedRemotePayload = makePayload(
+            origin: remote,
+            revision: remotePayload.revision + 1,
+            text: "remote",
+            date: firstDate
+        )
+        XCTAssertTrue(try engine.acceptRemote(
+            repeatedRemotePayload,
+            from: remote,
+            now: firstDate
+        ))
         XCTAssertThrowsError(try engine.acceptRemote(remotePayload, from: local, now: firstDate))
 
         let badDigest = ClipboardPayload(
@@ -99,6 +115,44 @@ final class ClipboardApplicationTests: XCTestCase {
             < ClipboardOrderingKey(revision: 2, originDeviceID: local))
         XCTAssertTrue(ClipboardOrderingKey(revision: 2, originDeviceID: local)
             < ClipboardOrderingKey(revision: 2, originDeviceID: remote))
+    }
+
+    @MainActor
+    func testCoordinatorRetainsClipboardUntilRemoteFocusIsActive() async throws {
+        let fixture = ClipboardTestFixture()
+        try await fixture.start()
+        await fixture.coordinator.setSharingEnabled(true)
+        fixture.transport.emit(.connected(fixture.remote.id))
+        let connected = await eventually {
+            await fixture.coordinator.connectedDeviceIDs().contains(fixture.remote.id)
+        }
+        XCTAssertTrue(connected)
+
+        fixture.clipboard.emit(ClipboardObservation(
+            changeCount: 1,
+            representations: [ClipboardRepresentation(kind: .plainText, value: "copied locally")]
+        ))
+        try? await Task.sleep(for: .milliseconds(100))
+        XCTAssertTrue(fixture.transport.sentEnvelopes.isEmpty)
+
+        await fixture.coordinator.setAutomaticDestination(fixture.remote.id)
+
+        let sent = await eventually {
+            fixture.transport.sentEnvelopes.first?.payload.representations == [
+                ClipboardRepresentation(kind: .plainText, value: "copied locally")
+            ]
+        }
+        XCTAssertTrue(sent)
+
+        fixture.clipboard.emit(ClipboardObservation(
+            changeCount: 2,
+            representations: [ClipboardRepresentation(kind: .plainText, value: "copied locally")]
+        ))
+        let resent = await eventually {
+            fixture.transport.sentEnvelopes.count == 2
+        }
+        XCTAssertTrue(resent)
+        await fixture.coordinator.stop()
     }
 
     @MainActor
@@ -199,15 +253,25 @@ final class ClipboardApplicationTests: XCTestCase {
     func testCoordinatorKeepsSingleTransportSubscriptionAcrossRestart() async throws {
         let fixture = ClipboardTestFixture()
         try await fixture.start()
+        await fixture.coordinator.setSharingEnabled(true)
         await fixture.coordinator.stop()
         try await fixture.start()
 
         XCTAssertEqual(fixture.transport.eventSubscriptionCount, 1)
         fixture.transport.emit(.connected(fixture.remote.id))
+        await fixture.coordinator.setAutomaticDestination(fixture.remote.id)
         let connected = await eventually {
             await fixture.coordinator.connectedDeviceIDs().contains(fixture.remote.id)
         }
         XCTAssertTrue(connected)
+        fixture.clipboard.emit(ClipboardObservation(
+            changeCount: 1,
+            representations: [ClipboardRepresentation(kind: .plainText, value: "after restart")]
+        ))
+        let sent = await eventually {
+            fixture.transport.sentEnvelopes.first?.payload.plainText == "after restart"
+        }
+        XCTAssertTrue(sent)
         await fixture.coordinator.stop()
     }
 

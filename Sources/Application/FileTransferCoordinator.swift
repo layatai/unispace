@@ -57,6 +57,7 @@ public actor FileTransferCoordinator {
     private var transportTask: Task<Void, Never>?
     private var pasteboardTask: Task<Void, Never>?
     private var lastPasteboardChangeCount: Int?
+    private var pendingPasteboardSelection: PasteboardFileSelection?
     private var started = false
 
     public init(
@@ -105,30 +106,23 @@ public actor FileTransferCoordinator {
         automaticDestination = nil
         records.removeAll()
         lastPasteboardChangeCount = nil
+        pendingPasteboardSelection = nil
 
         await store.removeExpired(now: Date(), limits: limits)
         try await recoverTransfers()
         startTransportObservationIfNeeded()
+        await startPasteboardObservationIfNeeded()
         try await transport.start(localDevice: localDevice, workspace: workspace, key: key)
-
-        let pasteboardEvents = await pasteboard.events()
-        pasteboardTask = Task { [weak self] in
-            for await selection in pasteboardEvents {
-                guard !Task.isCancelled else { break }
-                await self?.handlePasteboardSelection(selection)
-            }
-        }
     }
 
     public func stop() async {
         started = false
-        pasteboardTask?.cancel()
-        pasteboardTask = nil
         transferTasks.values.forEach { $0.cancel() }
         transferTasks.removeAll()
         transferTaskTokens.removeAll()
         connectedPeers.removeAll()
         automaticDestination = nil
+        pendingPasteboardSelection = nil
         await transport.stop()
     }
 
@@ -143,12 +137,24 @@ public actor FileTransferCoordinator {
         }
     }
 
-    public func setAutomaticDestination(_ deviceID: DeviceID?) {
+    private func startPasteboardObservationIfNeeded() async {
+        guard pasteboardTask == nil else { return }
+        let pasteboardEvents = await pasteboard.events()
+        pasteboardTask = Task { [weak self] in
+            for await selection in pasteboardEvents {
+                guard !Task.isCancelled else { break }
+                await self?.handlePasteboardSelection(selection)
+            }
+        }
+    }
+
+    public func setAutomaticDestination(_ deviceID: DeviceID?) async {
         guard deviceID != localDevice?.id else {
             automaticDestination = nil
             return
         }
         automaticDestination = deviceID
+        await offerPendingPasteboardSelectionIfPossible()
     }
 
     public func connectedDeviceIDs() -> Set<DeviceID> { connectedPeers }
@@ -311,13 +317,33 @@ public actor FileTransferCoordinator {
     }
 
     private func handlePasteboardSelection(_ selection: PasteboardFileSelection) async {
-        guard selection.changeCount != lastPasteboardChangeCount else { return }
+        guard started,
+              selection.changeCount != lastPasteboardChangeCount else { return }
         lastPasteboardChangeCount = selection.changeCount
-        guard let destination = automaticDestination,
+        pendingPasteboardSelection = selection
+        await offerPendingPasteboardSelectionIfPossible()
+    }
+
+    private func offerPendingPasteboardSelectionIfPossible() async {
+        guard let selection = pendingPasteboardSelection,
+              let destination = automaticDestination,
               connectedPeers.contains(destination),
               !selection.urls.isEmpty,
               !hasActiveTransfer(direction: .outgoing, peer: destination) else { return }
-        _ = try? await sendFiles(selection.urls, to: destination)
+        pendingPasteboardSelection = nil
+        do {
+            _ = try await sendFiles(selection.urls, to: destination)
+        } catch let error as FileTransferCoordinatorError {
+            guard pendingPasteboardSelection == nil else { return }
+            switch error {
+            case .noDestination, .peerUnavailable, .peerBusy:
+                pendingPasteboardSelection = selection
+            default:
+                break
+            }
+        } catch {
+            // Invalid or inaccessible selections require a new Finder copy.
+        }
     }
 
     private func handleTransportEvent(_ event: FileTransferTransportEvent) async {
@@ -326,6 +352,7 @@ public actor FileTransferCoordinator {
         case let .connected(deviceID):
             connectedPeers.insert(deviceID)
             await resumeTransfers(with: deviceID)
+            await offerPendingPasteboardSelectionIfPossible()
         case let .disconnected(deviceID):
             connectedPeers.remove(deviceID)
             pauseTransfers(with: deviceID)

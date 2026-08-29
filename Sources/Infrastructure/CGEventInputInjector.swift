@@ -96,7 +96,10 @@ public final class CGEventInputInjector: InputInjector, @unchecked Sendable {
             cgEvent.flags = flags
             post(cgEvent)
         case let .flags(rawValue):
-            flags = CGEventFlags(rawValue: rawValue)
+            let previousFlags = flags
+            let updatedFlags = CGEventFlags(rawValue: rawValue)
+            flags = updatedFlags
+            postModifierTransitions(from: previousFlags, to: updatedFlags)
         }
     }
 
@@ -138,16 +141,55 @@ public final class CGEventInputInjector: InputInjector, @unchecked Sendable {
         lock.lock()
         let keys = pressedKeys
         let buttons = pressedButtons
+        let activeFlags = flags
         pressedKeys.removeAll()
         pressedButtons.removeAll()
         flags = []
         lock.unlock()
         for key in keys {
-            if let event = CGEvent(keyboardEventSource: nil, virtualKey: CGKeyCode(key), keyDown: false) { post(event) }
+            if let event = CGEvent(
+                keyboardEventSource: nil,
+                virtualKey: CGKeyCode(key),
+                keyDown: false
+            ) {
+                event.flags = activeFlags
+                post(event)
+            }
         }
+        postModifierTransitions(from: activeFlags, to: [])
         for button in buttons {
             postMouse(type: mouseEventType(button: button, isDown: false), button: cgButton(button), position: cursorPosition, clickCount: 1)
         }
+    }
+
+    private func postModifierTransitions(
+        from previousFlags: CGEventFlags,
+        to updatedFlags: CGEventFlags
+    ) {
+        for (mask, keyCode) in Self.modifierKeys {
+            let wasPressed = previousFlags.contains(mask)
+            let isPressed = updatedFlags.contains(mask)
+            guard wasPressed != isPressed,
+                  let event = CGEvent(
+                      keyboardEventSource: nil,
+                      virtualKey: keyCode,
+                      keyDown: isPressed
+                  ) else { continue }
+            event.type = .flagsChanged
+            event.flags = updatedFlags
+            post(event)
+        }
+    }
+
+    private static var modifierKeys: [(CGEventFlags, CGKeyCode)] {
+        [
+            (.maskCommand, 55),
+            (.maskShift, 56),
+            (.maskAlphaShift, 57),
+            (.maskAlternate, 58),
+            (.maskControl, 59),
+            (.maskSecondaryFn, 63),
+        ]
     }
 
     private func postMouse(type: CGEventType, button: CGMouseButton, position: CGPoint, clickCount: Int) {

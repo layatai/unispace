@@ -22,7 +22,6 @@ public struct ClipboardSyncEngine: Sendable {
     private let limits: ClipboardLimits
     private var logicalClock: UInt64 = 0
     private var latestOrderingKey: ClipboardOrderingKey?
-    private var latestContentHash: Data?
     private var recentPayloads: [ClipboardPayloadID: Date] = [:]
     private var recentContentHashes: [Data: Date] = [:]
 
@@ -47,7 +46,6 @@ public struct ClipboardSyncEngine: Sendable {
             limits: limits
         )
         let hash = Self.contentHash(for: normalized)
-        guard hash != latestContentHash else { return nil }
 
         let wallClockSeed = UInt64(max(0, now.timeIntervalSince1970 * 1_000_000))
         let baseline = max(logicalClock, latestOrderingKey?.revision ?? 0, wallClockSeed)
@@ -67,7 +65,6 @@ public struct ClipboardSyncEngine: Sendable {
             revision: revision,
             originDeviceID: localDeviceID
         )
-        latestContentHash = hash
         remember(payload, now: now)
         return payload
     }
@@ -100,11 +97,6 @@ public struct ClipboardSyncEngine: Sendable {
         }
 
         latestOrderingKey = orderingKey
-        if recentContentHashes[payload.contentHash] != nil,
-           latestContentHash == payload.contentHash {
-            return false
-        }
-        latestContentHash = payload.contentHash
         return true
     }
 
@@ -112,7 +104,6 @@ public struct ClipboardSyncEngine: Sendable {
         if let localDeviceID { self.localDeviceID = localDeviceID }
         logicalClock = 0
         latestOrderingKey = nil
-        latestContentHash = nil
         recentPayloads.removeAll(keepingCapacity: false)
         recentContentHashes.removeAll(keepingCapacity: false)
     }

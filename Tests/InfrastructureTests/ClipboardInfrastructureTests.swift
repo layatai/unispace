@@ -133,6 +133,40 @@ final class ClipboardInfrastructureTests: XCTestCase {
         XCTAssertEqual(NetworkClipboardError.sendFailed("x"), .sendFailed("x"))
     }
 
+    func testClipboardListenerRetriesAfterPortBecomesAvailable() async throws {
+        let blocker = try NWListener(using: .tcp, on: .any)
+        blocker.newConnectionHandler = { $0.cancel() }
+        blocker.start(queue: DispatchQueue(label: "clipboard-port-blocker"))
+        let port = try await waitForPort(blocker)
+        defer { blocker.cancel() }
+
+        let local = DeviceDescriptor(id: DeviceID(), name: "Local")
+        let workspace = WorkspaceSnapshot(
+            id: WorkspaceID(),
+            name: "Clipboard",
+            localDeviceID: local.id,
+            devices: [local]
+        )
+        let transport = NetworkClipboardTransport(
+            listenPort: port,
+            directPort: port,
+            enableBonjour: false,
+            listenerRetryDelays: [0.02]
+        )
+        try await transport.start(
+            localDevice: local,
+            workspace: workspace,
+            key: Data(repeating: 1, count: 32)
+        )
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertNil(transport.activePort)
+
+        blocker.cancel()
+        let recoveredPort = try await waitForPort(transport)
+        XCTAssertEqual(recoveredPort, port)
+        await transport.stop()
+    }
+
     @MainActor
     func testSystemClipboardObservesPortableValuesAndSuppressesAppliedPayloads() async {
         let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
@@ -203,6 +237,14 @@ final class ClipboardInfrastructureTests: XCTestCase {
     private func waitForPort(_ transport: NetworkClipboardTransport) async throws -> NWEndpoint.Port {
         for _ in 0..<200 {
             if let port = transport.activePort { return port }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        throw NetworkClipboardError.invalidConfiguration
+    }
+
+    private func waitForPort(_ listener: NWListener) async throws -> NWEndpoint.Port {
+        for _ in 0..<200 {
+            if let port = listener.port, port != .any { return port }
             try await Task.sleep(for: .milliseconds(20))
         }
         throw NetworkClipboardError.invalidConfiguration

@@ -16,6 +16,7 @@ public actor ClipboardCoordinator {
     private var engine: ClipboardSyncEngine?
     private var transportTask: Task<Void, Never>?
     private var clipboardTask: Task<Void, Never>?
+    private var pendingObservation: ClipboardObservation?
     private var sharingEnabled = false
     private var started = false
 
@@ -50,6 +51,7 @@ public actor ClipboardCoordinator {
         self.workspace = workspace
         connectedPeers.removeAll()
         automaticDestination = nil
+        pendingObservation = nil
         engine = ClipboardSyncEngine(localDeviceID: localDevice.id, limits: limits)
         started = true
 
@@ -69,11 +71,10 @@ public actor ClipboardCoordinator {
 
     public func stop() async {
         started = false
-        clipboardTask?.cancel()
-        clipboardTask = nil
         await clipboard.stop()
         connectedPeers.removeAll()
         automaticDestination = nil
+        pendingObservation = nil
         engine?.reset()
         engine = nil
         localDevice = nil
@@ -98,9 +99,8 @@ public actor ClipboardCoordinator {
         if enabled, started {
             await startClipboardObservation()
         } else {
-            clipboardTask?.cancel()
-            clipboardTask = nil
             await clipboard.stop()
+            pendingObservation = nil
             if let localDevice {
                 engine = ClipboardSyncEngine(localDeviceID: localDevice.id, limits: limits)
             }
@@ -109,19 +109,20 @@ public actor ClipboardCoordinator {
 
     public func isSharingEnabled() -> Bool { sharingEnabled }
 
-    public func setAutomaticDestination(_ deviceID: DeviceID?) {
+    public func setAutomaticDestination(_ deviceID: DeviceID?) async {
         guard deviceID != localDevice?.id else {
             automaticDestination = nil
             return
         }
         automaticDestination = deviceID
+        await sendPendingObservationIfPossible()
     }
 
     public func connectedDeviceIDs() -> Set<DeviceID> { connectedPeers }
 
     private func startClipboardObservation() async {
-        guard clipboardTask == nil else { return }
         let observations = await clipboard.events()
+        guard clipboardTask == nil else { return }
         clipboardTask = Task { [weak self] in
             for await observation in observations {
                 guard !Task.isCancelled else { return }
@@ -131,13 +132,20 @@ public actor ClipboardCoordinator {
     }
 
     private func handle(_ observation: ClipboardObservation) async {
-        guard sharingEnabled,
+        guard started, sharingEnabled else { return }
+        pendingObservation = observation
+        await sendPendingObservationIfPossible()
+    }
+
+    private func sendPendingObservationIfPossible() async {
+        guard let observation = pendingObservation,
               let localDevice,
               let workspace,
               let destination = automaticDestination,
               connectedPeers.contains(destination),
               let engine else { return }
 
+        pendingObservation = nil
         do {
             var candidateEngine = engine
             guard let payload = try candidateEngine.makeLocalPayload(
@@ -156,6 +164,7 @@ public actor ClipboardCoordinator {
             self.engine = candidateEngine
         } catch {
             // Clipboard contents and representation values are never logged.
+            if pendingObservation == nil { pendingObservation = observation }
         }
     }
 
@@ -164,6 +173,7 @@ public actor ClipboardCoordinator {
         switch event {
         case let .connected(deviceID):
             connectedPeers.insert(deviceID)
+            await sendPendingObservationIfPossible()
         case let .disconnected(deviceID):
             connectedPeers.remove(deviceID)
         case let .failure(deviceID):
