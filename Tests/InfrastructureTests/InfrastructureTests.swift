@@ -50,16 +50,81 @@ final class InfrastructureTests: XCTestCase {
                 .smartMagnify
             ].map { UInt32($0.rawValue) })
         )
+        XCTAssertTrue(Set(CGEventInputCapture.gestureEventTypes).isSubset(
+            of: Set(CGEventInputCapture.capturedEventTypes)
+        ))
         let gestureType = try XCTUnwrap(
-            CGEventType(rawValue: UInt32(NSEvent.EventType.magnify.rawValue))
+            CGEventType(rawValue: UInt32(NSEvent.EventType.gesture.rawValue))
         )
         let sourceEvent = try XCTUnwrap(CGEvent(source: nil))
         sourceEvent.type = gestureType
+        sourceEvent.setIntegerValueField(CGEventField(rawValue: 110)!, value: 8)
+        sourceEvent.setIntegerValueField(CGEventField(rawValue: 132)!, value: 2)
+        sourceEvent.setDoubleValueField(CGEventField(rawValue: 113)!, value: 0.125)
 
         let input = try XCTUnwrap(CGEventInputCapture.convert(type: gestureType, event: sourceEvent))
-        guard case let .gesture(serializedEvent) = input else {
+        guard case let .gesture(serializedEvent, portable) = input else {
             return XCTFail("Expected a serialized gesture event")
         }
+        XCTAssertEqual(
+            portable,
+            PortableGesture(kind: .magnify, phase: .changed, value: 0.125)
+        )
+
+        let swipe = try XCTUnwrap(CGEvent(source: nil))
+        swipe.type = gestureType
+        swipe.setIntegerValueField(CGEventField(rawValue: 110)!, value: 16)
+        swipe.setIntegerValueField(CGEventField(rawValue: 132)!, value: 4)
+        swipe.setIntegerValueField(CGEventField(rawValue: 134)!, value: 0x04)
+        XCTAssertEqual(
+            CGEventInputCapture.portableGesture(type: gestureType, event: swipe),
+            PortableGesture(kind: .swipe, phase: .ended, deltaX: 1)
+        )
+
+        let rotation = try XCTUnwrap(CGEvent(source: nil))
+        rotation.type = gestureType
+        rotation.setIntegerValueField(CGEventField(rawValue: 110)!, value: 5)
+        rotation.setIntegerValueField(CGEventField(rawValue: 132)!, value: 1)
+        rotation.setDoubleValueField(CGEventField(rawValue: 114)!, value: 12.5)
+        XCTAssertEqual(
+            CGEventInputCapture.portableGesture(type: gestureType, event: rotation),
+            PortableGesture(kind: .rotate, phase: .began, value: 12.5)
+        )
+
+        let dockType = try XCTUnwrap(CGEventType(rawValue: 30))
+        let missionControl = try XCTUnwrap(CGEvent(source: nil))
+        missionControl.type = dockType
+        missionControl.setIntegerValueField(CGEventField(rawValue: 110)!, value: 23)
+        missionControl.setIntegerValueField(CGEventField(rawValue: 123)!, value: 2)
+        missionControl.setIntegerValueField(CGEventField(rawValue: 132)!, value: 2)
+        missionControl.setDoubleValueField(CGEventField(rawValue: 124)!, value: 0.75)
+        XCTAssertEqual(
+            CGEventInputCapture.portableGesture(type: dockType, event: missionControl),
+            PortableGesture(kind: .workspaceSwipe, phase: .changed, deltaY: 1)
+        )
+
+        let appExpose = try XCTUnwrap(missionControl.copy())
+        appExpose.setDoubleValueField(CGEventField(rawValue: 124)!, value: -0.75)
+        appExpose.setIntegerValueField(CGEventField(rawValue: 132)!, value: 4)
+        XCTAssertEqual(
+            CGEventInputCapture.portableGesture(type: dockType, event: appExpose),
+            PortableGesture(kind: .workspaceSwipe, phase: .ended, deltaY: -1)
+        )
+
+        let showDesktop = try XCTUnwrap(missionControl.copy())
+        showDesktop.setIntegerValueField(CGEventField(rawValue: 123)!, value: 3)
+        showDesktop.setDoubleValueField(CGEventField(rawValue: 124)!, value: 0.75)
+        XCTAssertEqual(
+            CGEventInputCapture.portableGesture(type: dockType, event: showDesktop),
+            PortableGesture(kind: .desktopPinch, phase: .changed, value: 1)
+        )
+
+        let launchpad = try XCTUnwrap(showDesktop.copy())
+        launchpad.setDoubleValueField(CGEventField(rawValue: 124)!, value: -0.75)
+        XCTAssertEqual(
+            CGEventInputCapture.portableGesture(type: dockType, event: launchpad),
+            PortableGesture(kind: .desktopPinch, phase: .changed, value: -1)
+        )
 
         let targetPosition = CGPoint(x: 320, y: 240)
         let rebuilt = try XCTUnwrap(
@@ -67,6 +132,17 @@ final class InfrastructureTests: XCTestCase {
         )
         XCTAssertEqual(rebuilt.type.rawValue, gestureType.rawValue)
         XCTAssertEqual(rebuilt.location, targetPosition)
+        XCTAssertEqual(rebuilt.getIntegerValueField(CGEventField(rawValue: 110)!), 8)
+        XCTAssertEqual(rebuilt.getDoubleValueField(CGEventField(rawValue: 113)!), 0.125)
+
+        let capture = CGEventInputCapture(
+            mouseAssociationHandler: { _ in },
+            handler: { event in
+                if case .gesture = event { return true }
+                return false
+            }
+        )
+        XCTAssertTrue(capture.handle(type: gestureType, event: sourceEvent))
     }
 
     func testInjectedCursorCannotAccumulateBeyondAHorizontalDisplayEdge() {
@@ -173,6 +249,21 @@ final class InfrastructureTests: XCTestCase {
         for (error, description) in errors {
             XCTAssertEqual(error.errorDescription, description)
         }
+    }
+
+    func testPeerTransportErrorsExposeActionableDescriptions() {
+        XCTAssertEqual(
+            PeerTransportError.peerUnavailable(DeviceID()).errorDescription,
+            "The selected device is not connected. Wait until it appears online, then try again."
+        )
+        XCTAssertEqual(
+            PeerTransportError.authenticationFailed.errorDescription,
+            "The peer could not authenticate with this workspace. Pair the device again."
+        )
+        XCTAssertEqual(
+            PeerTransportError.sendFailed("offline").errorDescription,
+            "The connection failed while sending data: offline"
+        )
     }
 
     func testApplicationDeclaresEveryBonjourServiceAndLocalNetworkPurpose() throws {
@@ -924,6 +1015,106 @@ final class InfrastructureTests: XCTestCase {
         listener.cancel()
     }
 
+    func testUnknownInboundWindowsPeerNegotiatesPortableHelloBeforeConnected() async throws {
+        let workspaceID = WorkspaceID()
+        let key = PairingCryptoSession.randomData(count: 32)
+        let macID = DeviceID()
+        let windowsID = DeviceID()
+        let mac = DeviceDescriptor(
+            id: macID,
+            name: "Mac",
+            capabilities: [.crossPlatformInputV2, .quicStreamV2, .udpPointerV2],
+            platform: .macOS
+        )
+        let windows = DeviceDescriptor(
+            id: windowsID,
+            name: "Windows PC",
+            capabilities: [.crossPlatformInputV2, .quicStreamV2, .udpPointerV2],
+            platform: .windows
+        )
+        let workspace = WorkspaceSnapshot(
+            id: workspaceID,
+            name: "Unknown Windows recovery",
+            localDeviceID: macID,
+            devices: [mac]
+        )
+        let transport = NetworkPeerTransport(
+            listenPort: .any,
+            directPort: .any,
+            enableBonjour: false,
+            enableQUIC: false,
+            enableRealtime: false
+        )
+        let peerHelloObserved = expectation(description: "Windows hello observed before connection announcement")
+        let connected = expectation(description: "unknown Windows peer announced connected")
+        let macHelloReceived = expectation(description: "Windows peer receives a portable Mac hello")
+        let eventOrder = StringRecorder()
+        let events = Task {
+            for await event in transport.events() {
+                switch event {
+                case let .control(source, envelope):
+                    guard source == windowsID, case let .hello(device) = envelope.message else { continue }
+                    XCTAssertEqual(device, windows)
+                    eventOrder.append("hello")
+                    peerHelloObserved.fulfill()
+                case let .connected(deviceID) where deviceID == windowsID:
+                    eventOrder.append("connected")
+                    connected.fulfill()
+                default:
+                    break
+                }
+            }
+        }
+
+        try await transport.start(localDevice: mac, workspace: workspace, key: key)
+        let port = try await waitForPort(of: transport)
+        let rawClient = NWConnection(
+            host: "127.0.0.1",
+            port: port,
+            using: NetworkPeerTransport.makeParameters()
+        )
+        let client = SecurePeerConnection(
+            connection: rawClient,
+            localDeviceID: windowsID,
+            workspaceID: workspaceID,
+            workspaceKey: key,
+            expectedDeviceID: macID,
+            isOutbound: true
+        )
+        client.authenticatedHandler = { deviceID in
+            XCTAssertEqual(deviceID, macID)
+            do {
+                let hello = try WireFrameCodec.encodePortableControl(
+                    ControlEnvelope(message: .hello(windows))
+                )
+                client.send(hello, completion: nil)
+            } catch {
+                XCTFail("Could not encode the Windows hello: \(error)")
+            }
+        }
+        client.frameHandler = { kind, payload in
+            do {
+                XCTAssertEqual(kind, .controlJSONV2)
+                let envelope = try WireFrameCodec.decodePortableControl(payload)
+                guard case let .hello(device) = envelope.message else {
+                    return XCTFail("Expected the Mac hello")
+                }
+                XCTAssertEqual(device, mac)
+                macHelloReceived.fulfill()
+            } catch {
+                XCTFail("Could not decode the portable Mac hello: \(error)")
+            }
+        }
+        rawClient.start(queue: DispatchQueue(label: "UniSpaceInfrastructureTests.UnknownWindows"))
+
+        await fulfillment(of: [peerHelloObserved, connected, macHelloReceived], timeout: 5)
+        XCTAssertEqual(Array(eventOrder.values.prefix(2)), ["hello", "connected"])
+
+        client.cancel()
+        events.cancel()
+        await transport.stop()
+    }
+
     func testCrossPlatformPointerLaneAuthenticatesAndDeliversLatestState() async throws {
         let workspaceID = WorkspaceID()
         let key = PairingCryptoSession.randomData(count: 32)
@@ -1043,6 +1234,17 @@ private final class MouseAssociationRecorder: @unchecked Sendable {
     var values: [Bool] { lock.withLock { storedValues } }
 
     func append(_ value: Bool) {
+        lock.withLock { storedValues.append(value) }
+    }
+}
+
+private final class StringRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storedValues: [String] = []
+
+    var values: [String] { lock.withLock { storedValues } }
+
+    func append(_ value: String) {
         lock.withLock { storedValues.append(value) }
     }
 }

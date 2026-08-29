@@ -14,7 +14,32 @@ public enum PeerTransportError: Error, Equatable {
     case replayedFrame
 }
 
+extension PeerTransportError: LocalizedError {
+    public var errorDescription: String? {
+        switch self {
+        case .notStarted:
+            "The peer network has not started."
+        case .peerUnavailable:
+            "The selected device is not connected. Wait until it appears online, then try again."
+        case let .sendFailed(message):
+            "The connection failed while sending data: \(message)"
+        case .invalidConfiguration:
+            "The trusted peer configuration is invalid."
+        case .authenticationFailed:
+            "The peer could not authenticate with this workspace. Pair the device again."
+        case .replayedFrame:
+            "The peer sent an expired or replayed frame."
+        }
+    }
+}
+
 public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
+    private struct DeferredAnnouncement {
+        let deviceID: DeviceID
+        let shouldEmitConnected: Bool
+        let stabilityToken: UUID
+    }
+
     public static let serviceType = "_unispace._tcp"
     public static let quicServiceType = "_unispace._udp"
     public static let controlPort = NWEndpoint.Port(rawValue: 61_338)!
@@ -55,6 +80,7 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
     private var retryAttempts: [DeviceID: Int] = [:]
     private var retryTokens: [DeviceID: UUID] = [:]
     private var stabilityTokens: [DeviceID: UUID] = [:]
+    private var deferredAnnouncements: [ObjectIdentifier: DeferredAnnouncement] = [:]
     private var realtimeTransport: QUICRealtimeTransport?
     private var crossPlatformPointerTransport: CrossPlatformPointerTransport?
     private var running = false
@@ -274,6 +300,7 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
             retryAttempts.removeAll()
             retryTokens.removeAll()
             stabilityTokens.removeAll()
+            deferredAnnouncements.removeAll()
             running = false
             return values
         }
@@ -528,14 +555,17 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
         }
         managed.authenticatedHandler = { [weak self, weak managed] deviceID in
             guard let self, let managed else { return }
-            self.register(managed, as: deviceID, objectID: objectID)
-            let hello = self.lock.withLock { self.localDevice.map { ControlEnvelope(message: .hello($0)) } }
-            if let hello {
-                let data = try? (self.isWindowsPeer(deviceID)
-                    ? WireFrameCodec.encodePortableControl(hello)
-                    : WireFrameCodec.encodeControl(hello))
-                if let data { managed.send(data, completion: nil) }
-            }
+            // The dialer speaks first at the application layer. Waiting on every
+            // accepted connection lets the peer's hello select the wire codec,
+            // even when persisted platform metadata is stale or incomplete.
+            let deferUntilHello = !managed.isOutbound
+            self.register(
+                managed,
+                as: deviceID,
+                objectID: objectID,
+                deferAnnouncement: deferUntilHello
+            )
+            if !deferUntilHello { self.sendApplicationHello(to: managed, deviceID: deviceID) }
         }
         managed.frameHandler = { [weak self, weak managed] kind, payload in
             guard let self, let managed else { return }
@@ -592,10 +622,7 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
             switch kind {
             case .controlJSON:
                 let envelope = try WireFrameCodec.decodeControl(payload)
-                if case let .hello(device) = envelope.message, device.id != deviceID {
-                    throw PeerTransportError.authenticationFailed
-                }
-                emit(.control(deviceID, envelope))
+                try handleControl(envelope, from: deviceID, managed: managed)
             case .inputBinary:
                 let frame = try WireFrameCodec.decodeInput(payload)
                 guard frame.controllerID == deviceID else { throw ControlProtocolError.malformedFrame }
@@ -604,13 +631,7 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
                 throw ControlProtocolError.malformedFrame
             case .controlJSONV2:
                 let envelope = try WireFrameCodec.decodePortableControl(payload)
-                if case let .hello(device) = envelope.message, device.id != deviceID {
-                    throw PeerTransportError.authenticationFailed
-                }
-                if case let .hello(device) = envelope.message {
-                    lock.withLock { knownPeers[device.id] = device }
-                }
-                emit(.control(deviceID, envelope))
+                try handleControl(envelope, from: deviceID, managed: managed)
             case .inputBinaryV2, .realtimePointerBinaryV2:
                 // Windows peers are receiver-only. Portable input received by a Mac is invalid.
                 throw ControlProtocolError.malformedFrame
@@ -621,7 +642,63 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
         }
     }
 
-    private func register(_ managed: SecurePeerConnection, as deviceID: DeviceID, objectID: ObjectIdentifier) {
+    private func handleControl(
+        _ envelope: ControlEnvelope,
+        from deviceID: DeviceID,
+        managed: SecurePeerConnection
+    ) throws {
+        if case let .hello(device) = envelope.message {
+            guard device.id == deviceID else { throw PeerTransportError.authenticationFailed }
+            lock.withLock {
+                knownPeers[device.id] = knownPeers[device.id].map {
+                    WorkspaceReplicaMerger.mergeDevice(
+                        $0,
+                        with: device,
+                        capabilitiesAreAuthoritative: true
+                    )
+                } ?? device
+            }
+        }
+        emit(.control(deviceID, envelope))
+        if case .hello = envelope.message {
+            completeDeferredHandshake(managed: managed, deviceID: deviceID)
+        }
+    }
+
+    private func sendApplicationHello(to managed: SecurePeerConnection, deviceID: DeviceID) {
+        let hello = lock.withLock { localDevice.map { ControlEnvelope(message: .hello($0)) } }
+        guard let hello else { return }
+        let data = try? (isWindowsPeer(deviceID)
+            ? WireFrameCodec.encodePortableControl(hello)
+            : WireFrameCodec.encodeControl(hello))
+        if let data { managed.send(data, completion: nil) }
+    }
+
+    private func completeDeferredHandshake(managed: SecurePeerConnection, deviceID: DeviceID) {
+        let objectID = ObjectIdentifier(managed)
+        let announcement = lock.withLock { () -> DeferredAnnouncement? in
+            guard let announcement = deferredAnnouncements[objectID],
+                  announcement.deviceID == deviceID,
+                  connections[deviceID] === managed else { return nil }
+            deferredAnnouncements.removeValue(forKey: objectID)
+            return announcement
+        }
+        guard let announcement else { return }
+        sendApplicationHello(to: managed, deviceID: deviceID)
+        scheduleAnnouncement(
+            managed: managed,
+            deviceID: deviceID,
+            shouldEmitConnected: announcement.shouldEmitConnected,
+            stabilityToken: announcement.stabilityToken
+        )
+    }
+
+    private func register(
+        _ managed: SecurePeerConnection,
+        as deviceID: DeviceID,
+        objectID: ObjectIdentifier,
+        deferAnnouncement: Bool
+    ) {
         var replaced: SecurePeerConnection?
         var rejected = false
         var shouldEmitConnected = false
@@ -647,16 +724,29 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
             return
         }
         replaced?.cancel()
-        let announcementDelay: TimeInterval = managed.transportKind == .quic ? 0.15 : 0
-        queue.asyncAfter(deadline: .now() + announcementDelay) { [weak self, weak managed] in
-            guard let self, let managed else { return }
-            let isCurrent = self.lock.withLock {
-                self.stabilityTokens[deviceID] == stabilityToken &&
-                    self.connections[deviceID] === managed
+        if deferAnnouncement {
+            lock.withLock {
+                deferredAnnouncements[objectID] = DeferredAnnouncement(
+                    deviceID: deviceID,
+                    shouldEmitConnected: shouldEmitConnected,
+                    stabilityToken: stabilityToken
+                )
             }
-            guard isCurrent else { return }
-            self.emit(.health(deviceID, .init(health: .healthy, transport: managed.transportKind)))
-            if shouldEmitConnected { self.emit(.connected(deviceID)) }
+            queue.asyncAfter(deadline: .now() + authenticationTimeout) { [weak self, weak managed] in
+                guard let self, let managed else { return }
+                let timedOut = self.lock.withLock {
+                    self.deferredAnnouncements.removeValue(forKey: objectID) != nil
+                        && self.connections[deviceID] === managed
+                }
+                if timedOut { managed.cancel() }
+            }
+        } else {
+            scheduleAnnouncement(
+                managed: managed,
+                deviceID: deviceID,
+                shouldEmitConnected: shouldEmitConnected,
+                stabilityToken: stabilityToken
+            )
         }
         queue.asyncAfter(deadline: .now() + 10) { [weak self, weak managed] in
             guard let self, let managed else { return }
@@ -668,6 +758,25 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
         }
     }
 
+    private func scheduleAnnouncement(
+        managed: SecurePeerConnection,
+        deviceID: DeviceID,
+        shouldEmitConnected: Bool,
+        stabilityToken: UUID
+    ) {
+        let announcementDelay: TimeInterval = managed.transportKind == .quic ? 0.15 : 0
+        queue.asyncAfter(deadline: .now() + announcementDelay) { [weak self, weak managed] in
+            guard let self, let managed else { return }
+            let isCurrent = self.lock.withLock {
+                self.stabilityTokens[deviceID] == stabilityToken &&
+                    self.connections[deviceID] === managed
+            }
+            guard isCurrent else { return }
+            self.emit(.health(deviceID, .init(health: .healthy, transport: managed.transportKind)))
+            if shouldEmitConnected { self.emit(.connected(deviceID)) }
+        }
+    }
+
     private func remove(
         _ managed: SecurePeerConnection,
         objectID: ObjectIdentifier,
@@ -676,6 +785,7 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
         var removedActive = false
         lock.lock()
         pendingConnections.removeValue(forKey: objectID)
+        deferredAnnouncements.removeValue(forKey: objectID)
         let deviceID = managed.deviceID
         if let deviceID, connections[deviceID] === managed {
             connections.removeValue(forKey: deviceID)

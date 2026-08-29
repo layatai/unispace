@@ -21,6 +21,8 @@
   <a href="#quick-start">Quick start</a>
   ·
   <a href="#networking">Networking</a>
+  ·
+  <a href="Documentation/Protocol/portable-gestures.md">Gesture support</a>
 </p>
 
 <p align="center">
@@ -57,9 +59,16 @@ To join a different workspace later, open **General → Workspace**, choose **Le
 
 ## Control and reconnection
 
-Keyboard input, pointer buttons, dragging, scrolling, modifiers, and shortcuts follow the active device. When a connection is interrupted, UniSpace anchors the controller pointer and drops input rather than applying it to the wrong device. If the peer reconnects within five seconds, the remote session resumes; otherwise control safely returns locally. The emergency shortcut remains active while reconnecting.
+Keyboard input, pointer buttons, dragging, scrolling, modifiers, and shortcuts
+follow the active device. If the focused remote device disconnects, UniSpace
+immediately ends the active session, releases pointer suppression, and returns
+keyboard and pointer focus to the controller. A later reconnect restores device
+availability but never silently reclaims focus; move through the configured edge
+again to start a new session.
 
-File transfers use a separate encrypted TCP content session. A content-session interruption pauses and resumes from receiver-verified offsets without terminating keyboard or pointer control.
+File transfers use a separate encrypted TCP content session. A content-session
+interruption pauses and resumes from receiver-verified offsets without terminating
+keyboard or pointer control.
 
 ## Networking
 
@@ -88,11 +97,22 @@ Allow these ports through any host or tailnet firewall between participating dev
 
 ## Current scope
 
-UniSpace forwards standard pointer movement and buttons, scrolling, keyboard keys, modifiers, and shortcuts. Compatible versions also transfer regular files between macOS and Windows using Finder or File Explorer copy/paste. When both Macs advertise gesture support, UniSpace forwards public macOS trackpad gestures such as pinch, rotate, swipe, and smart magnify. Mixed versions keep normal input working without sending incompatible frames.
+UniSpace forwards standard pointer movement and buttons, scrolling, keyboard keys,
+modifiers, shortcuts, and supported multi-finger trackpad gestures. Mac peers replay
+the original native gesture. Windows peers receive normalized portable gestures for
+pinch zoom, navigation, Mission Control/App Exposé, workspace switching, smart zoom,
+Launchpad, and Show Desktop. See the [gesture interoperability contract](Documentation/Protocol/portable-gestures.md)
+for the exact mappings and compatibility rules. Mixed versions keep normal input
+working without sending incompatible frames.
 
-Directories, macOS packages, symbolic links, reparse points, special files, screen sharing, Windows-to-Mac control, an internet relay, Touch ID or power-button forwarding, login/UAC secure-desktop control, Secure Input bypasses, live cross-device drag continuation, and OS-reserved Mission Control or desktop gestures remain intentionally unsupported.
+Compatible versions also share text and links and transfer regular files between
+macOS and Windows. See [Docs/FileTransfer.md](Docs/FileTransfer.md) for file-transfer
+protocol, staging, recovery, and compatibility details.
 
-See [Docs/FileTransfer.md](Docs/FileTransfer.md) for the protocol, staging, recovery, and compatibility details.
+Directories, macOS packages, symbolic links, reparse points, special files, screen
+sharing, Windows-to-Mac control, an internet relay, Touch ID or power-button forwarding,
+login/UAC secure-desktop control, Secure Input bypasses, and live cross-device drag
+continuation remain intentionally unsupported.
 
 <details>
 <summary><strong>Build and test from source</strong></summary>

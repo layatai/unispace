@@ -35,7 +35,6 @@ public actor ControlSessionCoordinator {
     private let transport: PeerTransport
     private let inputSender: OrderedInputSender
     private let clock: MonotonicClock
-    private let reconnectGrace: Duration
     private var election: ControllerStateMachine
     private var remoteInputState = RemoteInputState()
     private var currentFlags: UInt64 = 0
@@ -55,12 +54,10 @@ public actor ControlSessionCoordinator {
     private var pointerFlushTask: Task<Void, Never>?
     private var heartbeatTask: Task<Void, Never>?
     private var watchdogTask: Task<Void, Never>?
-    private var reconnectGraceTask: Task<Void, Never>?
     private var lastHeartbeatNanos: UInt64 = 0
     private var smoothedHeartbeatIntervalNanos: UInt64?
     private var smoothedRoundTripNanos: UInt64?
     private var activeControlRoute: ActiveControlRoute?
-    private var isConnectionInterrupted = false
 
     public init(
         localDeviceID: DeviceID,
@@ -69,7 +66,6 @@ public actor ControlSessionCoordinator {
         injector: InputInjector,
         transport: PeerTransport,
         clock: MonotonicClock = SystemMonotonicClock(),
-        reconnectGrace: Duration = .seconds(5),
         election: ControllerStateMachine = .init()
     ) {
         self.localDeviceID = localDeviceID
@@ -79,7 +75,6 @@ public actor ControlSessionCoordinator {
         self.transport = transport
         self.inputSender = OrderedInputSender(transport: transport)
         self.clock = clock
-        self.reconnectGrace = reconnectGrace
         self.election = election
     }
 
@@ -165,9 +160,12 @@ public actor ControlSessionCoordinator {
 
     public func handleCaptured(_ event: InputEvent) async -> CapturedInputDisposition {
         guard case .controlling = state else { return .ignored }
-        if case .gesture = event,
-           activeControlRoute?.targetCapabilities.contains(.publicTrackpadGestures) != true {
-            return .forwarded
+        if case .gesture = event {
+            let capabilities = activeControlRoute?.targetCapabilities ?? []
+            guard capabilities.contains(.publicTrackpadGestures)
+                    || capabilities.contains(.portableTrackpadGestures) else {
+                return .forwarded
+            }
         }
         if case let .flags(rawValue) = event {
             currentFlags = rawValue
@@ -176,7 +174,6 @@ public actor ControlSessionCoordinator {
             await endCurrentSession(notifyPeer: true)
             return .emergencyStop
         }
-        guard !isConnectionInterrupted else { return .forwarded }
         if case let .mouseButton(button, isDown, _) = event {
             await flushPendingMotion()
             if isDown { pressedButtons.insert(button) } else { pressedButtons.remove(button) }
@@ -311,47 +308,11 @@ public actor ControlSessionCoordinator {
     public func peerDisconnected(_ deviceID: DeviceID) async {
         switch state {
         case let .controlling(_, target, _) where target == deviceID:
-            await interruptConnection(to: target)
-            startReconnectGrace(target: target)
+            await endCurrentSession(notifyPeer: false)
         case let .receiving(_, source, _) where source == deviceID:
             await endCurrentSession(notifyPeer: false)
         default:
             break
-        }
-    }
-
-    @discardableResult
-    public func peerConnected(_ deviceID: DeviceID) async -> Bool {
-        guard isConnectionInterrupted,
-              let route = activeControlRoute,
-              route.target == deviceID,
-              case let .controlling(epoch, target, _) = state,
-              target == deviceID else { return false }
-
-        reconnectGraceTask?.cancel()
-        reconnectGraceTask = nil
-
-        let sessionID = SessionID()
-        do {
-            try await transport.send(
-                ControlEnvelope(message: .activate(.init(
-                    sessionID: sessionID,
-                    epoch: epoch,
-                    targetDisplayID: route.displayID,
-                    entryEdge: route.entryEdge,
-                    normalizedPosition: route.normalizedPosition
-                ))),
-                to: target
-            )
-            state = .controlling(epoch: epoch, target: target, session: sessionID)
-            sequence = 0
-            resetRealtimeSender(incrementGeneration: true)
-            isConnectionInterrupted = false
-            await sendInput(.flags(rawValue: currentFlags))
-            startHeartbeat(target: target, sessionID: sessionID)
-            return true
-        } catch {
-            return false
         }
     }
 
@@ -384,10 +345,7 @@ public actor ControlSessionCoordinator {
         heartbeatTask = nil
         watchdogTask?.cancel()
         watchdogTask = nil
-        reconnectGraceTask?.cancel()
-        reconnectGraceTask = nil
         activeControlRoute = nil
-        isConnectionInterrupted = false
         currentFlags = 0
         smoothedHeartbeatIntervalNanos = nil
         smoothedRoundTripNanos = nil
@@ -422,19 +380,6 @@ public actor ControlSessionCoordinator {
     private static func isEmergencyStop(_ event: InputEvent, flags: UInt64) -> Bool {
         guard case let .key(code, isDown, _) = event, isDown, code == emergencyKeyCode else { return false }
         return (flags & emergencyFlags) == emergencyFlags
-    }
-
-    private func interruptConnection(to target: DeviceID) async {
-        guard case let .controlling(_, expectedTarget, _) = state,
-              target == expectedTarget else { return }
-        isConnectionInterrupted = true
-        await inputSender.cancelPending()
-        pointerFlushTask?.cancel()
-        pointerFlushTask = nil
-        pendingPointerEvent = nil
-        pendingScrollEvent = nil
-        heartbeatTask?.cancel()
-        heartbeatTask = nil
     }
 
     private func schedulePointerFlush() {
@@ -553,21 +498,6 @@ public actor ControlSessionCoordinator {
         return (previous &* 7 &+ sample) / 8
     }
 
-    private func startReconnectGrace(target: DeviceID) {
-        reconnectGraceTask?.cancel()
-        reconnectGraceTask = Task { [weak self, reconnectGrace, clock] in
-            try? await clock.sleep(for: reconnectGrace)
-            guard !Task.isCancelled, let self else { return }
-            await self.finishInterruptedSession(target: target)
-        }
-    }
-
-    private func finishInterruptedSession(target: DeviceID) async {
-        guard isConnectionInterrupted,
-              case let .controlling(_, expectedTarget, _) = state,
-              expectedTarget == target else { return }
-        await endCurrentSession(notifyPeer: false)
-    }
 }
 
 /// Preserves reliable input ordering without letting a slow network send block

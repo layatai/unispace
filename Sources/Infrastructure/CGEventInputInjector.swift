@@ -87,7 +87,7 @@ public final class CGEventInputInjector: InputInjector, @unchecked Sendable {
                 wheel3: 0
             ) else { return }
             post(cgEvent)
-        case let .gesture(serializedEvent):
+        case let .gesture(serializedEvent, _):
             guard let cgEvent = Self.gestureEvent(from: serializedEvent, at: cursorPosition) else { return }
             post(cgEvent)
         case let .key(code, isDown, _):

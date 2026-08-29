@@ -44,7 +44,6 @@ final class AppModel: ObservableObject {
     private var lastBoundaryTime: UInt64 = 0
     private var controlTransferGuard = ControlTransferGuard()
     private var pendingActivationEvents: [InputEvent]?
-    private var reconnectStatusTasks: [DeviceID: Task<Void, Never>] = [:]
 
     let localDeviceID: DeviceID
 
@@ -60,6 +59,11 @@ final class AppModel: ObservableObject {
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.refreshLocalDisplays() }
         if ProcessInfo.processInfo.arguments.contains("--ui-testing-onboarding") {
+            return
+        }
+        if ProcessInfo.processInfo.arguments.contains("--ui-testing-hosting") {
+            setupState = .hostingPairing
+            statusMessage = "Visible to nearby devices"
             return
         }
         if ProcessInfo.processInfo.arguments.contains("--ui-testing-configured") {
@@ -87,7 +91,6 @@ final class AppModel: ObservableObject {
 
     deinit {
         networkTask?.cancel()
-        reconnectStatusTasks.values.forEach { $0.cancel() }
     }
 
     var localDevice: DeviceDescriptor {
@@ -98,6 +101,7 @@ final class AppModel: ObservableObject {
             peerAddresses: tailnetAddressProvider.currentAddresses(),
             capabilities: [
                 .publicTrackpadGestures,
+                .portableTrackpadGestures,
                 .crossPlatformInputV2,
                 .quicStreamV2,
                 .udpPointerV2,
@@ -467,7 +471,7 @@ final class AppModel: ObservableObject {
         var current = localDevice
         var updated = snapshot
         if let index = updated.devices.firstIndex(where: { $0.id == localDeviceID }) {
-            current.peerAddresses = Self.mergedAddresses(
+            current.peerAddresses = WorkspaceReplicaMerger.mergeAddresses(
                 updated.devices[index].peerAddresses,
                 current.peerAddresses
             )
@@ -514,9 +518,9 @@ final class AppModel: ObservableObject {
                     y: y,
                     localDeviceID: localDeviceID,
                     devices: workspace.devices,
-                    topology: workspace.topology
+                    topology: workspace.topology,
+                    availableDeviceIDs: connectedDevices
                ), controlTransferGuard.allows(transition),
-               connectedDevices.contains(transition.targetDeviceID),
                let sourceDisplay = workspace.devices.flatMap(\.displays).first(where: {
                    $0.id == transition.sourceDisplayID
                }),
@@ -623,16 +627,12 @@ final class AppModel: ObservableObject {
         case .lost:
             break
         case let .connected(deviceID):
-            reconnectStatusTasks.removeValue(forKey: deviceID)?.cancel()
             connectedDevices.insert(deviceID)
             if let workspace {
                 try? await transport.send(ControlEnvelope(message: .workspace(workspace)), to: deviceID)
             }
             if let currentEpoch {
                 try? await transport.send(ControlEnvelope(message: .controllerClaim(currentEpoch)), to: deviceID)
-            }
-            if await coordinator?.peerConnected(deviceID) == true {
-                statusMessage = "Controlling \(deviceName(deviceID))"
             }
         case let .disconnected(deviceID):
             connectedDevices.remove(deviceID)
@@ -646,22 +646,9 @@ final class AppModel: ObservableObject {
             if case let .receiving(_, source, _)? = previousState, source == deviceID {
                 controlTransferGuard.reset()
             } else if case let .controlling(_, target, _)? = previousState, target == deviceID {
-                statusMessage = "Reconnecting to \(deviceName(deviceID)) — use Control-Option-Command-Escape to return"
-                reconnectStatusTasks[deviceID]?.cancel()
-                reconnectStatusTasks[deviceID] = Task { @MainActor [weak self] in
-                    try? await Task.sleep(for: .seconds(5))
-                    guard !Task.isCancelled, let self,
-                          !self.connectedDevices.contains(deviceID),
-                          case .idle = await self.coordinator?.currentState() else { return }
-                    self.controlTransferGuard.beginStop()
-                    self.controlTransferGuard.completeStop()
-                    self.statusMessage = "Connection lost — control returned to this Mac"
-                    self.connectionSnapshots[deviceID] = .init(
-                        health: .disconnected,
-                        transport: disconnectedTransport
-                    )
-                    self.reconnectStatusTasks.removeValue(forKey: deviceID)
-                }
+                controlTransferGuard.beginStop()
+                controlTransferGuard.completeStop()
+                statusMessage = "Connection lost — control returned to this Mac"
             }
         case let .control(source, envelope):
             await handleControl(envelope.message, from: source)
@@ -685,22 +672,11 @@ final class AppModel: ObservableObject {
         case let .hello(device):
             upsert(device, capabilitiesAreAuthoritative: true)
         case let .workspace(incoming):
-            guard var workspace, incoming.id == workspace.id else { return }
-            workspace.devices = incoming.devices.map { incomingDevice in
-                guard let current = workspace.devices.first(where: { $0.id == incomingDevice.id }) else {
-                    return incomingDevice
-                }
-                return Self.merging(
-                    current,
-                    with: incomingDevice,
-                    capabilitiesAreAuthoritative: false
-                )
-            }
-            workspace.topology = incoming.topology
-            workspace.generation = max(workspace.generation, incoming.generation)
+            guard let currentWorkspace = workspace,
+                  var workspace = WorkspaceReplicaMerger.mergeSnapshot(currentWorkspace, with: incoming) else { return }
             var current = localDevice
             if let persistedLocal = workspace.devices.first(where: { $0.id == localDeviceID }) {
-                current.peerAddresses = Self.mergedAddresses(
+                current.peerAddresses = WorkspaceReplicaMerger.mergeAddresses(
                     persistedLocal.peerAddresses,
                     current.peerAddresses
                 )
@@ -792,7 +768,13 @@ final class AppModel: ObservableObject {
               case let .controlling(_, activeTarget, activeSession) = await coordinator.currentState(),
               activeTarget == source, activeSession == sessionID,
               let workspace,
-              let destination = workspace.topology.destination(from: displayID, edge: edge),
+              let destination = EdgeRouter.reachableDestination(
+                  from: displayID,
+                  edge: edge,
+                  devices: workspace.devices,
+                  topology: workspace.topology,
+                  availableDeviceIDs: connectedDevices.union([localDeviceID])
+              ),
               let targetDisplay = workspace.devices.flatMap(\.displays).first(where: { $0.id == destination.displayID }) else { return }
         await coordinator.deactivateCurrentSession()
         if targetDisplay.deviceID == localDeviceID {
@@ -817,7 +799,7 @@ final class AppModel: ObservableObject {
     ) {
         guard var workspace else { return }
         if let index = workspace.devices.firstIndex(where: { $0.id == device.id }) {
-            workspace.updateDevice(Self.merging(
+            workspace.updateDevice(WorkspaceReplicaMerger.mergeDevice(
                 workspace.devices[index],
                 with: device,
                 capabilitiesAreAuthoritative: capabilitiesAreAuthoritative
@@ -855,29 +837,13 @@ final class AppModel: ObservableObject {
     private func refreshLocalDisplays() {
         guard var workspace, let index = workspace.devices.firstIndex(where: { $0.id == localDeviceID }) else { return }
         var current = localDevice
-        current.peerAddresses = Self.mergedAddresses(
+        current.peerAddresses = WorkspaceReplicaMerger.mergeAddresses(
             workspace.devices[index].peerAddresses,
             current.peerAddresses
         )
         guard workspace.devices[index] != current else { return }
         workspace.updateDevice(current)
         persistAndBroadcast(workspace)
-    }
-
-    private static func merging(
-        _ current: DeviceDescriptor,
-        with incoming: DeviceDescriptor,
-        capabilitiesAreAuthoritative: Bool
-    ) -> DeviceDescriptor {
-        var merged = incoming
-        if merged.displays.isEmpty { merged.displays = current.displays }
-        merged.peerAddresses = mergedAddresses(current.peerAddresses, incoming.peerAddresses)
-        if !capabilitiesAreAuthoritative { merged.capabilities = current.capabilities }
-        return merged
-    }
-
-    private static func mergedAddresses(_ first: [PeerAddress], _ second: [PeerAddress]) -> [PeerAddress] {
-        Array(Set(first + second)).sorted { $0.host < $1.host }
     }
 
     private static func loadDeviceID() -> DeviceID {

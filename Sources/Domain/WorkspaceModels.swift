@@ -134,6 +134,7 @@ public struct DeviceCapability: RawRepresentable, Codable, Hashable, Sendable {
     private enum LegacyCodingKeys: String, CodingKey { case rawValue }
 
     public static let publicTrackpadGestures = Self(rawValue: "public-trackpad-gestures-v1")
+    public static let portableTrackpadGestures = Self(rawValue: "portable-trackpad-gestures-v1")
     public static let crossPlatformInputV2 = Self(rawValue: "cross-platform-input-v2")
     public static let quicStreamV2 = Self(rawValue: "quic-stream-v2")
     public static let udpPointerV2 = Self(rawValue: "udp-pointer-v2")
