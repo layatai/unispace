@@ -284,6 +284,47 @@ final class ProtocolCoverageTests: XCTestCase {
         )
         XCTAssertNil(PortableInputMapper.map(.key(code: .max, isDown: true, isRepeat: false)))
         XCTAssertNil(PortableInputMapper.map(.gesture(serializedEvent: Data([1]))))
+        XCTAssertEqual(
+            PortableInputMapper.map(.pointerMove(
+                deltaX: 1,
+                deltaY: -2,
+                absoluteX: 30,
+                absoluteY: 40
+            )),
+            .pointerMove(deltaX: 1, deltaY: -2, absoluteX: 30, absoluteY: 40)
+        )
+        XCTAssertEqual(
+            PortableInputMapper.map(.mouseButton(button: .right, isDown: true, clickCount: .max)),
+            .mouseButton(button: .right, isDown: true, clickCount: .max)
+        )
+        XCTAssertEqual(
+            PortableInputMapper.map(.scroll(deltaX: 3, deltaY: 4, isContinuous: true)),
+            .scroll(deltaX: 3, deltaY: 4, isContinuous: true)
+        )
+        XCTAssertEqual(
+            PortableInputMapper.modifierMask(rawFlags: 0x0080_0000),
+            [.function]
+        )
+
+        let realtime = RealtimePointerFrame(
+            workspaceID: input.workspaceID,
+            sessionID: input.sessionID,
+            controllerID: input.controllerID,
+            epoch: input.epoch,
+            generation: 2,
+            sequence: 3,
+            deltaX: 4,
+            deltaY: 5,
+            cumulativeDeltaX: 6,
+            cumulativeDeltaY: 7,
+            absoluteX: 8,
+            absoluteY: 9,
+            timestampNanos: 10
+        )
+        let portableRealtime = PortableInputMapper.map(realtime)
+        XCTAssertEqual(portableRealtime.generation, 2)
+        XCTAssertEqual(portableRealtime.cumulativeDeltaX, 6)
+        XCTAssertEqual(portableRealtime.absoluteY, 9)
     }
 
     func testCodecRejectsEveryInvalidHeaderAndProtocolVersion() throws {

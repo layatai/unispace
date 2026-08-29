@@ -151,4 +151,78 @@ final class ClipboardProtocolTests: XCTestCase {
             ClipboardPayload.canonicalContentData(for: [url])
         )
     }
+
+    func testClipboardProtocolCoversPortableLimitsAccessorsAndDescriptions() throws {
+        let firstID = ClipboardPayloadID(
+            rawValue: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
+        )
+        let secondID = ClipboardPayloadID(
+            rawValue: UUID(uuidString: "00000000-0000-0000-0000-000000000002")!
+        )
+        XCTAssertLessThan(firstID, secondID)
+
+        let descriptions: [(ClipboardProtocolError, String)] = [
+            (.unsupportedVersion(2), "Unsupported clipboard protocol version 2."),
+            (.emptyPayload, "The clipboard does not contain supported text or link data."),
+            (.tooManyRepresentations(3), "The clipboard contains too many representations."),
+            (.duplicateRepresentation(.plainText), "The clipboard contains duplicate representations."),
+            (.invalidRepresentation(.plainText), "The clipboard contains an invalid representation."),
+            (.representationTooLarge(.plainText), "The clipboard content exceeds the configured size limit."),
+            (.payloadTooLarge(9), "The clipboard content exceeds the configured size limit."),
+            (.invalidRevision, "The clipboard update has an invalid revision."),
+            (.invalidDigest, "The clipboard update failed its integrity check."),
+            (.originMismatch, "The clipboard update came from an unexpected device."),
+            (.peerMismatch, "The clipboard update came from an unexpected device."),
+            (.workspaceMismatch, "The clipboard update belongs to a different workspace."),
+            (.malformedEnvelope, "The clipboard update is malformed."),
+        ]
+        for (error, description) in descriptions {
+            XCTAssertEqual(error.errorDescription, description)
+        }
+
+        XCTAssertThrowsError(try ClipboardRepresentation(
+            kind: .plainText,
+            value: "bad\u{0000}value"
+        ).validated())
+
+        let origin = DeviceID()
+        let text = ClipboardRepresentation(kind: .plainText, value: "text")
+        let url = ClipboardRepresentation(kind: .url, value: "https://example.com")
+        let payload = ClipboardPayload(
+            payloadID: firstID,
+            originDeviceID: origin,
+            revision: 1,
+            contentHash: Data(repeating: 1, count: 32),
+            representations: [text, url]
+        )
+        XCTAssertEqual(payload.plainText, "text")
+        XCTAssertEqual(payload.url, "https://example.com")
+
+        let tightLimits = ClipboardLimits(
+            maximumRepresentations: 1,
+            maximumRepresentationBytes: 10,
+            maximumPayloadBytes: 3,
+            recentPayloadCapacity: 1,
+            recentPayloadLifetime: 1
+        )
+        XCTAssertThrowsError(try payload.validated(limits: tightLimits))
+        let tooLarge = ClipboardPayload(
+            originDeviceID: origin,
+            revision: 1,
+            contentHash: Data(repeating: 1, count: 32),
+            representations: [text]
+        )
+        XCTAssertThrowsError(try tooLarge.validated(limits: tightLimits))
+
+        let future = ClipboardEnvelope(
+            version: 2,
+            workspaceID: WorkspaceID(),
+            senderDeviceID: origin,
+            payload: payload
+        )
+        XCTAssertThrowsError(try future.validated(
+            workspaceID: future.workspaceID,
+            senderDeviceID: origin
+        ))
+    }
 }

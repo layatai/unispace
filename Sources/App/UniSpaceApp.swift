@@ -3,6 +3,7 @@ import SwiftUI
 
 @main
 struct UniSpaceApp: App {
+    @NSApplicationDelegateAdaptor(UniSpaceApplicationDelegate.self) private var appDelegate
     @StateObject private var model = AppModel()
     @StateObject private var transferModel = FileTransferViewModel()
     @StateObject private var clipboardModel = ClipboardViewModel()
@@ -130,6 +131,35 @@ struct UniSpaceApp: App {
 }
 
 @MainActor
+private final class UniSpaceApplicationDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        let center = NotificationCenter.default
+        center.addObserver(
+            self,
+            selector: #selector(windowVisibilityDidChange),
+            name: NSWindow.willCloseNotification,
+            object: nil
+        )
+        center.addObserver(
+            self,
+            selector: #selector(windowVisibilityDidChange),
+            name: NSWindow.didMiniaturizeNotification,
+            object: nil
+        )
+        center.addObserver(
+            self,
+            selector: #selector(windowVisibilityDidChange),
+            name: NSWindow.didChangeOcclusionStateNotification,
+            object: nil
+        )
+    }
+
+    @objc private func windowVisibilityDidChange(_ notification: Notification) {
+        DockIconVisibility.hideWhenNoVisibleWindows()
+    }
+}
+
+@MainActor
 private enum DockIconVisibility {
     static func show() {
         NSApplication.shared.setActivationPolicy(.regular)
@@ -138,7 +168,10 @@ private enum DockIconVisibility {
     static func hideWhenNoVisibleWindows() {
         DispatchQueue.main.async {
             let hasVisibleWindow = NSApplication.shared.windows.contains {
-                $0.isVisible && !$0.isMiniaturized
+                $0.isVisible
+                    && !$0.isMiniaturized
+                    && $0.styleMask.contains(.titled)
+                    && $0.level == .normal
             }
             if !hasVisibleWindow {
                 NSApplication.shared.setActivationPolicy(.accessory)

@@ -44,7 +44,7 @@ public actor PersistentSystemFileSourceProvider: FileSourceProvider {
                 .appendingPathComponent("Transfers", isDirectory: true)
                 .appendingPathComponent("Outgoing", isDirectory: true)
         }
-        base = SystemFileSourceProvider(rootURL: self.rootURL, fileManager: fileManager)
+        base = SystemFileSourceProvider(rootURL: self.rootURL, fileManager: FileManager())
     }
 
     public func prepare(
@@ -162,19 +162,16 @@ public actor PersistentSystemFileSourceProvider: FileSourceProvider {
         }
         let access = entry.url.startAccessingSecurityScopedResource()
         defer { if access { entry.url.stopAccessingSecurityScopedResource() } }
-        let values = try entry.url.resourceValues(forKeys: [
-            .isRegularFileKey,
-            .isSymbolicLinkKey,
-            .fileSizeKey,
-            .contentModificationDateKey
-        ])
-        guard values.isRegularFile == true, values.isSymbolicLink != true else {
+        let attributes = try fileManager.attributesOfItem(atPath: entry.url.path)
+        let fileType = attributes[.type] as? FileAttributeType
+        if fileType == .typeSymbolicLink { throw FileSourceError.symbolicLink }
+        guard fileType == .typeRegular else {
             throw FileSourceError.notRegularFile
         }
-        guard let size = values.fileSize,
-              size >= 0,
-              UInt64(size) == entry.byteCount,
-              datesEqual(values.contentModificationDate, entry.modificationDate) else {
+        guard let size = attributes[.size] as? NSNumber,
+              size.int64Value >= 0,
+              size.uint64Value == entry.byteCount,
+              datesEqual(attributes[.modificationDate] as? Date, entry.modificationDate) else {
             throw FileSourceError.sourceChanged
         }
     }

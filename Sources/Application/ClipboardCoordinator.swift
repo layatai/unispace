@@ -128,16 +128,15 @@ public actor ClipboardCoordinator {
               let workspace,
               let destination = automaticDestination,
               connectedPeers.contains(destination),
-              var engine else { return }
+              let engine else { return }
 
         do {
-            guard let payload = try engine.makeLocalPayload(
+            var candidateEngine = engine
+            guard let payload = try candidateEngine.makeLocalPayload(
                 representations: observation.representations
             ) else {
-                self.engine = engine
                 return
             }
-            self.engine = engine
             try await transport.send(
                 ClipboardEnvelope(
                     workspaceID: workspace.id,
@@ -146,6 +145,7 @@ public actor ClipboardCoordinator {
                 ),
                 to: destination
             )
+            self.engine = candidateEngine
         } catch {
             // Clipboard contents and representation values are never logged.
         }

@@ -22,7 +22,20 @@ final class FileTransferProtocolTests: XCTestCase {
             "../secret",
             "folder/file",
             "folder\\file",
-            "bad\u{0000}name"
+            "bad\u{0000}name",
+            "bad:name",
+            "bad?name",
+            "bad*name",
+            "bad\"name",
+            "bad<name",
+            "bad>name",
+            "bad|name",
+            "trailing.",
+            "trailing ",
+            "CON.txt",
+            "nul",
+            "COM1.log",
+            "LPT9",
         ]
         for name in unsafeNames {
             XCTAssertThrowsError(try makeManifest(entries: [
@@ -185,6 +198,38 @@ final class FileTransferProtocolTests: XCTestCase {
         for message in messages {
             let data = try JSONEncoder().encode(message)
             XCTAssertEqual(try JSONDecoder().decode(FileTransferMessage.self, from: data), message)
+        }
+    }
+
+    func testProtocolIdentifiersAndErrorsExposeStableDiagnosticValues() {
+        let first = TransferEntryID(
+            rawValue: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
+        )
+        let second = TransferEntryID(
+            rawValue: UUID(uuidString: "00000000-0000-0000-0000-000000000002")!
+        )
+        XCTAssertLessThan(first, second)
+
+        let descriptions: [(FileTransferProtocolError, String)] = [
+            (.unsupportedVersion(2), "Unsupported file-transfer protocol version 2."),
+            (.emptyManifest, "The transfer does not contain any files."),
+            (.tooManyEntries(2), "The transfer contains too many files."),
+            (.transferTooLarge(2), "The transfer exceeds the configured size limit."),
+            (.invalidFilename("x"), "A file has an invalid name."),
+            (.duplicateEntry(first), "The transfer contains duplicate files."),
+            (.duplicateFilename("x"), "The transfer contains duplicate files."),
+            (.invalidDigest(first), "A file has an invalid integrity digest."),
+            (.invalidFileSize(first), "A file has an invalid size."),
+            (.invalidChunkSize(0), "A transfer chunk has an invalid size."),
+            (.invalidOffset(entryID: first, offset: 1), "A transfer chunk has an invalid offset."),
+            (.chunkExceedsEntry(entryID: first), "A transfer chunk has an invalid offset."),
+            (.unknownEntry(first), "A transfer references an unknown file."),
+            (.workspaceMismatch, "The transfer does not belong to this trusted workspace or peer."),
+            (.peerMismatch, "The transfer does not belong to this trusted workspace or peer."),
+            (.malformedEnvelope, "The transfer message is malformed."),
+        ]
+        for (error, description) in descriptions {
+            XCTAssertEqual(error.errorDescription, description)
         }
     }
 

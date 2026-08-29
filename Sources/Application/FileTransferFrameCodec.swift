@@ -279,6 +279,6 @@ private extension Data {
 
     mutating func appendUUID(_ value: UUID) {
         var uuid = value.uuid
-        withUnsafeBytes(of: &uuid) { append(contentsOf: $0) }
+        Swift.withUnsafeBytes(of: &uuid) { append(contentsOf: $0) }
     }
 }

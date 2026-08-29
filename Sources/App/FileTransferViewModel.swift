@@ -19,7 +19,7 @@ final class FileTransferViewModel: ObservableObject {
     private var records: [TransferID: FileTransferSnapshot] = [:]
     private var bindingTask: Task<Void, Never>?
     private var eventTask: Task<Void, Never>?
-    private var configuredWorkspaceID: WorkspaceID?
+    private var configuredWorkspace: ContinuityWorkspaceConfiguration?
 
     init(
         trustStore: KeychainTrustStore = KeychainTrustStore(),
@@ -90,7 +90,7 @@ final class FileTransferViewModel: ObservableObject {
     func stop() {
         bindingTask?.cancel()
         bindingTask = nil
-        configuredWorkspaceID = nil
+        configuredWorkspace = nil
         candidateDevices = []
         knownDevices = []
         connectedDeviceIDs = []
@@ -232,35 +232,37 @@ final class FileTransferViewModel: ObservableObject {
         await coordinator.setAutomaticDestination(selectedDestinationID ?? appModel.continuityTargetID)
 
         guard let workspace = appModel.workspace else {
-            if configuredWorkspaceID != nil {
-                configuredWorkspaceID = nil
+            if configuredWorkspace != nil {
+                configuredWorkspace = nil
                 records.removeAll()
                 transfers = []
                 await coordinator.stop()
             }
             return
         }
-        guard configuredWorkspaceID != workspace.id else { return }
-
         do {
             guard let key = try trustStore.workspaceKey(for: workspace.id) else {
                 throw FileTransferFailureCode.permissionFailure
             }
-            var local = appModel.localDevice
-            local.capabilities.insert(.fileTransferV1)
-            var transferWorkspace = workspace
-            transferWorkspace.updateDevice(local)
-            try await coordinator.start(
-                localDevice: local,
-                workspace: transferWorkspace,
-                key: key
+            let configuration = ContinuityWorkspaceConfiguration(
+                workspace: workspace,
+                localDevice: appModel.localDevice,
+                key: key,
+                capabilities: [.fileTransferV1]
             )
-            configuredWorkspaceID = workspace.id
+            guard configuration != configuredWorkspace else { return }
+            try await coordinator.start(
+                localDevice: configuration.localDevice,
+                workspace: configuration.workspace,
+                key: configuration.key
+            )
+            configuredWorkspace = configuration
             let recovered = await coordinator.snapshots()
             records = Dictionary(uniqueKeysWithValues: recovered.map { ($0.id, $0) })
             sortTransfers()
         } catch {
-            configuredWorkspaceID = nil
+            configuredWorkspace = nil
+            await coordinator.stop()
             lastError = userMessage(for: error)
         }
     }

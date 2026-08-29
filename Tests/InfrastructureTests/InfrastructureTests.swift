@@ -191,6 +191,8 @@ final class InfrastructureTests: XCTestCase {
                 NetworkPeerTransport.serviceType,
                 NetworkPeerTransport.quicServiceType,
                 QUICRealtimeTransport.serviceType,
+                NetworkFileTransferTransport.serviceType,
+                NetworkClipboardTransport.serviceType,
                 PairingNetworkService.serviceType
             ]
         )

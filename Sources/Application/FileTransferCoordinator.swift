@@ -53,6 +53,7 @@ public actor FileTransferCoordinator {
     private var connectedPeers = Set<DeviceID>()
     private var automaticDestination: DeviceID?
     private var transferTasks: [TransferID: Task<Void, Never>] = [:]
+    private var transferTaskTokens: [TransferID: UUID] = [:]
     private var transportTask: Task<Void, Never>?
     private var pasteboardTask: Task<Void, Never>?
     private var lastPasteboardChangeCount: Int?
@@ -131,6 +132,7 @@ public actor FileTransferCoordinator {
         pasteboardTask = nil
         transferTasks.values.forEach { $0.cancel() }
         transferTasks.removeAll()
+        transferTaskTokens.removeAll()
         connectedPeers.removeAll()
         automaticDestination = nil
         await transport.stop()
@@ -200,7 +202,7 @@ public actor FileTransferCoordinator {
 
     public func cancel(_ transferID: TransferID) async {
         guard var record = records[transferID], !record.state.isTerminal else { return }
-        transferTasks.removeValue(forKey: transferID)?.cancel()
+        cancelTransferTask(transferID)
         try? await send(
             .cancellation(TransferCancellation(transferID: transferID)),
             to: record.peerDeviceID
@@ -250,7 +252,7 @@ public actor FileTransferCoordinator {
 
     public func remove(_ transferID: TransferID) async {
         guard let record = records[transferID], record.state.isTerminal else { return }
-        transferTasks.removeValue(forKey: transferID)?.cancel()
+        cancelTransferTask(transferID)
         if record.direction == .incoming {
             await store.remove(transferID)
         } else {
@@ -561,7 +563,7 @@ public actor FileTransferCoordinator {
         guard var record = records[verification.transferID],
               record.direction == .outgoing,
               record.peerDeviceID == peer else { return }
-        transferTasks.removeValue(forKey: verification.transferID)?.cancel()
+        cancelTransferTask(verification.transferID)
         if verification.accepted {
             record.state = .completed
             record.failureCode = nil
@@ -580,7 +582,7 @@ public actor FileTransferCoordinator {
 
     private func receiveCancellation(_ cancellation: TransferCancellation, from peer: DeviceID) async {
         guard var record = records[cancellation.transferID], record.peerDeviceID == peer else { return }
-        transferTasks.removeValue(forKey: cancellation.transferID)?.cancel()
+        cancelTransferTask(cancellation.transferID)
         if record.direction == .incoming {
             await store.cancel(cancellation.transferID)
         } else {
@@ -630,17 +632,20 @@ public actor FileTransferCoordinator {
         _ transferID: TransferID,
         offsets: [TransferEntryID: UInt64]
     ) {
-        transferTasks.removeValue(forKey: transferID)?.cancel()
+        cancelTransferTask(transferID)
+        let token = UUID()
+        transferTaskTokens[transferID] = token
         transferTasks[transferID] = Task { [weak self] in
-            await self?.streamOutgoingTransfer(transferID, offsets: offsets)
+            await self?.streamOutgoingTransfer(transferID, offsets: offsets, taskToken: token)
         }
     }
 
     private func streamOutgoingTransfer(
         _ transferID: TransferID,
-        offsets initialOffsets: [TransferEntryID: UInt64]
+        offsets initialOffsets: [TransferEntryID: UInt64],
+        taskToken: UUID
     ) async {
-        defer { transferTasks.removeValue(forKey: transferID) }
+        defer { finishTransferTask(transferID, token: taskToken) }
         guard let record = records[transferID], record.direction == .outgoing else { return }
         var offsets = initialOffsets
         do {
@@ -727,7 +732,7 @@ public actor FileTransferCoordinator {
 
     private func pauseTransfers(with peer: DeviceID) {
         for record in records.values where record.peerDeviceID == peer && !record.state.isTerminal {
-            transferTasks.removeValue(forKey: record.manifest.transferID)?.cancel()
+            cancelTransferTask(record.manifest.transferID)
             if record.state == .transferring || record.state == .verifying || record.state == .preparing {
                 setState(.paused, for: record.manifest.transferID, enforceTransition: false)
             }
@@ -823,7 +828,7 @@ public actor FileTransferCoordinator {
 
     private func setFailure(_ code: FileTransferFailureCode, for transferID: TransferID) {
         guard var record = records[transferID], !record.state.isTerminal else { return }
-        transferTasks.removeValue(forKey: transferID)?.cancel()
+        cancelTransferTask(transferID)
         record.state = .failed
         record.failureCode = code
         record.completedAt = Date()
@@ -834,6 +839,17 @@ public actor FileTransferCoordinator {
     private func emit(_ transferID: TransferID) {
         guard let snapshot = records[transferID]?.snapshot else { return }
         continuation.yield(.snapshot(snapshot))
+    }
+
+    private func cancelTransferTask(_ transferID: TransferID) {
+        transferTaskTokens.removeValue(forKey: transferID)
+        transferTasks.removeValue(forKey: transferID)?.cancel()
+    }
+
+    private func finishTransferTask(_ transferID: TransferID, token: UUID) {
+        guard transferTaskTokens[transferID] == token else { return }
+        transferTaskTokens.removeValue(forKey: transferID)
+        transferTasks.removeValue(forKey: transferID)
     }
 
     private func hasActiveTransfer(

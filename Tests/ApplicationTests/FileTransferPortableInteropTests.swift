@@ -67,6 +67,108 @@ final class FileTransferPortableInteropTests: XCTestCase {
         badLength[FileTransferFrameCodec.headerSize - 1] &+= 1
         XCTAssertThrowsError(try FileTransferFrameCodec.decode(badLength))
     }
+
+    func testPortableCodecRoundTripsEveryMetadataMessageAndRejectsMalformedPayloads() throws {
+        let entry = TransferManifestEntry(
+            id: entryID,
+            filename: "file.txt",
+            byteCount: 4,
+            sha256: Data(repeating: 1, count: 32)
+        )
+        let manifest = TransferManifest(
+            transferID: transferID,
+            workspaceID: workspaceID,
+            sourceDeviceID: senderID,
+            destinationDeviceID: DeviceID(),
+            entries: [entry],
+            createdAt: Date(timeIntervalSince1970: 10)
+        )
+        let messages: [FileTransferMessage] = [
+            .offer(TransferOffer(manifest: manifest)),
+            .request(TransferRequest(
+                transferID: transferID,
+                offsets: [TransferEntryOffset(entryID: entryID, offset: 1)]
+            )),
+            .acknowledgement(TransferAcknowledgement(
+                transferID: transferID,
+                entryID: entryID,
+                verifiedOffset: 2
+            )),
+            .entryComplete(TransferEntryCompletion(transferID: transferID, entryID: entryID)),
+            .transferComplete(TransferCompletion(transferID: transferID)),
+            .verification(TransferVerification(transferID: transferID, accepted: true)),
+            .resumeState(TransferResumeState(
+                transferID: transferID,
+                offsets: [TransferEntryOffset(entryID: entryID, offset: 3)],
+                completed: false
+            )),
+            .failure(TransferFailure(transferID: transferID, code: .sourceChanged)),
+        ]
+        for message in messages {
+            let envelope = FileTransferEnvelope(
+                workspaceID: workspaceID,
+                senderDeviceID: senderID,
+                message: message
+            )
+            XCTAssertEqual(try FileTransferFrameCodec.decode(
+                FileTransferFrameCodec.encode(envelope)
+            ), envelope)
+        }
+
+        let future = FileTransferEnvelope(
+            version: 2,
+            workspaceID: workspaceID,
+            senderDeviceID: senderID,
+            message: .resumeQuery(TransferResumeQuery(transferID: transferID))
+        )
+        XCTAssertThrowsError(try FileTransferFrameCodec.encode(future))
+
+        var unsupportedVersion = try FileTransferFrameCodec.encode(FileTransferEnvelope(
+            workspaceID: workspaceID,
+            senderDeviceID: senderID,
+            message: .resumeQuery(TransferResumeQuery(transferID: transferID))
+        ))
+        unsupportedVersion[0] = 0
+        unsupportedVersion[1] = 2
+        XCTAssertThrowsError(try FileTransferFrameCodec.decode(unsupportedVersion))
+
+        var malformedJSON = try FileTransferFrameCodec.encode(FileTransferEnvelope(
+            workspaceID: workspaceID,
+            senderDeviceID: senderID,
+            message: .failure(TransferFailure(transferID: transferID, code: .unknown))
+        ))
+        malformedJSON.replaceSubrange(
+            FileTransferFrameCodec.headerSize..<malformedJSON.count,
+            with: Data(repeating: 0, count: malformedJSON.count - FileTransferFrameCodec.headerSize)
+        )
+        XCTAssertThrowsError(try FileTransferFrameCodec.decode(malformedJSON))
+
+        let oversizedChunk = FileTransferEnvelope(
+            workspaceID: workspaceID,
+            senderDeviceID: senderID,
+            message: .chunk(TransferChunk(
+                transferID: transferID,
+                entryID: entryID,
+                offset: 0,
+                data: Data(repeating: 0, count: FileTransferLimits.default.maximumChunkSize + 1)
+            ))
+        )
+        XCTAssertThrowsError(try FileTransferFrameCodec.encode(oversizedChunk))
+
+        var emptyChunk = try FileTransferFrameCodec.encode(FileTransferEnvelope(
+            workspaceID: workspaceID,
+            senderDeviceID: senderID,
+            message: .chunk(TransferChunk(
+                transferID: transferID,
+                entryID: entryID,
+                offset: 0,
+                data: Data([1])
+            ))
+        ))
+        let countOffset = FileTransferFrameCodec.headerSize + 16 + 16 + 8
+        emptyChunk[countOffset..<(countOffset + 4)] = Data(repeating: 0, count: 4)
+        XCTAssertThrowsError(try FileTransferFrameCodec.decode(emptyChunk))
+    }
 }
 
 private extension Data {

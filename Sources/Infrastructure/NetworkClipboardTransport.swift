@@ -34,6 +34,7 @@ public final class NetworkClipboardTransport: ClipboardTransport, @unchecked Sen
     private var knownPeers: [DeviceID: DeviceDescriptor] = [:]
     private var listener: NWListener?
     private var browser: NWBrowser?
+    private var readyPort: NWEndpoint.Port?
     private var connections: [DeviceID: SecureClipboardConnection] = [:]
     private var pendingConnections: [ObjectIdentifier: SecureClipboardConnection] = [:]
     private var retryAttempts: [DeviceID: Int] = [:]
@@ -56,6 +57,10 @@ public final class NetworkClipboardTransport: ClipboardTransport, @unchecked Sen
     deinit { continuation.finish() }
 
     public func events() -> AsyncStream<ClipboardTransportEvent> { stream }
+
+    public var activePort: NWEndpoint.Port? {
+        lock.clipboardWithLock { readyPort }
+    }
 
     public func start(
         localDevice: DeviceDescriptor,
@@ -92,8 +97,8 @@ public final class NetworkClipboardTransport: ClipboardTransport, @unchecked Sen
                 ])
             )
         }
-        listener.stateUpdateHandler = { [weak self] state in
-            if case .failed = state { self?.emit(.failure(nil)) }
+        listener.stateUpdateHandler = { [weak self, weak listener] state in
+            self?.handleListenerState(state, listener: listener)
         }
         listener.newConnectionHandler = { [weak self] connection in
             self?.accept(connection)
@@ -151,6 +156,7 @@ public final class NetworkClipboardTransport: ClipboardTransport, @unchecked Sen
             )
             listener = nil
             browser = nil
+            readyPort = nil
             connections.removeAll()
             pendingConnections.removeAll()
             retryAttempts.removeAll()
@@ -165,6 +171,17 @@ public final class NetworkClipboardTransport: ClipboardTransport, @unchecked Sen
         values.0?.cancel()
         values.1?.cancel()
         values.2.forEach { $0.cancel() }
+    }
+
+    private func handleListenerState(_ state: NWListener.State, listener: NWListener?) {
+        switch state {
+        case .ready:
+            lock.clipboardWithLock { readyPort = listener?.port }
+        case .failed:
+            emit(.failure(nil))
+        default:
+            break
+        }
     }
 
     private func handle(_ results: Set<NWBrowser.Result>) {

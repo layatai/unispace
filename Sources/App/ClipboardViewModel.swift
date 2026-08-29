@@ -18,8 +18,7 @@ final class ClipboardViewModel: ObservableObject {
     private let trustStore: KeychainTrustStore
     private let coordinator: ClipboardCoordinator
     private var bindingTask: Task<Void, Never>?
-    private var configuredWorkspaceID: WorkspaceID?
-    private var configuredWorkspaceGeneration: UInt64?
+    private var configuredWorkspace: ContinuityWorkspaceConfiguration?
 
     init(
         defaults: UserDefaults = .standard,
@@ -80,8 +79,7 @@ final class ClipboardViewModel: ObservableObject {
     func stop() {
         bindingTask?.cancel()
         bindingTask = nil
-        configuredWorkspaceID = nil
-        configuredWorkspaceGeneration = nil
+        configuredWorkspace = nil
         connectedDeviceIDs = []
         activeDestinationID = nil
         knownDevices = []
@@ -94,9 +92,8 @@ final class ClipboardViewModel: ObservableObject {
         connectedDeviceIDs = await coordinator.connectedDeviceIDs()
 
         guard let workspace = appModel.workspace else {
-            if configuredWorkspaceID != nil {
-                configuredWorkspaceID = nil
-                configuredWorkspaceGeneration = nil
+            if configuredWorkspace != nil {
+                configuredWorkspace = nil
                 activeDestinationID = nil
                 connectedDeviceIDs = []
                 await coordinator.stop()
@@ -104,31 +101,31 @@ final class ClipboardViewModel: ObservableObject {
             return
         }
 
-        if configuredWorkspaceID != workspace.id ||
-            configuredWorkspaceGeneration != workspace.generation {
-            do {
-                guard let key = try trustStore.workspaceKey(for: workspace.id) else {
-                    throw ClipboardProtocolError.workspaceMismatch
-                }
-                var local = appModel.localDevice
-                local.capabilities.insert(.clipboardTextV1)
-                local.capabilities.insert(.clipboardURLV1)
-                var continuityWorkspace = workspace
-                continuityWorkspace.updateDevice(local)
+        do {
+            guard let key = try trustStore.workspaceKey(for: workspace.id) else {
+                throw ClipboardProtocolError.workspaceMismatch
+            }
+            let configuration = ContinuityWorkspaceConfiguration(
+                workspace: workspace,
+                localDevice: appModel.localDevice,
+                key: key,
+                capabilities: [.clipboardTextV1, .clipboardURLV1]
+            )
+            if configuration != configuredWorkspace {
                 try await coordinator.start(
-                    localDevice: local,
-                    workspace: continuityWorkspace,
-                    key: key
+                    localDevice: configuration.localDevice,
+                    workspace: configuration.workspace,
+                    key: configuration.key
                 )
                 await coordinator.setSharingEnabled(sharingEnabled)
-                configuredWorkspaceID = workspace.id
-                configuredWorkspaceGeneration = workspace.generation
-            } catch {
-                configuredWorkspaceID = nil
-                configuredWorkspaceGeneration = nil
-                lastError = "UniSpace could not start its encrypted clipboard connection."
-                return
+                configuredWorkspace = configuration
             }
+        } catch {
+            configuredWorkspace = nil
+            connectedDeviceIDs = []
+            await coordinator.stop()
+            lastError = "UniSpace could not start its encrypted clipboard connection."
+            return
         }
 
         connectedDeviceIDs = await coordinator.connectedDeviceIDs()

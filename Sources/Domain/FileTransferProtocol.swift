@@ -82,7 +82,7 @@ public enum FileTransferState: String, Codable, CaseIterable, Equatable, Sendabl
 
     public func canTransition(to destination: Self) -> Bool {
         if self == destination { return true }
-        switch (self, destination) {
+        return switch (self, destination) {
         case (.offered, .awaitingAcceptance),
              (.offered, .cancelled),
              (.offered, .failed),
@@ -210,15 +210,26 @@ public struct TransferManifestEntry: Codable, Equatable, Identifiable, Sendable 
     @discardableResult
     public func validated(limits: FileTransferLimits = .default) throws -> Self {
         let normalized = filename.precomposedStringWithCanonicalMapping
-        let invalidScalars = CharacterSet.controlCharacters.union(.illegalCharacters)
+        let invalidScalars = CharacterSet.controlCharacters
+            .union(.illegalCharacters)
+            .union(CharacterSet(charactersIn: "<>:\"|?*"))
+        let basename = filename.split(separator: ".", maxSplits: 1).first.map(String.init) ?? filename
+        let reservedWindowsNames: Set<String> = [
+            "CON", "PRN", "AUX", "NUL",
+            "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+            "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+        ]
         guard filename == normalized,
               !filename.isEmpty,
               filename != ".",
               filename != "..",
+              !filename.hasSuffix("."),
+              !filename.hasSuffix(" "),
               filename.utf8.count <= limits.maximumFilenameBytes,
               filename.rangeOfCharacter(from: invalidScalars) == nil,
               !filename.contains("/"),
-              !filename.contains("\\") else {
+              !filename.contains("\\"),
+              !reservedWindowsNames.contains(basename.uppercased()) else {
             throw FileTransferProtocolError.invalidFilename(filename)
         }
         guard sha256.count == 32 else {
