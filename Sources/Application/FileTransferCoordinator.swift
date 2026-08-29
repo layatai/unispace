@@ -77,6 +77,9 @@ public actor FileTransferCoordinator {
     }
 
     deinit {
+        transportTask?.cancel()
+        pasteboardTask?.cancel()
+        transferTasks.values.forEach { $0.cancel() }
         continuation.finish()
     }
 
@@ -105,15 +108,8 @@ public actor FileTransferCoordinator {
 
         await store.removeExpired(now: Date(), limits: limits)
         try await recoverTransfers()
+        startTransportObservationIfNeeded()
         try await transport.start(localDevice: localDevice, workspace: workspace, key: key)
-
-        let transport = self.transport
-        transportTask = Task { [weak self, transport] in
-            for await event in transport.events() {
-                guard !Task.isCancelled else { break }
-                await self?.handleTransportEvent(event)
-            }
-        }
 
         let pasteboardEvents = await pasteboard.events()
         pasteboardTask = Task { [weak self] in
@@ -126,9 +122,7 @@ public actor FileTransferCoordinator {
 
     public func stop() async {
         started = false
-        transportTask?.cancel()
         pasteboardTask?.cancel()
-        transportTask = nil
         pasteboardTask = nil
         transferTasks.values.forEach { $0.cancel() }
         transferTasks.removeAll()
@@ -136,6 +130,17 @@ public actor FileTransferCoordinator {
         connectedPeers.removeAll()
         automaticDestination = nil
         await transport.stop()
+    }
+
+    private func startTransportObservationIfNeeded() {
+        guard transportTask == nil else { return }
+        let transport = self.transport
+        transportTask = Task { [weak self, transport] in
+            for await event in transport.events() {
+                guard !Task.isCancelled else { break }
+                await self?.handleTransportEvent(event)
+            }
+        }
     }
 
     public func setAutomaticDestination(_ deviceID: DeviceID?) {
@@ -316,6 +321,7 @@ public actor FileTransferCoordinator {
     }
 
     private func handleTransportEvent(_ event: FileTransferTransportEvent) async {
+        guard started else { return }
         switch event {
         case let .connected(deviceID):
             connectedPeers.insert(deviceID)

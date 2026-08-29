@@ -334,7 +334,7 @@ final class AppModel: ObservableObject {
                 try? await transport.send(ControlEnvelope(message: .rotateWorkspaceKey(newKey)), to: peer.id)
             }
             do {
-                try trustStore.storeWorkspaceKey(newKey, for: workspace.id)
+                try trustStore.rotateWorkspaceKey(newKey, for: workspace.id)
                 try workspaceStore.save(workspace)
                 self.workspace = workspace
                 await startTrustedNetwork(claimControl: isLocalController)
@@ -436,12 +436,16 @@ final class AppModel: ObservableObject {
         guard let workspace else { return }
         do {
             controlTransferGuard.reset()
-            guard let key = try trustStore.workspaceKey(for: workspace.id) else { return }
+            guard let keyring = try trustStore.workspaceKeyring(for: workspace.id) else { return }
             networkTask?.cancel()
             await transport.stop()
             let local = refreshedLocalDevice(in: workspace)
             guard let refreshedWorkspace = self.workspace else { return }
-            try await transport.start(localDevice: local, workspace: refreshedWorkspace, key: key)
+            try await transport.start(
+                localDevice: local,
+                workspace: refreshedWorkspace,
+                workspaceKeys: keyring.candidates
+            )
             coordinator = ControlSessionCoordinator(
                 localDeviceID: localDeviceID,
                 workspaceID: workspace.id,
@@ -634,6 +638,15 @@ final class AppModel: ObservableObject {
             if let currentEpoch {
                 try? await transport.send(ControlEnvelope(message: .controllerClaim(currentEpoch)), to: deviceID)
             }
+        case let .workspaceUpgradeRequired(deviceID):
+            guard let workspace,
+                  workspace.devices.contains(where: { $0.id == deviceID }),
+                  let currentKey = try? trustStore.workspaceKey(for: workspace.id) else { break }
+            try? await transport.send(ControlEnvelope(message: .workspace(workspace)), to: deviceID)
+            try? await transport.send(
+                ControlEnvelope(message: .rotateWorkspaceKey(currentKey)),
+                to: deviceID
+            )
         case let .disconnected(deviceID):
             connectedDevices.remove(deviceID)
             let disconnectedTransport = connectionSnapshots[deviceID]?.transport ?? .tcp
@@ -749,7 +762,7 @@ final class AppModel: ObservableObject {
         case let .rotateWorkspaceKey(newKey):
             guard let workspace else { return }
             do {
-                try trustStore.storeWorkspaceKey(newKey, for: workspace.id)
+                try trustStore.rotateWorkspaceKey(newKey, for: workspace.id)
                 await startTrustedNetwork(claimControl: isLocalController)
             } catch {
                 lastError = error.localizedDescription

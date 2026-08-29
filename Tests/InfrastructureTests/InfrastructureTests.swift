@@ -916,14 +916,34 @@ final class InfrastructureTests: XCTestCase {
         defer { try? store.removeWorkspaceKey(for: workspaceID) }
         let first = Data(repeating: 0x11, count: 32)
         let second = Data(repeating: 0x22, count: 32)
+        let third = Data(repeating: 0x33, count: 32)
+        let fourth = Data(repeating: 0x44, count: 32)
+        let fifth = Data(repeating: 0x55, count: 32)
 
         XCTAssertNil(try store.workspaceKey(for: workspaceID))
         try store.storeWorkspaceKey(first, for: workspaceID)
         XCTAssertEqual(try store.workspaceKey(for: workspaceID), first)
-        try store.storeWorkspaceKey(second, for: workspaceID)
+        try store.rotateWorkspaceKey(second, for: workspaceID)
         XCTAssertEqual(try store.workspaceKey(for: workspaceID), second)
+        XCTAssertEqual(
+            try store.workspaceKeyring(for: workspaceID),
+            WorkspaceKeyring(current: second, previous: [first])
+        )
+        try store.rotateWorkspaceKey(third, for: workspaceID)
+        try store.rotateWorkspaceKey(fourth, for: workspaceID)
+        try store.rotateWorkspaceKey(fifth, for: workspaceID)
+        XCTAssertEqual(
+            try store.workspaceKeyring(for: workspaceID),
+            WorkspaceKeyring(current: fifth, previous: [fourth, third, second])
+        )
+        try store.storeWorkspaceKey(first, for: workspaceID)
+        XCTAssertEqual(
+            try store.workspaceKeyring(for: workspaceID),
+            WorkspaceKeyring(current: first)
+        )
         try store.removeWorkspaceKey(for: workspaceID)
         XCTAssertNil(try store.workspaceKey(for: workspaceID))
+        XCTAssertNil(try store.workspaceKeyring(for: workspaceID))
         XCTAssertNoThrow(try store.removeWorkspaceKey(for: workspaceID))
     }
 
@@ -1065,6 +1085,88 @@ final class InfrastructureTests: XCTestCase {
         listener.cancel()
     }
 
+    func testSecureChannelRecoversKnownPeerWithPreviousWorkspaceKey() throws {
+        let workspaceID = WorkspaceID()
+        let currentKey = PairingCryptoSession.randomData(count: 32)
+        let previousKey = PairingCryptoSession.randomData(count: 32)
+        let serverDevice = DeviceID()
+        let clientDevice = DeviceID()
+        let listener = try NWListener(using: NetworkPeerTransport.makeParameters(), on: .any)
+        let listenerReady = expectation(description: "listener ready")
+        let serverAuthenticated = expectation(description: "server authenticated previous key")
+        let clientAuthenticated = expectation(description: "client authenticated server recovery hello")
+        let frameReceived = expectation(description: "recovered channel transfers encrypted data")
+        let sendCompleted = expectation(description: "recovered channel send completes")
+        let queue = DispatchQueue(label: "UniSpaceInfrastructureTests.KeyRecovery")
+        let retainer = SecureConnectionRetainer()
+
+        listener.stateUpdateHandler = { state in
+            if case .ready = state { listenerReady.fulfill() }
+        }
+        listener.newConnectionHandler = { connection in
+            let secure = SecurePeerConnection(
+                connection: connection,
+                localDeviceID: serverDevice,
+                workspaceID: workspaceID,
+                workspaceKeys: [currentKey, previousKey],
+                expectedDeviceID: clientDevice
+            )
+            secure.authenticatedHandler = { id in
+                XCTAssertEqual(id, clientDevice)
+                XCTAssertTrue(secure.authenticatedWithPreviousWorkspaceKey)
+                serverAuthenticated.fulfill()
+            }
+            secure.frameHandler = { kind, payload in
+                XCTAssertEqual(kind, .controlJSON)
+                do {
+                    _ = try WireFrameCodec.decodeControl(payload)
+                } catch {
+                    XCTFail("Could not decode recovered channel frame: \(error)")
+                }
+                frameReceived.fulfill()
+            }
+            retainer.connection = secure
+            connection.start(queue: queue)
+        }
+        listener.start(queue: queue)
+        wait(for: [listenerReady], timeout: 3)
+
+        let port = try XCTUnwrap(listener.port)
+        let rawClient = NWConnection(
+            host: "127.0.0.1",
+            port: port,
+            using: NetworkPeerTransport.makeParameters()
+        )
+        let client = SecurePeerConnection(
+            connection: rawClient,
+            localDeviceID: clientDevice,
+            workspaceID: workspaceID,
+            workspaceKey: previousKey,
+            expectedDeviceID: serverDevice
+        )
+        client.authenticatedHandler = { id in
+            XCTAssertEqual(id, serverDevice)
+            XCTAssertFalse(client.authenticatedWithPreviousWorkspaceKey)
+            clientAuthenticated.fulfill()
+        }
+        rawClient.start(queue: queue)
+        wait(for: [serverAuthenticated, clientAuthenticated], timeout: 5)
+
+        let frame = try WireFrameCodec.encodeControl(
+            ControlEnvelope(message: .controllerClaim(.init(
+                generation: 1,
+                controllerID: clientDevice
+            )))
+        )
+        client.send(frame) { error in
+            XCTAssertNil(error)
+            sendCompleted.fulfill()
+        }
+        wait(for: [frameReceived, sendCompleted], timeout: 3)
+        client.cancel()
+        listener.cancel()
+    }
+
     func testUnknownInboundWindowsPeerNegotiatesPortableHelloBeforeConnected() async throws {
         let workspaceID = WorkspaceID()
         let key = PairingCryptoSession.randomData(count: 32)
@@ -1160,6 +1262,166 @@ final class InfrastructureTests: XCTestCase {
         await fulfillment(of: [peerHelloObserved, connected, macHelloReceived], timeout: 5)
         XCTAssertEqual(Array(eventOrder.values.prefix(2)), ["hello", "connected"])
 
+        client.cancel()
+        events.cancel()
+        await transport.stop()
+    }
+
+    func testKnownPeerUsingPreviousWorkspaceKeyRequestsAutomaticUpgrade() async throws {
+        let workspaceID = WorkspaceID()
+        let currentKey = PairingCryptoSession.randomData(count: 32)
+        let previousKey = PairingCryptoSession.randomData(count: 32)
+        let serverID = DeviceID()
+        let clientID = DeviceID()
+        let server = DeviceDescriptor(id: serverID, name: "Current Mac", platform: .macOS)
+        let clientDevice = DeviceDescriptor(id: clientID, name: "Stale Mac", platform: .macOS)
+        let workspace = WorkspaceSnapshot(
+            id: workspaceID,
+            name: "Upgrade",
+            localDeviceID: serverID,
+            devices: [server, clientDevice]
+        )
+        let transport = NetworkPeerTransport(
+            listenPort: .any,
+            directPort: .any,
+            enableBonjour: false,
+            enableQUIC: false,
+            enableRealtime: false
+        )
+        let connected = expectation(description: "known stale peer connected")
+        let upgradeRequired = expectation(description: "known stale peer requests workspace upgrade")
+        let serverHelloReceived = expectation(description: "stale peer receives server hello")
+        let eventOrder = StringRecorder()
+        let events = Task {
+            for await event in transport.events() {
+                switch event {
+                case let .connected(deviceID) where deviceID == clientID:
+                    eventOrder.append("connected")
+                    connected.fulfill()
+                case let .workspaceUpgradeRequired(deviceID) where deviceID == clientID:
+                    eventOrder.append("upgrade")
+                    upgradeRequired.fulfill()
+                default:
+                    break
+                }
+            }
+        }
+
+        try await transport.start(
+            localDevice: server,
+            workspace: workspace,
+            workspaceKeys: [currentKey, previousKey]
+        )
+        let port = try await waitForPort(of: transport)
+        let rawClient = NWConnection(
+            host: "127.0.0.1",
+            port: port,
+            using: NetworkPeerTransport.makeParameters()
+        )
+        let client = SecurePeerConnection(
+            connection: rawClient,
+            localDeviceID: clientID,
+            workspaceID: workspaceID,
+            workspaceKey: previousKey,
+            expectedDeviceID: serverID,
+            isOutbound: true
+        )
+        client.authenticatedHandler = { _ in
+            do {
+                client.send(
+                    try WireFrameCodec.encodeControl(
+                        ControlEnvelope(message: .hello(clientDevice))
+                    ),
+                    completion: nil
+                )
+            } catch {
+                XCTFail("Could not encode stale peer hello: \(error)")
+            }
+        }
+        client.frameHandler = { kind, payload in
+            guard kind == .controlJSON,
+                  let envelope = try? WireFrameCodec.decodeControl(payload),
+                  case .hello = envelope.message else { return }
+            serverHelloReceived.fulfill()
+        }
+        rawClient.start(queue: DispatchQueue(label: "UniSpaceInfrastructureTests.WorkspaceUpgrade"))
+
+        await fulfillment(of: [connected, upgradeRequired, serverHelloReceived], timeout: 5)
+        XCTAssertEqual(Array(eventOrder.values.prefix(2)), ["connected", "upgrade"])
+        client.cancel()
+        events.cancel()
+        await transport.stop()
+    }
+
+    func testRemovedPeerCannotRecoverWithPreviousWorkspaceKey() async throws {
+        let workspaceID = WorkspaceID()
+        let currentKey = PairingCryptoSession.randomData(count: 32)
+        let previousKey = PairingCryptoSession.randomData(count: 32)
+        let serverID = DeviceID()
+        let removedID = DeviceID()
+        let server = DeviceDescriptor(id: serverID, name: "Current Mac", platform: .macOS)
+        let removed = DeviceDescriptor(id: removedID, name: "Removed Mac", platform: .macOS)
+        let workspace = WorkspaceSnapshot(
+            id: workspaceID,
+            name: "Removal",
+            localDeviceID: serverID,
+            devices: [server]
+        )
+        let transport = NetworkPeerTransport(
+            listenPort: .any,
+            directPort: .any,
+            enableBonjour: false,
+            enableQUIC: false,
+            enableRealtime: false,
+            authenticationTimeout: 0.5
+        )
+        let forbiddenConnection = expectation(description: "removed peer is never connected")
+        forbiddenConnection.isInverted = true
+        let events = Task {
+            for await event in transport.events() {
+                switch event {
+                case let .connected(deviceID) where deviceID == removedID:
+                    forbiddenConnection.fulfill()
+                case let .workspaceUpgradeRequired(deviceID) where deviceID == removedID:
+                    forbiddenConnection.fulfill()
+                default:
+                    break
+                }
+            }
+        }
+
+        try await transport.start(
+            localDevice: server,
+            workspace: workspace,
+            workspaceKeys: [currentKey, previousKey]
+        )
+        let port = try await waitForPort(of: transport)
+        let rawClient = NWConnection(
+            host: "127.0.0.1",
+            port: port,
+            using: NetworkPeerTransport.makeParameters()
+        )
+        let client = SecurePeerConnection(
+            connection: rawClient,
+            localDeviceID: removedID,
+            workspaceID: workspaceID,
+            workspaceKey: previousKey,
+            expectedDeviceID: serverID,
+            isOutbound: true
+        )
+        client.authenticatedHandler = { _ in
+            do {
+                client.send(
+                    try WireFrameCodec.encodeControl(ControlEnvelope(message: .hello(removed))),
+                    completion: nil
+                )
+            } catch {
+                XCTFail("Could not encode removed peer hello: \(error)")
+            }
+        }
+        rawClient.start(queue: DispatchQueue(label: "UniSpaceInfrastructureTests.RemovedPeer"))
+
+        await fulfillment(of: [forbiddenConnection], timeout: 1)
         client.cancel()
         events.cancel()
         await transport.stop()

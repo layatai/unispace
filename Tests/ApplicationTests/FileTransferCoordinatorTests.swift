@@ -467,6 +467,7 @@ final class FileTransferCoordinatorTests: XCTestCase {
         )
         XCTAssertEqual(fixture.transport.startCount(), 2)
         XCTAssertGreaterThanOrEqual(fixture.transport.stopCount(), 1)
+        XCTAssertEqual(fixture.transport.eventSubscriptionCount(), 1)
         await fixture.coordinator.stop()
     }
 
@@ -837,6 +838,7 @@ private final class FileTransferTransportSpy: FileTransferTransport, @unchecked 
     private var sendFailuresRemaining = 0
     private var starts = 0
     private var stops = 0
+    private var eventSubscriptions = 0
 
     init() {
         var captured: AsyncStream<FileTransferTransportEvent>.Continuation?
@@ -848,7 +850,10 @@ private final class FileTransferTransportSpy: FileTransferTransport, @unchecked 
         lock.testWithLock { starts += 1 }
     }
     func stop() async { lock.testWithLock { stops += 1 } }
-    func events() -> AsyncStream<FileTransferTransportEvent> { stream }
+    func events() -> AsyncStream<FileTransferTransportEvent> {
+        lock.testWithLock { eventSubscriptions += 1 }
+        return stream
+    }
 
     func send(_ envelope: FileTransferEnvelope, to deviceID: DeviceID) async throws {
         let shouldFailImmediately = lock.testWithLock { () -> Bool in
@@ -893,6 +898,7 @@ private final class FileTransferTransportSpy: FileTransferTransport, @unchecked 
     func failNextSends(_ count: Int = 1) { lock.testWithLock { sendFailuresRemaining = count } }
     func startCount() -> Int { lock.testWithLock { starts } }
     func stopCount() -> Int { lock.testWithLock { stops } }
+    func eventSubscriptionCount() -> Int { lock.testWithLock { eventSubscriptions } }
 }
 
 private actor FileSourceProviderSpy: FileSourceProvider {

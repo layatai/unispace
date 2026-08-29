@@ -92,6 +92,7 @@ public enum PeerEvent: Sendable, Equatable {
     case discovered(DeviceDescriptor)
     case lost(DeviceID)
     case connected(DeviceID)
+    case workspaceUpgradeRequired(DeviceID)
     case disconnected(DeviceID)
     case control(DeviceID, ControlEnvelope)
     case input(DeviceID, InputFrame)
