@@ -40,6 +40,7 @@ final class ProtocolCoverageTests: XCTestCase {
                 entryEdge: .left,
                 normalizedPosition: 0.25
             )),
+            .activationResult(sessionID: sessionID, accepted: true),
             .deactivate(sessionID),
             .heartbeat(sessionID: sessionID, timestampNanos: 123),
             .boundaryCrossed(
@@ -156,6 +157,7 @@ final class ProtocolCoverageTests: XCTestCase {
                 entryEdge: .left,
                 normalizedPosition: 0.25
             )),
+            .activationResult(sessionID: sessionID, accepted: false),
             .deactivate(sessionID),
             .heartbeat(sessionID: sessionID, timestampNanos: 123),
             .boundaryCrossed(
@@ -250,6 +252,15 @@ final class ProtocolCoverageTests: XCTestCase {
                 ControlEnvelope(message: .releaseAll(sessionID))
             ).hexString,
             wire["controlReleaseAllFrameHex"]
+        )
+        XCTAssertEqual(
+            try WireFrameCodec.encodePortableControl(
+                ControlEnvelope(message: .activationResult(
+                    sessionID: sessionID,
+                    accepted: true
+                ))
+            ).hexString,
+            wire["controlActivationAcceptedFrameHex"]
         )
     }
 

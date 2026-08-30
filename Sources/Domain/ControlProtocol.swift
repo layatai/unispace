@@ -200,6 +200,7 @@ public enum ControlMessage: Codable, Equatable, Sendable {
     case workspace(WorkspaceSnapshot)
     case controllerClaim(ControllerEpoch)
     case activate(InputActivation)
+    case activationResult(sessionID: SessionID, accepted: Bool)
     case deactivate(SessionID)
     case heartbeat(sessionID: SessionID, timestampNanos: UInt64)
     case boundaryCrossed(sessionID: SessionID, displayID: DisplayID, edge: DisplayEdge, normalizedPosition: Double)

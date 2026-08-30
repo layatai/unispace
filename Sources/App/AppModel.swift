@@ -105,6 +105,7 @@ final class AppModel: ObservableObject {
                 .crossPlatformInputV2,
                 .quicStreamV2,
                 .udpPointerV2,
+                .activationAcknowledgementV1,
                 .fileTransferV1,
                 .clipboardTextV1,
                 .clipboardURLV1,
@@ -523,7 +524,7 @@ final class AppModel: ObservableObject {
                     localDeviceID: localDeviceID,
                     devices: workspace.devices,
                     topology: workspace.topology,
-                    availableDeviceIDs: connectedDevices
+                    availableDeviceIDs: routableDeviceIDs
                ), controlTransferGuard.allows(transition),
                let sourceDisplay = workspace.devices.flatMap(\.displays).first(where: {
                    $0.id == transition.sourceDisplayID
@@ -707,7 +708,23 @@ final class AppModel: ObservableObject {
             statusMessage = currentControllerID == localDeviceID ? "This Mac controls the workspace" : "Receiver ready"
         case let .activate(activation):
             let display = workspace?.devices.flatMap(\.displays).first { $0.id == activation.targetDisplayID }
-            if await coordinator?.receiveActivation(activation, from: source, targetDisplay: display) == true {
+            refreshPermissions()
+            let accepted = await coordinator?.receiveActivation(
+                activation,
+                from: source,
+                targetDisplay: display,
+                isInputInjectionAuthorized: postEventsPermission == .granted
+            ) == true
+            if capabilities(of: source).contains(.activationAcknowledgementV1) {
+                try? await transport.send(
+                    ControlEnvelope(message: .activationResult(
+                        sessionID: activation.sessionID,
+                        accepted: accepted
+                    )),
+                    to: source
+                )
+            }
+            if accepted {
                 if let display {
                     controlTransferGuard.returned(to: display, enteringFrom: activation.entryEdge)
                 } else {
@@ -715,6 +732,12 @@ final class AppModel: ObservableObject {
                 }
                 statusMessage = "Controlled by \(deviceName(source))"
             }
+        case let .activationResult(sessionID, accepted):
+            _ = await coordinator?.receiveActivationResult(
+                sessionID: sessionID,
+                from: source,
+                accepted: accepted
+            )
         case .deactivate, .releaseAll:
             let previousState = await coordinator?.currentState()
             await coordinator?.deactivateCurrentSession()
@@ -786,7 +809,7 @@ final class AppModel: ObservableObject {
                   edge: edge,
                   devices: workspace.devices,
                   topology: workspace.topology,
-                  availableDeviceIDs: connectedDevices.union([localDeviceID])
+                  availableDeviceIDs: routableDeviceIDs.union([localDeviceID])
               ),
               let targetDisplay = workspace.devices.flatMap(\.displays).first(where: { $0.id == destination.displayID }) else { return }
         await coordinator.deactivateCurrentSession()
@@ -845,6 +868,13 @@ final class AppModel: ObservableObject {
 
     private func capabilities(of id: DeviceID) -> Set<DeviceCapability> {
         workspace?.devices.first(where: { $0.id == id })?.capabilities ?? []
+    }
+
+    private var routableDeviceIDs: Set<DeviceID> {
+        ControlRoutingPolicy.availableDeviceIDs(
+            connectedDeviceIDs: connectedDevices,
+            devices: workspace?.devices ?? []
+        )
     }
 
     private func refreshLocalDisplays() {

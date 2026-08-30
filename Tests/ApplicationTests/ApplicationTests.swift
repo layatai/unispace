@@ -3,6 +3,24 @@ import XCTest
 import UniSpaceDomain
 
 final class ApplicationTests: XCTestCase {
+    func testControlRoutingKeepsConnectedLegacyAndAcknowledgedPeersAvailable() {
+        let legacy = DeviceDescriptor(id: DeviceID(), name: "Legacy")
+        let acknowledged = DeviceDescriptor(
+            id: DeviceID(),
+            name: "Acknowledged",
+            capabilities: [.activationAcknowledgementV1]
+        )
+        let disconnected = DeviceDescriptor(id: DeviceID(), name: "Disconnected")
+        let unknownConnectedID = DeviceID()
+
+        let available = ControlRoutingPolicy.availableDeviceIDs(
+            connectedDeviceIDs: [legacy.id, acknowledged.id, unknownConnectedID],
+            devices: [legacy, acknowledged, disconnected]
+        )
+
+        XCTAssertEqual(available, [legacy.id, acknowledged.id])
+    }
+
     func testEdgeRouterMapsToRemoteDisplayAndNormalizesPosition() {
         let localID = DeviceID()
         let remoteID = DeviceID()
@@ -437,10 +455,14 @@ final class ApplicationTests: XCTestCase {
         )
         let epoch = ControllerEpoch(generation: 2, controllerID: remote)
         await coordinator.observeControllerClaim(epoch)
-        let activation = InputActivation(
-            sessionID: SessionID(), epoch: epoch, targetDisplayID: DisplayID(), entryEdge: .left, normalizedPosition: 0.5
+        let targetDisplay = display(
+            device: local,
+            frame: .init(x: 0, y: 0, width: 100, height: 100)
         )
-        await coordinator.receiveActivation(activation, from: remote, targetDisplay: nil)
+        let activation = InputActivation(
+            sessionID: SessionID(), epoch: epoch, targetDisplayID: targetDisplay.id, entryEdge: .left, normalizedPosition: 0.5
+        )
+        await coordinator.receiveActivation(activation, from: remote, targetDisplay: targetDisplay)
 
         let stale = InputFrame(
             workspaceID: workspace,
@@ -486,16 +508,20 @@ final class ApplicationTests: XCTestCase {
         let epoch = ControllerEpoch(generation: 1, controllerID: remote)
         let sessionID = SessionID()
         await coordinator.observeControllerClaim(epoch)
+        let targetDisplay = display(
+            device: local,
+            frame: .init(x: 0, y: 0, width: 100, height: 100)
+        )
         _ = await coordinator.receiveActivation(
             .init(
                 sessionID: sessionID,
                 epoch: epoch,
-                targetDisplayID: DisplayID(),
+                targetDisplayID: targetDisplay.id,
                 entryEdge: .left,
                 normalizedPosition: 0.5
             ),
             from: remote,
-            targetDisplay: nil
+            targetDisplay: targetDisplay
         )
 
         await coordinator.handleIncomingRealtime(.init(
@@ -550,14 +576,22 @@ final class ApplicationTests: XCTestCase {
         )
         let epoch = ControllerEpoch(generation: 1, controllerID: remote)
         await coordinator.observeControllerClaim(epoch)
+        let targetDisplay = display(
+            device: local,
+            frame: .init(x: 0, y: 0, width: 100, height: 100)
+        )
         let activation = InputActivation(
             sessionID: SessionID(),
             epoch: epoch,
-            targetDisplayID: DisplayID(),
+            targetDisplayID: targetDisplay.id,
             entryEdge: .left,
             normalizedPosition: 0.5
         )
-        let accepted = await coordinator.receiveActivation(activation, from: remote, targetDisplay: nil)
+        let accepted = await coordinator.receiveActivation(
+            activation,
+            from: remote,
+            targetDisplay: targetDisplay
+        )
         XCTAssertTrue(accepted)
 
         for _ in 0..<500 where clock.pendingSleepCount == 0 {
@@ -575,6 +609,67 @@ final class ApplicationTests: XCTestCase {
         }
         XCTAssertEqual(source, remote)
         XCTAssertEqual(session, activation.sessionID)
+        await coordinator.stop()
+    }
+
+    func testReceiverRejectsActivationUntilInjectionAndDisplayAreReady() async throws {
+        let local = DeviceID()
+        let remote = DeviceID()
+        let injector = InjectorSpy()
+        let coordinator = ControlSessionCoordinator(
+            localDeviceID: local,
+            workspaceID: WorkspaceID(),
+            capture: CaptureSpy(),
+            injector: injector,
+            transport: TransportSpy()
+        )
+        let epoch = ControllerEpoch(generation: 1, controllerID: remote)
+        await coordinator.observeControllerClaim(epoch)
+        let targetDisplay = display(
+            device: local,
+            frame: .init(x: 0, y: 0, width: 100, height: 100)
+        )
+        let activation = InputActivation(
+            sessionID: SessionID(),
+            epoch: epoch,
+            targetDisplayID: targetDisplay.id,
+            entryEdge: .left,
+            normalizedPosition: 0.5
+        )
+
+        let unauthorized = await coordinator.receiveActivation(
+            activation,
+            from: remote,
+            targetDisplay: targetDisplay,
+            isInputInjectionAuthorized: false
+        )
+        let missingDisplay = await coordinator.receiveActivation(
+            activation,
+            from: remote,
+            targetDisplay: nil
+        )
+        let mismatchedDisplay = await coordinator.receiveActivation(
+            activation,
+            from: remote,
+            targetDisplay: display(
+                device: local,
+                frame: .init(x: 0, y: 0, width: 100, height: 100)
+            )
+        )
+        let accepted = await coordinator.receiveActivation(
+            activation,
+            from: remote,
+            targetDisplay: targetDisplay
+        )
+
+        XCTAssertFalse(unauthorized)
+        XCTAssertFalse(missingDisplay)
+        XCTAssertFalse(mismatchedDisplay)
+        XCTAssertTrue(accepted)
+        XCTAssertEqual(injector.activationCount, 1)
+        guard case .receiving = await coordinator.currentState() else {
+            return XCTFail("Ready receiver must enter the receiving state")
+        }
         await coordinator.stop()
     }
 
@@ -908,6 +1003,154 @@ final class ApplicationTests: XCTestCase {
         await coordinator.stop()
     }
 
+    func testAcknowledgedActivationStartsOnlyAfterPeerAccepts() async throws {
+        let local = DeviceID()
+        let remote = DeviceID()
+        let capture = CaptureSpy()
+        let transport = TransportSpy()
+        let coordinator = ControlSessionCoordinator(
+            localDeviceID: local,
+            workspaceID: WorkspaceID(),
+            capture: capture,
+            injector: InjectorSpy(),
+            transport: transport,
+            activationTimeout: .seconds(10)
+        )
+        _ = await coordinator.makeLocalController()
+
+        let activation = Task {
+            try await coordinator.activate(
+                target: remote,
+                displayID: DisplayID(),
+                entryEdge: .left,
+                normalizedPosition: 0.5,
+                targetCapabilities: [.activationAcknowledgementV1]
+            )
+        }
+        let sessionID = try await activationSessionID(in: transport)
+
+        let wrongSourceAccepted = await coordinator.receiveActivationResult(
+            sessionID: sessionID,
+            from: DeviceID(),
+            accepted: true
+        )
+        let wrongSessionAccepted = await coordinator.receiveActivationResult(
+            sessionID: SessionID(),
+            from: remote,
+            accepted: true
+        )
+        let acknowledged = await coordinator.receiveActivationResult(
+            sessionID: sessionID,
+            from: remote,
+            accepted: true
+        )
+        XCTAssertFalse(wrongSourceAccepted)
+        XCTAssertFalse(wrongSessionAccepted)
+        XCTAssertTrue(acknowledged)
+        try await activation.value
+
+        guard case let .controlling(_, target, session) = await coordinator.currentState() else {
+            return XCTFail("Accepted activation must enter the controlling state")
+        }
+        XCTAssertEqual(target, remote)
+        XCTAssertEqual(session, sessionID)
+        XCTAssertTrue(capture.suppressed)
+        await coordinator.stop()
+    }
+
+    func testRejectedActivationReturnsControlLocally() async throws {
+        let local = DeviceID()
+        let remote = DeviceID()
+        let capture = CaptureSpy()
+        let transport = TransportSpy()
+        let coordinator = ControlSessionCoordinator(
+            localDeviceID: local,
+            workspaceID: WorkspaceID(),
+            capture: capture,
+            injector: InjectorSpy(),
+            transport: transport,
+            activationTimeout: .seconds(10)
+        )
+        _ = await coordinator.makeLocalController()
+
+        let activation = Task {
+            try await coordinator.activate(
+                target: remote,
+                displayID: DisplayID(),
+                entryEdge: .left,
+                normalizedPosition: 0.5,
+                targetCapabilities: [.activationAcknowledgementV1]
+            )
+        }
+        let sessionID = try await activationSessionID(in: transport)
+        let acknowledged = await coordinator.receiveActivationResult(
+            sessionID: sessionID,
+            from: remote,
+            accepted: false
+        )
+        XCTAssertTrue(acknowledged)
+
+        do {
+            try await activation.value
+            XCTFail("Rejected activation must fail")
+        } catch {
+            XCTAssertEqual(error as? ControlSessionCoordinator.ActivationError, .rejected)
+            XCTAssertEqual(error.localizedDescription, "The remote device did not accept control.")
+        }
+        let state = await coordinator.currentState()
+        XCTAssertEqual(state, .idle)
+        XCTAssertFalse(capture.suppressed)
+    }
+
+    func testActivationTimeoutReturnsControlLocally() async throws {
+        let local = DeviceID()
+        let remote = DeviceID()
+        let capture = CaptureSpy()
+        let transport = TransportSpy()
+        let clock = ManualMonotonicClock()
+        let coordinator = ControlSessionCoordinator(
+            localDeviceID: local,
+            workspaceID: WorkspaceID(),
+            capture: capture,
+            injector: InjectorSpy(),
+            transport: transport,
+            clock: clock,
+            activationTimeout: .seconds(1)
+        )
+        _ = await coordinator.makeLocalController()
+
+        let activation = Task {
+            try await coordinator.activate(
+                target: remote,
+                displayID: DisplayID(),
+                entryEdge: .left,
+                normalizedPosition: 0.5,
+                targetCapabilities: [.activationAcknowledgementV1]
+            )
+        }
+        let sessionID = try await activationSessionID(in: transport)
+        for _ in 0..<500 where clock.pendingSleepCount == 0 { await Task.yield() }
+        XCTAssertGreaterThanOrEqual(clock.pendingSleepCount, 1)
+        clock.advance(by: 1_000_000_000)
+
+        do {
+            try await activation.value
+            XCTFail("Unacknowledged activation must time out")
+        } catch {
+            XCTAssertEqual(error as? ControlSessionCoordinator.ActivationError, .timedOut)
+            XCTAssertEqual(error.localizedDescription, "The remote device did not confirm control in time.")
+        }
+        let state = await coordinator.currentState()
+        XCTAssertEqual(state, .idle)
+        XCTAssertFalse(capture.suppressed)
+        let lateAcknowledgement = await coordinator.receiveActivationResult(
+            sessionID: sessionID,
+            from: remote,
+            accepted: true
+        )
+        XCTAssertFalse(lateAcknowledgement)
+    }
+
     func testEmergencyHotkeyReturnsControlLocallyAndReleasesPeer() async throws {
         let local = DeviceID()
         let remote = DeviceID()
@@ -1016,6 +1259,19 @@ final class ApplicationTests: XCTestCase {
     }
 }
 
+private func activationSessionID(in transport: TransportSpy) async throws -> SessionID {
+    for _ in 0..<500 {
+        if let sessionID = transport.controlMessages.compactMap({ message -> SessionID? in
+            guard case let .activate(activation) = message else { return nil }
+            return activation.sessionID
+        }).last {
+            return sessionID
+        }
+        await Task.yield()
+    }
+    throw SpyError.failure
+}
+
 private enum SpyError: Error {
     case failure
 }
@@ -1088,9 +1344,13 @@ private final class InjectorSpy: InputInjector, @unchecked Sendable {
     private let lock = NSLock()
     private var storedEvents: [InputEvent] = []
     private var storedReleaseCount = 0
+    private var storedActivationCount = 0
     var events: [InputEvent] { lock.withLock { storedEvents } }
     var releaseAllCount: Int { lock.withLock { storedReleaseCount } }
-    func activate(on display: DisplayDescriptor, enteringFrom edge: DisplayEdge, normalizedPosition: Double) {}
+    var activationCount: Int { lock.withLock { storedActivationCount } }
+    func activate(on display: DisplayDescriptor, enteringFrom edge: DisplayEdge, normalizedPosition: Double) {
+        lock.withLock { storedActivationCount += 1 }
+    }
     func inject(_ event: InputEvent) { lock.withLock { storedEvents.append(event) } }
     func releaseAll() { lock.withLock { storedReleaseCount += 1 } }
 }

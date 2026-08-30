@@ -215,9 +215,10 @@ final class CoordinatorStateCoverageTests: XCTestCase {
         )
         let epoch = await controller.makeLocalController()
         await receiver.observeControllerClaim(epoch)
+        let receiverDisplay = display(deviceID: receiverID)
         try await controller.activate(
             target: receiverID,
-            displayID: DisplayID(),
+            displayID: receiverDisplay.id,
             entryEdge: .left,
             normalizedPosition: 0.5
         )
@@ -241,14 +242,14 @@ final class CoordinatorStateCoverageTests: XCTestCase {
         let activation = InputActivation(
             sessionID: sessionID,
             epoch: epoch,
-            targetDisplayID: DisplayID(),
+            targetDisplayID: receiverDisplay.id,
             entryEdge: .right,
             normalizedPosition: 0.5
         )
         let activationAccepted = await receiver.receiveActivation(
             activation,
             from: controllerID,
-            targetDisplay: nil
+            targetDisplay: receiverDisplay
         )
         XCTAssertTrue(activationAccepted)
         let wrongHeartbeatAccepted = await receiver.receiveHeartbeat(
@@ -395,16 +396,17 @@ final class CoordinatorStateCoverageTests: XCTestCase {
         let epoch = ControllerEpoch(generation: 1, controllerID: controllerID)
         let sessionID = SessionID()
         await coordinator.observeControllerClaim(epoch)
+        let targetDisplay = display(deviceID: localID)
         let activated = await coordinator.receiveActivation(
             .init(
                 sessionID: sessionID,
                 epoch: epoch,
-                targetDisplayID: DisplayID(),
+                targetDisplayID: targetDisplay.id,
                 entryEdge: .left,
                 normalizedPosition: 0.5
             ),
             from: controllerID,
-            targetDisplay: nil
+            targetDisplay: targetDisplay
         )
         XCTAssertTrue(activated)
 

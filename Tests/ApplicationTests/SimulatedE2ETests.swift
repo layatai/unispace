@@ -237,6 +237,12 @@ private final class SimulatedWireTransport: PeerTransport, @unchecked Sendable {
                 from: localDeviceID,
                 targetDisplay: connection.display
             )
+        case let .activationResult(sessionID, accepted):
+            _ = await connection.coordinator.receiveActivationResult(
+                sessionID: sessionID,
+                from: localDeviceID,
+                accepted: accepted
+            )
         case .deactivate, .releaseAll:
             await connection.coordinator.deactivateCurrentSession()
         case let .heartbeat(sessionID, _):

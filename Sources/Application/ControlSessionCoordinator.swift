@@ -10,6 +10,18 @@ public actor ControlSessionCoordinator {
         let targetCapabilities: Set<DeviceCapability>
     }
 
+    private enum ActivationOutcome: Sendable {
+        case accepted
+        case rejected
+        case timedOut
+    }
+
+    private struct PendingActivation {
+        let target: DeviceID
+        let sessionID: SessionID
+        let continuation: AsyncStream<ActivationOutcome>.Continuation
+    }
+
     public enum CapturedInputDisposition: Equatable, Sendable {
         case ignored
         case forwarded
@@ -20,6 +32,20 @@ public actor ControlSessionCoordinator {
         case idle
         case controlling(epoch: ControllerEpoch, target: DeviceID, session: SessionID)
         case receiving(epoch: ControllerEpoch, source: DeviceID, session: SessionID)
+    }
+
+    public enum ActivationError: LocalizedError, Equatable, Sendable {
+        case rejected
+        case timedOut
+
+        public var errorDescription: String? {
+            switch self {
+            case .rejected:
+                "The remote device did not accept control."
+            case .timedOut:
+                "The remote device did not confirm control in time."
+            }
+        }
     }
 
     public static let emergencyKeyCode: UInt16 = 53
@@ -35,6 +61,7 @@ public actor ControlSessionCoordinator {
     private let transport: PeerTransport
     private let inputSender: OrderedInputSender
     private let clock: MonotonicClock
+    private let activationTimeout: Duration
     private var election: ControllerStateMachine
     private var remoteInputState = RemoteInputState()
     private var currentFlags: UInt64 = 0
@@ -58,6 +85,8 @@ public actor ControlSessionCoordinator {
     private var smoothedHeartbeatIntervalNanos: UInt64?
     private var smoothedRoundTripNanos: UInt64?
     private var activeControlRoute: ActiveControlRoute?
+    private var pendingActivation: PendingActivation?
+    private var activationTimeoutTask: Task<Void, Never>?
 
     public init(
         localDeviceID: DeviceID,
@@ -66,8 +95,10 @@ public actor ControlSessionCoordinator {
         injector: InputInjector,
         transport: PeerTransport,
         clock: MonotonicClock = SystemMonotonicClock(),
+        activationTimeout: Duration = .seconds(2),
         election: ControllerStateMachine = .init()
     ) {
+        precondition(activationTimeout > .zero)
         self.localDeviceID = localDeviceID
         self.workspaceID = workspaceID
         self.capture = capture
@@ -75,6 +106,7 @@ public actor ControlSessionCoordinator {
         self.transport = transport
         self.inputSender = OrderedInputSender(transport: transport)
         self.clock = clock
+        self.activationTimeout = activationTimeout
         self.election = election
     }
 
@@ -119,6 +151,9 @@ public actor ControlSessionCoordinator {
             targetCapabilities: targetCapabilities
         )
         capture.setSuppressionEnabled(true)
+        let activationResults = targetCapabilities.contains(.activationAcknowledgementV1)
+            ? beginActivationWait(target: target, sessionID: sessionID)
+            : nil
         do {
             try await transport.send(
                 ControlEnvelope(message: .activate(.init(
@@ -130,6 +165,16 @@ public actor ControlSessionCoordinator {
                 ))),
                 to: target
             )
+            if let activationResults {
+                switch await firstActivationOutcome(from: activationResults) {
+                case .accepted:
+                    break
+                case .rejected:
+                    throw ActivationError.rejected
+                case .timedOut:
+                    throw ActivationError.timedOut
+                }
+            }
             startHeartbeat(target: target, sessionID: sessionID)
         } catch {
             await endCurrentSession(notifyPeer: false)
@@ -137,21 +182,38 @@ public actor ControlSessionCoordinator {
         }
     }
 
+    @discardableResult
+    public func receiveActivationResult(
+        sessionID: SessionID,
+        from source: DeviceID,
+        accepted: Bool
+    ) -> Bool {
+        finishPendingActivation(
+            target: source,
+            sessionID: sessionID,
+            outcome: accepted ? .accepted : .rejected
+        )
+    }
+
     public func receiveActivation(
         _ activation: InputActivation,
         from source: DeviceID,
-        targetDisplay: DisplayDescriptor?
+        targetDisplay: DisplayDescriptor?,
+        isInputInjectionAuthorized: Bool = true
     ) async -> Bool {
         let epoch = activation.epoch
-        guard election.currentEpoch == epoch, epoch.controllerID == source else { return false }
+        guard election.currentEpoch == epoch,
+              epoch.controllerID == source,
+              isInputInjectionAuthorized,
+              let targetDisplay,
+              targetDisplay.id == activation.targetDisplayID,
+              targetDisplay.deviceID == localDeviceID else { return false }
         await endCurrentSession(notifyPeer: false)
-        if let targetDisplay {
-            injector.activate(
-                on: targetDisplay,
-                enteringFrom: activation.entryEdge,
-                normalizedPosition: activation.normalizedPosition
-            )
-        }
+        injector.activate(
+            on: targetDisplay,
+            enteringFrom: activation.entryEdge,
+            normalizedPosition: activation.normalizedPosition
+        )
         state = .receiving(epoch: epoch, source: source, session: activation.sessionID)
         lastHeartbeatNanos = clock.nowNanoseconds()
         startWatchdog(source: source, sessionID: activation.sessionID)
@@ -336,6 +398,7 @@ public actor ControlSessionCoordinator {
 
     private func endCurrentSession(notifyPeer: Bool) async {
         let previous = state
+        cancelPendingActivation()
         state = .idle
         pointerFlushTask?.cancel()
         pointerFlushTask = nil
@@ -375,6 +438,64 @@ public actor ControlSessionCoordinator {
         case .idle:
             break
         }
+    }
+
+    private func beginActivationWait(
+        target: DeviceID,
+        sessionID: SessionID
+    ) -> AsyncStream<ActivationOutcome> {
+        cancelPendingActivation()
+        let pair = AsyncStream<ActivationOutcome>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        pendingActivation = PendingActivation(
+            target: target,
+            sessionID: sessionID,
+            continuation: pair.continuation
+        )
+        let timeout = activationTimeout
+        activationTimeoutTask = Task { [weak self, clock] in
+            do { try await clock.sleep(for: timeout) }
+            catch { return }
+            guard !Task.isCancelled, let self else { return }
+            await self.finishPendingActivation(
+                target: target,
+                sessionID: sessionID,
+                outcome: .timedOut
+            )
+        }
+        return pair.stream
+    }
+
+    private func firstActivationOutcome(
+        from stream: AsyncStream<ActivationOutcome>
+    ) async -> ActivationOutcome {
+        for await outcome in stream { return outcome }
+        return .rejected
+    }
+
+    @discardableResult
+    private func finishPendingActivation(
+        target: DeviceID,
+        sessionID: SessionID,
+        outcome: ActivationOutcome
+    ) -> Bool {
+        guard let pendingActivation,
+              pendingActivation.target == target,
+              pendingActivation.sessionID == sessionID else { return false }
+        self.pendingActivation = nil
+        activationTimeoutTask?.cancel()
+        activationTimeoutTask = nil
+        pendingActivation.continuation.yield(outcome)
+        pendingActivation.continuation.finish()
+        return true
+    }
+
+    private func cancelPendingActivation() {
+        guard let pendingActivation else { return }
+        self.pendingActivation = nil
+        activationTimeoutTask?.cancel()
+        activationTimeoutTask = nil
+        pendingActivation.continuation.yield(.rejected)
+        pendingActivation.continuation.finish()
     }
 
     private static func isEmergencyStop(_ event: InputEvent, flags: UInt64) -> Bool {

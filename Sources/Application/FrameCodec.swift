@@ -111,6 +111,7 @@ private struct PortableControlEnvelope: Codable {
         var epoch: ControllerEpoch? = nil
         var activation: InputActivation? = nil
         var sessionID: SessionID? = nil
+        var accepted: Bool? = nil
         var timestampNanos: UInt64? = nil
         var displayID: DisplayID? = nil
         var edge: DisplayEdge? = nil
@@ -133,6 +134,9 @@ private struct PortableControlEnvelope: Codable {
         case let .activate(activation):
             type = "activate"
             payload = Payload(activation: activation)
+        case let .activationResult(sessionID, accepted):
+            type = "activationResult"
+            payload = Payload(sessionID: sessionID, accepted: accepted)
         case let .deactivate(sessionID):
             type = "deactivate"
             payload = Payload(sessionID: sessionID)
@@ -167,6 +171,11 @@ private struct PortableControlEnvelope: Codable {
             message = .controllerClaim(try required(payload.epoch))
         case "activate":
             message = .activate(try required(payload.activation))
+        case "activationResult":
+            message = .activationResult(
+                sessionID: try required(payload.sessionID),
+                accepted: try required(payload.accepted)
+            )
         case "deactivate":
             message = .deactivate(try required(payload.sessionID))
         case "heartbeat":
