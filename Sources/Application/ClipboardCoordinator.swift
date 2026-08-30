@@ -120,6 +120,8 @@ public actor ClipboardCoordinator {
 
     public func connectedDeviceIDs() -> Set<DeviceID> { connectedPeers }
 
+    public func automaticDestinationDeviceID() -> DeviceID? { automaticDestination }
+
     private func startClipboardObservation() async {
         let observations = await clipboard.events()
         guard clipboardTask == nil else { return }
@@ -186,9 +188,15 @@ public actor ClipboardCoordinator {
     private func receive(_ envelope: ClipboardEnvelope, from peer: DeviceID) async {
         guard sharingEnabled,
               connectedPeers.contains(peer),
-              automaticDestination == peer,
               let workspace,
               var engine else { return }
+        if automaticDestination == nil {
+            // An authenticated peer that just copied content is the device the
+            // user is actively using. Claim it only when no explicit/control-
+            // derived destination exists; selected peers still remain exclusive.
+            automaticDestination = peer
+        }
+        guard automaticDestination == peer else { return }
         do {
             try envelope.validated(
                 workspaceID: workspace.id,

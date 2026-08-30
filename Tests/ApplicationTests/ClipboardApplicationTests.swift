@@ -236,6 +236,32 @@ final class ClipboardApplicationTests: XCTestCase {
     }
 
     @MainActor
+    func testCoordinatorClaimsFirstAuthenticatedSenderWhenNoPeerIsActive() async throws {
+        let fixture = ClipboardTestFixture()
+        try await fixture.start()
+        await fixture.coordinator.setSharingEnabled(true)
+        fixture.transport.emit(.connected(fixture.remote.id))
+        fixture.transport.emit(.connected(fixture.otherRemote.id))
+        let connected = await eventually {
+            await fixture.coordinator.connectedDeviceIDs().count == 2
+        }
+        XCTAssertTrue(connected)
+
+        fixture.transport.emit(.update(
+            fixture.remote.id,
+            fixture.envelope(from: fixture.remote, text: "claimed", revision: 1)
+        ))
+
+        let applied = await eventually {
+            fixture.clipboard.appliedPayloads.map(\.plainText) == ["claimed"]
+        }
+        XCTAssertTrue(applied)
+        let activeDestination = await fixture.coordinator.automaticDestinationDeviceID()
+        XCTAssertEqual(activeDestination, fixture.remote.id)
+        await fixture.coordinator.stop()
+    }
+
+    @MainActor
     func testCoordinatorAcceptsUpdatesOnlyFromCurrentActivePeer() async throws {
         let fixture = ClipboardTestFixture()
         try await fixture.start()

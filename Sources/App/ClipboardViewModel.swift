@@ -136,7 +136,9 @@ final class ClipboardViewModel: ObservableObject {
         }
 
         connectedDeviceIDs = await coordinator.connectedDeviceIDs()
-        let inferred = inferredDestination(from: appModel)
+        let inferredFromApp = inferredDestination(from: appModel)
+        let coordinatorDestination = await coordinator.automaticDestinationDeviceID()
+        let inferred = inferredFromApp ?? coordinatorDestination
         if activeDestinationID != inferred {
             activeDestinationID = inferred
             await coordinator.setAutomaticDestination(inferred)
