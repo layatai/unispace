@@ -182,7 +182,14 @@ public final class CGEventInputCapture: InputCapture, @unchecked Sendable {
         let suppress = suppressionEnabled
         let restorationPoint = suppress ? cursorSuppression.restorationPoint(for: type) : nil
         lock.unlock()
-        let handled = callback?(input) ?? false
+        var handled = false
+        if type == .keyDown || type == .keyUp {
+            // A modifier transition can be missed while control is crossing an
+            // edge or recovering. Snapshot the flags carried by every key so
+            // shortcuts never depend on a prior flagsChanged frame.
+            handled = callback?(.flags(rawValue: event.flags.rawValue)) ?? false
+        }
+        handled = (callback?(input) ?? false) || handled
         if let restorationPoint {
             cursorWarpHandler(restorationPoint)
         }

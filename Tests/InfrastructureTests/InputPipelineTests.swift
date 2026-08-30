@@ -132,6 +132,18 @@ final class InputPipelineTests: XCTestCase {
         XCTAssertFalse(capture.handle(type: .mouseMoved, event: event))
         XCTAssertEqual(handledEvents.values.count, 1)
 
+        let commandC = try XCTUnwrap(CGEvent(
+            keyboardEventSource: nil,
+            virtualKey: 8,
+            keyDown: true
+        ))
+        commandC.flags = [.maskCommand]
+        XCTAssertTrue(capture.handle(type: .keyDown, event: commandC))
+        XCTAssertEqual(Array(handledEvents.values.suffix(2)), [
+            .flags(rawValue: CGEventFlags.maskCommand.rawValue),
+            .key(code: 8, isDown: true, isRepeat: false),
+        ])
+
         let suppressionEvent = try XCTUnwrap(CGEvent(
             mouseEventSource: nil,
             mouseType: .mouseMoved,
@@ -180,8 +192,10 @@ final class InputPipelineTests: XCTestCase {
         ])
 
         injector.inject(.flags(rawValue: CGEventFlags.maskCommand.rawValue))
-        injector.inject(.key(code: 12, isDown: true, isRepeat: false))
-        injector.inject(.key(code: 12, isDown: false, isRepeat: false))
+        injector.inject(.key(code: 8, isDown: true, isRepeat: false))
+        injector.inject(.key(code: 8, isDown: false, isRepeat: false))
+        injector.inject(.key(code: 9, isDown: true, isRepeat: false))
+        injector.inject(.key(code: 9, isDown: false, isRepeat: false))
         injector.inject(.flags(rawValue: 0))
         injector.inject(.mouseButton(button: .left, isDown: true, clickCount: 2))
         injector.inject(.pointerMove(deltaX: 500, deltaY: 0, absoluteX: 0, absoluteY: 0))
@@ -196,12 +210,17 @@ final class InputPipelineTests: XCTestCase {
 
         let snapshots = posted.values
         XCTAssertTrue(snapshots.allSatisfy { $0.marker == uniSpaceSyntheticEventMarker })
-        XCTAssertTrue(snapshots.contains { $0.type == .keyDown && $0.keyCode == 12 })
+        let shortcutKeyDowns = snapshots.filter {
+            $0.type == .keyDown && ($0.keyCode == 8 || $0.keyCode == 9)
+        }
+        XCTAssertEqual(shortcutKeyDowns.map(\.keyCode), [8, 9])
+        XCTAssertTrue(shortcutKeyDowns.allSatisfy { $0.flags.contains(.maskCommand) })
         XCTAssertTrue(snapshots.contains { $0.type == .leftMouseDown && $0.clickCount == 2 })
         XCTAssertTrue(snapshots.contains { $0.type == .leftMouseDragged && $0.location == CGPoint(x: 100, y: 2) })
         XCTAssertTrue(snapshots.contains { $0.type == .scrollWheel })
         XCTAssertTrue(snapshots.contains { $0.type.rawValue == gestureType.rawValue })
-        XCTAssertTrue(snapshots.contains { $0.type == .keyUp && $0.keyCode == 12 })
+        XCTAssertTrue(snapshots.contains { $0.type == .keyUp && $0.keyCode == 8 })
+        XCTAssertTrue(snapshots.contains { $0.type == .keyUp && $0.keyCode == 9 })
         let commandEvents = snapshots.filter {
             $0.type == .flagsChanged && $0.keyCode == 55
         }
