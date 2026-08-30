@@ -562,7 +562,8 @@ final class AppModel: ObservableObject {
                 displayID: transition.targetDisplayID,
                 entryEdge: transition.entryEdge,
                 normalizedPosition: transition.normalizedPosition,
-                targetCapabilities: capabilities(of: transition.targetDeviceID)
+                targetCapabilities: capabilities(of: transition.targetDeviceID),
+                requiresActivationConfirmation: true
             )
             guard case .controlling = await coordinator.currentState() else {
                 controlTransferGuard.activationFailed(attempt)
@@ -823,7 +824,8 @@ final class AppModel: ObservableObject {
                 displayID: targetDisplay.id,
                 entryEdge: destination.edge,
                 normalizedPosition: normalizedPosition,
-                targetCapabilities: capabilities(of: targetDisplay.deviceID)
+                targetCapabilities: capabilities(of: targetDisplay.deviceID),
+                requiresActivationConfirmation: true
             )
             statusMessage = "Controlling \(deviceName(targetDisplay.deviceID))"
         }

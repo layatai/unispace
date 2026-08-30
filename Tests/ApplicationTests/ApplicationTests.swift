@@ -1058,6 +1058,58 @@ final class ApplicationTests: XCTestCase {
         await coordinator.stop()
     }
 
+    func testLegacyActivationRequiresHeartbeatConfirmation() async throws {
+        let local = DeviceID()
+        let remote = DeviceID()
+        let capture = CaptureSpy()
+        let transport = TransportSpy()
+        let clock = ManualMonotonicClock()
+        let coordinator = ControlSessionCoordinator(
+            localDeviceID: local,
+            workspaceID: WorkspaceID(),
+            capture: capture,
+            injector: InjectorSpy(),
+            transport: transport,
+            clock: clock,
+            activationTimeout: .seconds(10)
+        )
+        _ = await coordinator.makeLocalController()
+
+        let activation = Task {
+            try await coordinator.activate(
+                target: remote,
+                displayID: DisplayID(),
+                entryEdge: .left,
+                normalizedPosition: 0.5,
+                requiresActivationConfirmation: true
+            )
+        }
+        let sessionID = try await activationSessionID(in: transport)
+        var heartbeatTimestamp: UInt64?
+        for _ in 0..<500 where heartbeatTimestamp == nil {
+            heartbeatTimestamp = transport.controlMessages.compactMap { message -> UInt64? in
+                guard case let .heartbeat(heartbeatSessionID, timestamp) = message,
+                      heartbeatSessionID == sessionID else { return nil }
+                return timestamp
+            }.last
+            if heartbeatTimestamp == nil { await Task.yield() }
+        }
+        let sentAt = try XCTUnwrap(heartbeatTimestamp)
+
+        let latency = await coordinator.receiveHeartbeatEcho(
+            sessionID: sessionID,
+            from: remote,
+            sentAtNanos: sentAt
+        )
+        XCTAssertEqual(latency, 0)
+        try await activation.value
+        XCTAssertTrue(capture.suppressed)
+        guard case .controlling = await coordinator.currentState() else {
+            return XCTFail("Heartbeat-confirmed legacy activation must control the peer")
+        }
+        await coordinator.stop()
+    }
+
     func testRejectedActivationReturnsControlLocally() async throws {
         let local = DeviceID()
         let remote = DeviceID()

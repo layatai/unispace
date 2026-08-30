@@ -132,7 +132,8 @@ public actor ControlSessionCoordinator {
         displayID: DisplayID,
         entryEdge: DisplayEdge,
         normalizedPosition: Double,
-        targetCapabilities: Set<DeviceCapability> = []
+        targetCapabilities: Set<DeviceCapability> = [],
+        requiresActivationConfirmation: Bool = false
     ) async throws {
         guard let epoch = election.currentEpoch, epoch.controllerID == localDeviceID else { return }
         if case .idle = state {
@@ -151,7 +152,8 @@ public actor ControlSessionCoordinator {
             targetCapabilities: targetCapabilities
         )
         capture.setSuppressionEnabled(true)
-        let activationResults = targetCapabilities.contains(.activationAcknowledgementV1)
+        let supportsExplicitAcknowledgement = targetCapabilities.contains(.activationAcknowledgementV1)
+        let activationResults = (requiresActivationConfirmation || supportsExplicitAcknowledgement)
             ? beginActivationWait(target: target, sessionID: sessionID)
             : nil
         do {
@@ -166,6 +168,10 @@ public actor ControlSessionCoordinator {
                 to: target
             )
             if let activationResults {
+                if !supportsExplicitAcknowledgement {
+                    await sendHeartbeat(target: target, sessionID: sessionID)
+                    startHeartbeat(target: target, sessionID: sessionID)
+                }
                 switch await firstActivationOutcome(from: activationResults) {
                 case .accepted:
                     break
@@ -174,8 +180,12 @@ public actor ControlSessionCoordinator {
                 case .timedOut:
                     throw ActivationError.timedOut
                 }
+                if supportsExplicitAcknowledgement {
+                    startHeartbeat(target: target, sessionID: sessionID)
+                }
+            } else {
+                startHeartbeat(target: target, sessionID: sessionID)
             }
-            startHeartbeat(target: target, sessionID: sessionID)
         } catch {
             await endCurrentSession(notifyPeer: false)
             throw error
@@ -305,6 +315,11 @@ public actor ControlSessionCoordinator {
               source == target, sessionID == expectedSession else { return nil }
         let now = clock.nowNanoseconds()
         guard now >= sentAtNanos else { return nil }
+        _ = finishPendingActivation(
+            target: source,
+            sessionID: sessionID,
+            outcome: .accepted
+        )
         smoothedRoundTripNanos = Self.smoothed(
             previous: smoothedRoundTripNanos,
             sample: now - sentAtNanos
