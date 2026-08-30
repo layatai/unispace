@@ -144,14 +144,24 @@ final class ClipboardApplicationTests: XCTestCase {
         }
         XCTAssertTrue(sent)
 
-        fixture.clipboard.emit(ClipboardObservation(
-            changeCount: 2,
-            representations: [ClipboardRepresentation(kind: .plainText, value: "copied locally")]
-        ))
-        let resent = await eventually {
-            fixture.transport.sentEnvelopes.count == 2
+        for copyNumber in 2...3 {
+            fixture.clipboard.emit(ClipboardObservation(
+                changeCount: copyNumber,
+                representations: [
+                    ClipboardRepresentation(kind: .plainText, value: "copied locally")
+                ]
+            ))
+            let resent = await eventually {
+                fixture.transport.sentEnvelopes.count == copyNumber
+            }
+            XCTAssertTrue(resent, "Copy \(copyNumber) should be sent")
         }
-        XCTAssertTrue(resent)
+
+        let payloads = fixture.transport.sentEnvelopes.map(\.payload)
+        XCTAssertEqual(Set(payloads.map(\.payloadID)).count, 3)
+        XCTAssertEqual(Set(payloads.map(\.contentHash)).count, 1)
+        XCTAssertEqual(Set(payloads.map(\.revision)).count, 3)
+        XCTAssertEqual(payloads.map(\.revision), payloads.map(\.revision).sorted())
         await fixture.coordinator.stop()
     }
 
@@ -183,6 +193,93 @@ final class ClipboardApplicationTests: XCTestCase {
         let retried = await eventually { fixture.transport.sendAttemptCount == 2 }
         XCTAssertTrue(retried)
         XCTAssertEqual(fixture.transport.sentEnvelopes.count, 1)
+        await fixture.coordinator.stop()
+    }
+
+    @MainActor
+    func testCoordinatorRetriesPendingClipboardAfterReconnectWithoutAnotherCopy() async throws {
+        let fixture = ClipboardTestFixture()
+        fixture.transport.failuresRemaining = 1
+        try await fixture.start()
+        await fixture.coordinator.setSharingEnabled(true)
+        fixture.transport.emit(.connected(fixture.remote.id))
+        await fixture.coordinator.setAutomaticDestination(fixture.remote.id)
+        let connected = await eventually {
+            await fixture.coordinator.connectedDeviceIDs().contains(fixture.remote.id)
+        }
+        XCTAssertTrue(connected)
+
+        let representations = [
+            ClipboardRepresentation(kind: .plainText, value: "retry after reconnect")
+        ]
+        fixture.clipboard.emit(ClipboardObservation(
+            changeCount: 1,
+            representations: representations
+        ))
+        let failed = await eventually { fixture.transport.sendAttemptCount == 1 }
+        XCTAssertTrue(failed)
+
+        fixture.transport.emit(.disconnected(fixture.remote.id))
+        let disconnected = await eventually {
+            let connectedDeviceIDs = await fixture.coordinator.connectedDeviceIDs()
+            return !connectedDeviceIDs.contains(fixture.remote.id)
+        }
+        XCTAssertTrue(disconnected)
+        fixture.transport.emit(.connected(fixture.remote.id))
+
+        let retried = await eventually { fixture.transport.sendAttemptCount == 2 }
+        XCTAssertTrue(retried)
+        XCTAssertEqual(fixture.transport.sentEnvelopes.map(\.payload.representations), [
+            representations
+        ])
+        await fixture.coordinator.stop()
+    }
+
+    @MainActor
+    func testCoordinatorAcceptsUpdatesOnlyFromCurrentActivePeer() async throws {
+        let fixture = ClipboardTestFixture()
+        try await fixture.start()
+        await fixture.coordinator.setSharingEnabled(true)
+        fixture.transport.emit(.connected(fixture.remote.id))
+        fixture.transport.emit(.connected(fixture.otherRemote.id))
+        await fixture.coordinator.setAutomaticDestination(fixture.remote.id)
+        let connected = await eventually {
+            await fixture.coordinator.connectedDeviceIDs() == [
+                fixture.remote.id,
+                fixture.otherRemote.id,
+            ]
+        }
+        XCTAssertTrue(connected)
+
+        fixture.transport.emit(.update(
+            fixture.otherRemote.id,
+            fixture.envelope(from: fixture.otherRemote, text: "inactive", revision: 1)
+        ))
+        try? await Task.sleep(for: .milliseconds(30))
+        XCTAssertTrue(fixture.clipboard.appliedPayloads.isEmpty)
+
+        fixture.transport.emit(.update(
+            fixture.remote.id,
+            fixture.envelope(from: fixture.remote, text: "active", revision: 1)
+        ))
+        let firstApplied = await eventually {
+            fixture.clipboard.appliedPayloads.map(\.plainText) == ["active"]
+        }
+        XCTAssertTrue(firstApplied)
+
+        await fixture.coordinator.setAutomaticDestination(fixture.otherRemote.id)
+        fixture.transport.emit(.update(
+            fixture.remote.id,
+            fixture.envelope(from: fixture.remote, text: "no longer active", revision: 2)
+        ))
+        fixture.transport.emit(.update(
+            fixture.otherRemote.id,
+            fixture.envelope(from: fixture.otherRemote, text: "new active", revision: 2)
+        ))
+        let secondApplied = await eventually {
+            fixture.clipboard.appliedPayloads.map(\.plainText) == ["active", "new active"]
+        }
+        XCTAssertTrue(secondApplied)
         await fixture.coordinator.stop()
     }
 
@@ -298,6 +395,7 @@ private enum ClipboardTestError: Error { case failed }
 private final class ClipboardTestFixture {
     let local = DeviceDescriptor(id: DeviceID(), name: "Local")
     let remote = DeviceDescriptor(id: DeviceID(), name: "Remote")
+    let otherRemote = DeviceDescriptor(id: DeviceID(), name: "Other Remote")
     let workspace: WorkspaceSnapshot
     let transport = ClipboardTransportSpy()
     let clipboard = ClipboardServiceSpy()
@@ -308,7 +406,7 @@ private final class ClipboardTestFixture {
             id: WorkspaceID(),
             name: "Clipboard",
             localDeviceID: local.id,
-            devices: [local, remote]
+            devices: [local, remote, otherRemote]
         )
         coordinator = ClipboardCoordinator(transport: transport, clipboard: clipboard)
     }
@@ -322,9 +420,17 @@ private final class ClipboardTestFixture {
     }
 
     func envelope(text: String, revision: UInt64 = 1) -> ClipboardEnvelope {
+        envelope(from: remote, text: text, revision: revision)
+    }
+
+    func envelope(
+        from sender: DeviceDescriptor,
+        text: String,
+        revision: UInt64 = 1
+    ) -> ClipboardEnvelope {
         let representations = [ClipboardRepresentation(kind: .plainText, value: text)]
         let payload = ClipboardPayload(
-            originDeviceID: remote.id,
+            originDeviceID: sender.id,
             revision: revision,
             timestamp: Date(timeIntervalSince1970: 10),
             contentHash: ClipboardSyncEngine.contentHash(for: representations),
@@ -332,7 +438,7 @@ private final class ClipboardTestFixture {
         )
         return ClipboardEnvelope(
             workspaceID: workspace.id,
-            senderDeviceID: remote.id,
+            senderDeviceID: sender.id,
             payload: payload
         )
     }

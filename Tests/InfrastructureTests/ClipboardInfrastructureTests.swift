@@ -244,6 +244,84 @@ final class ClipboardInfrastructureTests: XCTestCase {
         service.stop()
     }
 
+    @MainActor
+    func testSystemClipboardObservesThreeIdenticalLocalCopies() async throws {
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
+        defer { pasteboard.releaseGlobally() }
+        let service = SystemClipboardService(
+            pasteboard: pasteboard,
+            pollingInterval: .seconds(60)
+        )
+        let stream = service.events()
+        var changeCounts = Set<Int>()
+        let expected = [
+            ClipboardRepresentation(kind: .plainText, value: "copy repeatedly")
+        ]
+
+        for copyNumber in 1...3 {
+            pasteboard.clearContents()
+            XCTAssertTrue(pasteboard.setString("copy repeatedly", forType: .string))
+            service.pollNowForTesting()
+
+            let nextObservation = await firstValue(from: stream)
+            let observation = try XCTUnwrap(nextObservation)
+            XCTAssertEqual(
+                observation.representations,
+                expected,
+                "Copy \(copyNumber) should produce the same portable content"
+            )
+            XCTAssertTrue(
+                changeCounts.insert(observation.changeCount).inserted,
+                "Copy \(copyNumber) should have a distinct pasteboard change count"
+            )
+        }
+
+        service.stop()
+    }
+
+    @MainActor
+    func testSystemClipboardAppliesThreeIdenticalRemoteUpdatesWithoutEcho() async {
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
+        defer { pasteboard.releaseGlobally() }
+        let service = SystemClipboardService(
+            pasteboard: pasteboard,
+            pollingInterval: .seconds(60)
+        )
+        let stream = service.events()
+        let representations = [
+            ClipboardRepresentation(kind: .plainText, value: "paste repeatedly")
+        ]
+        var changeCounts = Set<Int>()
+
+        for revision in UInt64(1)...3 {
+            let payload = ClipboardPayload(
+                originDeviceID: DeviceID(),
+                revision: revision,
+                contentHash: ClipboardSyncEngine.contentHash(for: representations),
+                representations: representations
+            )
+            service.apply(payload)
+
+            XCTAssertEqual(pasteboard.string(forType: .string), "paste repeatedly")
+            XCTAssertEqual(
+                pasteboard.pasteboardItems?.first?.string(
+                    forType: SystemClipboardService.originType
+                ),
+                payload.payloadID.rawValue.uuidString
+            )
+            XCTAssertTrue(
+                changeCounts.insert(pasteboard.changeCount).inserted,
+                "Remote update \(revision) should republish identical text"
+            )
+
+            service.pollNowForTesting()
+            let echoed = await firstValue(from: stream, timeout: .milliseconds(100))
+            XCTAssertNil(echoed, "Remote update \(revision) must not be sent back")
+        }
+
+        service.stop()
+    }
+
     private func waitForPort(_ transport: NetworkClipboardTransport) async throws -> NWEndpoint.Port {
         for _ in 0..<200 {
             if let port = transport.activePort { return port }
