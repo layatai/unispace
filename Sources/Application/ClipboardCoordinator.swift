@@ -190,13 +190,6 @@ public actor ClipboardCoordinator {
               connectedPeers.contains(peer),
               let workspace,
               var engine else { return }
-        if automaticDestination == nil {
-            // An authenticated peer that just copied content is the device the
-            // user is actively using. Claim it only when no explicit/control-
-            // derived destination exists; selected peers still remain exclusive.
-            automaticDestination = peer
-        }
-        guard automaticDestination == peer else { return }
         do {
             try envelope.validated(
                 workspaceID: workspace.id,
@@ -209,6 +202,10 @@ public actor ClipboardCoordinator {
             )
             self.engine = engine
             guard shouldApply else { return }
+            // A validated clipboard update is stronger evidence of current
+            // activity than a stale control-derived selection. Follow the most
+            // recent authenticated sender in multi-peer workspaces.
+            automaticDestination = peer
             await clipboard.apply(envelope.payload)
         } catch {
             // Invalid or stale updates are ignored without exposing their contents.

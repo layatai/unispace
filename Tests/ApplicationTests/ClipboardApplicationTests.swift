@@ -4,6 +4,38 @@ import XCTest
 import UniSpaceDomain
 
 final class ClipboardApplicationTests: XCTestCase {
+    func testFrameCodecMatchesWindowsGoldenVector() throws {
+        let workspaceID = WorkspaceID(rawValue: UUID(uuidString: "00112233-4455-6677-8899-AABBCCDDEEFF")!)
+        let senderID = DeviceID(rawValue: UUID(uuidString: "10213243-5465-7687-98A9-BACBDCEDFE0F")!)
+        let representations = [ClipboardRepresentation(kind: .plainText, value: "interop")]
+        let payload = ClipboardPayload(
+            payloadID: ClipboardPayloadID(rawValue: UUID(uuidString: "11223344-5566-7788-99AA-BBCCDDEEFF00")!),
+            originDeviceID: senderID,
+            revision: 42,
+            timestamp: Date(timeIntervalSince1970: 0),
+            contentHash: ClipboardSyncEngine.contentHash(for: representations),
+            representations: representations
+        )
+        let encoded = try ClipboardFrameCodec.encode(ClipboardEnvelope(
+            workspaceID: workspaceID,
+            senderDeviceID: senderID,
+            payload: payload
+        ))
+        let hex = encoded.map { String(format: "%02x", $0) }.joined()
+        let expected = [
+            "00010100112233445566778899aabbccddeeff102132435465768798a9bacbdcedfe0f0000012f",
+            "7b22636f6e74656e7448617368223a22596b59454e714e6a754c4c4368516f6b66793543797778334e",
+            "53696b6f326b6c42743669686f4153384b343d222c226f726967696e4465766963654944223a7b2272",
+            "617756616c7565223a2231303231333234332d353436352d373638372d393841392d4241434244434544",
+            "46453046227d2c227061796c6f61644944223a7b2272617756616c7565223a2231313232333334342d35",
+            "3536362d373738382d393941412d424243434444454546463030227d2c22726570726573656e74617469",
+            "6f6e73223a5b7b226b696e64223a22706c61696e54657874222c2276616c7565223a22696e7465726f",
+            "70227d5d2c227265766973696f6e223a34322c2274696d657374616d70223a22313937302d30312d3031",
+            "5430303a30303a30305a227d",
+        ].joined()
+        XCTAssertEqual(hex, expected)
+    }
+
     @MainActor
     func testFrameCodecRoundTripsAndRejectsMalformedFrames() throws {
         let fixture = ClipboardTestFixture()
@@ -262,7 +294,7 @@ final class ClipboardApplicationTests: XCTestCase {
     }
 
     @MainActor
-    func testCoordinatorAcceptsUpdatesOnlyFromCurrentActivePeer() async throws {
+    func testCoordinatorFollowsLatestAuthenticatedSender() async throws {
         let fixture = ClipboardTestFixture()
         try await fixture.start()
         await fixture.coordinator.setSharingEnabled(true)
@@ -279,33 +311,25 @@ final class ClipboardApplicationTests: XCTestCase {
 
         fixture.transport.emit(.update(
             fixture.otherRemote.id,
-            fixture.envelope(from: fixture.otherRemote, text: "inactive", revision: 1)
-        ))
-        try? await Task.sleep(for: .milliseconds(30))
-        XCTAssertTrue(fixture.clipboard.appliedPayloads.isEmpty)
-
-        fixture.transport.emit(.update(
-            fixture.remote.id,
-            fixture.envelope(from: fixture.remote, text: "active", revision: 1)
+            fixture.envelope(from: fixture.otherRemote, text: "new active", revision: 1)
         ))
         let firstApplied = await eventually {
-            fixture.clipboard.appliedPayloads.map(\.plainText) == ["active"]
+            fixture.clipboard.appliedPayloads.map(\.plainText) == ["new active"]
         }
         XCTAssertTrue(firstApplied)
+        let firstDestination = await fixture.coordinator.automaticDestinationDeviceID()
+        XCTAssertEqual(firstDestination, fixture.otherRemote.id)
 
-        await fixture.coordinator.setAutomaticDestination(fixture.otherRemote.id)
         fixture.transport.emit(.update(
             fixture.remote.id,
-            fixture.envelope(from: fixture.remote, text: "no longer active", revision: 2)
-        ))
-        fixture.transport.emit(.update(
-            fixture.otherRemote.id,
-            fixture.envelope(from: fixture.otherRemote, text: "new active", revision: 2)
+            fixture.envelope(from: fixture.remote, text: "active again", revision: 1)
         ))
         let secondApplied = await eventually {
-            fixture.clipboard.appliedPayloads.map(\.plainText) == ["active", "new active"]
+            fixture.clipboard.appliedPayloads.map(\.plainText) == ["new active", "active again"]
         }
         XCTAssertTrue(secondApplied)
+        let secondDestination = await fixture.coordinator.automaticDestinationDeviceID()
+        XCTAssertEqual(secondDestination, fixture.remote.id)
         await fixture.coordinator.stop()
     }
 
