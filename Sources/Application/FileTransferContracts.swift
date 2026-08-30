@@ -85,10 +85,22 @@ public struct PasteboardFileSelection: Sendable, Equatable {
     }
 }
 
+public enum FilePasteboardPublicationError: Error, Equatable, Sendable {
+    case invalidFileSet
+    case writeRejected
+}
+
 @MainActor
 public protocol FilePasteboard: AnyObject, Sendable {
     func events() -> AsyncStream<PasteboardFileSelection>
     func publishFiles(_ urls: [URL], transferID: TransferID)
+    func publishFilesChecked(_ urls: [URL], transferID: TransferID) throws
+}
+
+public extension FilePasteboard {
+    func publishFilesChecked(_ urls: [URL], transferID: TransferID) throws {
+        publishFiles(urls, transferID: transferID)
+    }
 }
 
 public struct FileTransferSnapshot: Identifiable, Sendable, Equatable {

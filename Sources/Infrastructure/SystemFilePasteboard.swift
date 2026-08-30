@@ -11,6 +11,7 @@ public final class SystemFilePasteboard: FilePasteboard {
 
     private let pasteboard: NSPasteboard
     private let pollingInterval: Duration
+    private let fileManager: FileManager
     private let stream: AsyncStream<PasteboardFileSelection>
     private let continuation: AsyncStream<PasteboardFileSelection>.Continuation
     private var monitorTask: Task<Void, Never>?
@@ -18,10 +19,12 @@ public final class SystemFilePasteboard: FilePasteboard {
 
     public init(
         pasteboard: NSPasteboard = .general,
-        pollingInterval: Duration = .milliseconds(350)
+        pollingInterval: Duration = .milliseconds(350),
+        fileManager: FileManager = .default
     ) {
         self.pasteboard = pasteboard
         self.pollingInterval = pollingInterval
+        self.fileManager = fileManager
         lastObservedChangeCount = pasteboard.changeCount
         var captured: AsyncStream<PasteboardFileSelection>.Continuation?
         stream = AsyncStream { captured = $0 }
@@ -39,20 +42,30 @@ public final class SystemFilePasteboard: FilePasteboard {
     }
 
     public func publishFiles(_ urls: [URL], transferID: TransferID) {
-        guard !urls.isEmpty else { return }
-        let items: [NSPasteboardItem] = urls.map { url in
-            let item = NSPasteboardItem()
-            item.setString(url.absoluteString, forType: .fileURL)
-            item.setString(transferID.rawValue.uuidString, forType: Self.originType)
-            return item
+        try? publishFilesChecked(urls, transferID: transferID)
+    }
+
+    public func publishFilesChecked(_ urls: [URL], transferID: TransferID) throws {
+        guard let urls = validatedLocalFiles(urls) else {
+            throw FilePasteboardPublicationError.invalidFileSet
         }
         pasteboard.clearContents()
-        pasteboard.writeObjects(items)
+        guard pasteboard.writeObjects(urls.map { $0 as NSURL }) else {
+            throw FilePasteboardPublicationError.writeRejected
+        }
+        guard pasteboard.setString(
+            transferID.rawValue.uuidString,
+            forType: Self.originType
+        ) else {
+            pasteboard.clearContents()
+            throw FilePasteboardPublicationError.writeRejected
+        }
         lastObservedChangeCount = pasteboard.changeCount
     }
 
     private func startMonitoringIfNeeded() {
         guard monitorTask == nil else { return }
+        lastObservedChangeCount = pasteboard.changeCount
         monitorTask = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
@@ -88,6 +101,26 @@ public final class SystemFilePasteboard: FilePasteboard {
         }
         guard !urls.isEmpty else { return }
         continuation.yield(PasteboardFileSelection(changeCount: changeCount, urls: urls))
+    }
+
+    private func validatedLocalFiles(_ urls: [URL]) -> [URL]? {
+        guard !urls.isEmpty else { return nil }
+        var normalized: [URL] = []
+        var seen = Set<URL>()
+        for candidate in urls {
+            guard candidate.isFileURL else { return nil }
+            let url = candidate.standardizedFileURL
+            guard seen.insert(url).inserted else { continue }
+            guard fileManager.fileExists(atPath: url.path),
+                  let values = try? url.resourceValues(forKeys: [
+                      .isRegularFileKey,
+                      .isSymbolicLinkKey,
+                  ]),
+                  values.isRegularFile == true,
+                  values.isSymbolicLink != true else { return nil }
+            normalized.append(url)
+        }
+        return normalized.isEmpty ? nil : normalized
     }
 
     func pollNowForTesting() {

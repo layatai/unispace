@@ -72,6 +72,18 @@ final class FileTransferCoordinatorTests: XCTestCase {
         }
     }
 
+    @MainActor
+    func testLegacyPasteboardCheckedPublicationUsesCompatibilityEntryPoint() throws {
+        let pasteboard = LegacyFilePasteboardSpy()
+        let transferID = TransferID()
+        let urls = [URL(fileURLWithPath: "/tmp/legacy.txt")]
+
+        try pasteboard.publishFilesChecked(urls, transferID: transferID)
+
+        XCTAssertEqual(pasteboard.publishedURLs, urls)
+        XCTAssertEqual(pasteboard.publishedTransferID, transferID)
+    }
+
     func testFileTransferCodecRoundTripsAndRejectsInvalidFrames() throws {
         let envelope = FileTransferEnvelope(
             workspaceID: WorkspaceID(),
@@ -216,6 +228,61 @@ final class FileTransferCoordinatorTests: XCTestCase {
             return false
         }
         XCTAssertTrue(verified)
+        await fixture.coordinator.stop()
+    }
+
+    @MainActor
+    func testIncomingTransferRejectsFailedFinderPublication() async throws {
+        let fixture = FileTransferFixture()
+        fixture.pasteboard.publicationError = FilePasteboardPublicationError.writeRejected
+        try await fixture.startAndConnect()
+        let entry = TransferManifestEntry(
+            filename: "received.txt",
+            byteCount: 1,
+            sha256: Data(repeating: 7, count: 32)
+        )
+        let manifest = TransferManifest(
+            workspaceID: fixture.workspace.id,
+            sourceDeviceID: fixture.remote.id,
+            destinationDeviceID: fixture.local.id,
+            entries: [entry]
+        )
+        fixture.transport.emit(.message(
+            fixture.remote.id,
+            fixture.envelope(from: fixture.remote.id, message: .offer(
+                TransferOffer(manifest: manifest)
+            ))
+        ))
+        let requested = await eventually {
+            fixture.transport.messages().contains {
+                if case let .request(request) = $0.message {
+                    return request.transferID == manifest.transferID
+                }
+                return false
+            }
+        }
+        XCTAssertTrue(requested)
+
+        fixture.transport.emit(.message(
+            fixture.remote.id,
+            fixture.envelope(from: fixture.remote.id, message: .transferComplete(
+                TransferCompletion(transferID: manifest.transferID)
+            ))
+        ))
+
+        let failed = await eventually {
+            await fixture.coordinator.snapshots()
+                .first(where: { $0.id == manifest.transferID })?.state == .failed
+        }
+        XCTAssertTrue(failed)
+        let verification = fixture.transport.messages().compactMap { envelope -> TransferVerification? in
+            guard case let .verification(value) = envelope.message,
+                  value.transferID == manifest.transferID else { return nil }
+            return value
+        }.last
+        XCTAssertEqual(verification?.accepted, false)
+        XCTAssertEqual(verification?.failureCode, .stagingFailure)
+        XCTAssertEqual(fixture.pasteboard.publicationAttempts, 1)
         await fixture.coordinator.stop()
     }
 
@@ -583,45 +650,49 @@ final class FileTransferCoordinatorTests: XCTestCase {
 
         await fixture.coordinator.setAutomaticDestination(fixture.remote.id)
 
-        let offered = await eventually {
-            fixture.transport.messages().contains {
-                if case let .offer(value) = $0.message {
-                    return value.manifest.entries.first?.filename == "copied-before-focus.txt"
-                }
-                return false
+        var transferIDs = Set<TransferID>()
+        for copyNumber in 1...3 {
+            if copyNumber > 1 {
+                fixture.pasteboard.emit(PasteboardFileSelection(
+                    changeCount: copyNumber,
+                    urls: [URL(fileURLWithPath: "/tmp/copied-before-focus.txt")]
+                ))
             }
-        }
-        XCTAssertTrue(offered)
 
-        let snapshots = await fixture.coordinator.snapshots()
-        let firstTransfer = try XCTUnwrap(snapshots.first)
-        fixture.transport.emit(.message(
-            fixture.remote.id,
-            fixture.envelope(from: fixture.remote.id, message: .resumeState(
-                TransferResumeState(
-                    transferID: firstTransfer.id,
-                    offsets: [],
-                    completed: true
-                )
+            let offered = await eventually {
+                fixture.transport.messages().compactMap { envelope -> TransferOffer? in
+                    guard case let .offer(offer) = envelope.message else { return nil }
+                    return offer
+                }.count == copyNumber
+            }
+            XCTAssertTrue(offered, "Copy \(copyNumber) should create a new file offer")
+
+            let offer = try XCTUnwrap(fixture.transport.messages().compactMap { envelope -> TransferOffer? in
+                guard case let .offer(value) = envelope.message else { return nil }
+                return value
+            }.last)
+            XCTAssertEqual(offer.manifest.entries.first?.filename, "copied-before-focus.txt")
+            XCTAssertTrue(
+                transferIDs.insert(offer.manifest.transferID).inserted,
+                "Copy \(copyNumber) should use a distinct transfer ID"
+            )
+
+            fixture.transport.emit(.message(
+                fixture.remote.id,
+                fixture.envelope(from: fixture.remote.id, message: .resumeState(
+                    TransferResumeState(
+                        transferID: offer.manifest.transferID,
+                        offsets: [],
+                        completed: true
+                    )
+                ))
             ))
-        ))
-        let completed = await eventually {
-            await fixture.coordinator.snapshots()
-                .first(where: { $0.id == firstTransfer.id })?.state == .completed
+            let completed = await eventually {
+                await fixture.coordinator.snapshots()
+                    .first(where: { $0.id == offer.manifest.transferID })?.state == .completed
+            }
+            XCTAssertTrue(completed, "Copy \(copyNumber) should complete before the next copy")
         }
-        XCTAssertTrue(completed)
-
-        fixture.pasteboard.emit(PasteboardFileSelection(
-            changeCount: 2,
-            urls: [URL(fileURLWithPath: "/tmp/copied-before-focus.txt")]
-        ))
-        let offeredAgain = await eventually {
-            fixture.transport.messages().filter {
-                if case .offer = $0.message { return true }
-                return false
-            }.count == 2
-        }
-        XCTAssertTrue(offeredAgain)
         await fixture.coordinator.stop()
     }
 
@@ -1095,6 +1166,8 @@ private final class FilePasteboardSpy: FilePasteboard {
     private(set) var publishedURLs: [URL] = []
     private(set) var publishedTransferID: TransferID?
     private(set) var eventSubscriptionCount = 0
+    private(set) var publicationAttempts = 0
+    var publicationError: Error?
 
     init() {
         var captured: AsyncStream<PasteboardFileSelection>.Continuation?
@@ -1112,7 +1185,27 @@ private final class FilePasteboardSpy: FilePasteboard {
         publishedTransferID = transferID
     }
 
+    func publishFilesChecked(_ urls: [URL], transferID: TransferID) throws {
+        publicationAttempts += 1
+        if let publicationError { throw publicationError }
+        publishFiles(urls, transferID: transferID)
+    }
+
     func emit(_ selection: PasteboardFileSelection) { continuation.yield(selection) }
+}
+
+@MainActor
+private final class LegacyFilePasteboardSpy: FilePasteboard {
+    private let stream = AsyncStream<PasteboardFileSelection> { $0.finish() }
+    private(set) var publishedURLs: [URL] = []
+    private(set) var publishedTransferID: TransferID?
+
+    func events() -> AsyncStream<PasteboardFileSelection> { stream }
+
+    func publishFiles(_ urls: [URL], transferID: TransferID) {
+        publishedURLs = urls
+        publishedTransferID = transferID
+    }
 }
 
 private extension NSLock {

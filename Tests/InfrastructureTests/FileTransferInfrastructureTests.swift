@@ -164,9 +164,13 @@ final class FileTransferInfrastructureTests: XCTestCase {
     }
 
     @MainActor
-    func testPasteboardMarksReceivedFilesAndDoesNotReemitThem() async {
+    func testPasteboardPublishesFinderURLObjectsAndDoesNotReemitThem() async throws {
         let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
         defer { pasteboard.releaseGlobally() }
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let received = directory.appendingPathComponent("received.txt")
+        try Data("received".utf8).write(to: received)
         let adapter = SystemFilePasteboard(
             pasteboard: pasteboard,
             pollingInterval: .milliseconds(20)
@@ -174,7 +178,7 @@ final class FileTransferInfrastructureTests: XCTestCase {
         let stream = adapter.events()
         let transferID = TransferID()
         adapter.publishFiles(
-            [URL(fileURLWithPath: "/tmp/received.txt")],
+            [received],
             transferID: transferID
         )
 
@@ -182,8 +186,60 @@ final class FileTransferInfrastructureTests: XCTestCase {
             pasteboard.pasteboardItems?.first?.string(forType: SystemFilePasteboard.originType),
             transferID.rawValue.uuidString
         )
+        let finderObjects = pasteboard.readObjects(
+            forClasses: [NSURL.self],
+            options: [.urlReadingFileURLsOnly: true]
+        ) ?? []
+        XCTAssertEqual(
+            finderObjects.compactMap { ($0 as? NSURL).map { $0 as URL } },
+            [received]
+        )
         let result = await firstValue(from: stream, timeout: .milliseconds(100))
         XCTAssertNil(result)
+    }
+
+    @MainActor
+    func testFinderCopyOfSameFileIsObservedEveryTime() async throws {
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
+        defer { pasteboard.releaseGlobally() }
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = directory.appendingPathComponent("Repeated.txt")
+        try Data("repeat".utf8).write(to: source)
+        let adapter = SystemFilePasteboard(
+            pasteboard: pasteboard,
+            pollingInterval: .seconds(60)
+        )
+        let stream = adapter.events()
+        var changeCounts: [Int] = []
+
+        for _ in 0..<3 {
+            pasteboard.clearContents()
+            XCTAssertTrue(pasteboard.writeObjects([source as NSURL]))
+            adapter.pollNowForTesting()
+            let selection = await firstValue(from: stream, timeout: .seconds(1))
+            XCTAssertEqual(selection?.urls, [source.standardizedFileURL])
+            changeCounts.append(try XCTUnwrap(selection?.changeCount))
+        }
+
+        XCTAssertEqual(Set(changeCounts).count, 3)
+    }
+
+    @MainActor
+    func testInvalidPublicationPreservesExistingClipboard() throws {
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
+        defer { pasteboard.releaseGlobally() }
+        pasteboard.clearContents()
+        XCTAssertTrue(pasteboard.setString("sentinel", forType: .string))
+        let adapter = SystemFilePasteboard(pasteboard: pasteboard)
+
+        XCTAssertThrowsError(try adapter.publishFilesChecked(
+            [URL(fileURLWithPath: "/missing/UniSpace.txt")],
+            transferID: TransferID()
+        )) { error in
+            XCTAssertEqual(error as? FilePasteboardPublicationError, .invalidFileSet)
+        }
+        XCTAssertEqual(pasteboard.string(forType: .string), "sentinel")
     }
 
     @MainActor
