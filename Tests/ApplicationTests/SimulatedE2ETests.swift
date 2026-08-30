@@ -26,7 +26,11 @@ final class SimulatedE2ETests: XCTestCase {
             injector: receiverInjector,
             transport: receiverTransport
         )
-        controllerTransport.connect(to: receiver, display: receiverDisplay)
+        controllerTransport.connect(
+            to: receiver,
+            display: receiverDisplay,
+            responseTransport: receiverTransport
+        )
         receiverTransport.connect(to: controller, display: display(deviceID: controllerID))
 
         let epoch = await controller.makeLocalController()
@@ -36,7 +40,7 @@ final class SimulatedE2ETests: XCTestCase {
             displayID: receiverDisplay.id,
             entryEdge: .left,
             normalizedPosition: 0.25,
-            targetCapabilities: [.publicTrackpadGestures]
+            targetCapabilities: [.publicTrackpadGestures, .activationAcknowledgementV1]
         )
 
         XCTAssertTrue(controllerCapture.isSuppressionEnabled)
@@ -204,7 +208,11 @@ final class SimulatedE2ETests: XCTestCase {
 }
 
 private final class SimulatedWireTransport: PeerTransport, @unchecked Sendable {
-    typealias Connection = (coordinator: ControlSessionCoordinator, display: DisplayDescriptor)
+    typealias Connection = (
+        coordinator: ControlSessionCoordinator,
+        display: DisplayDescriptor,
+        responseTransport: SimulatedWireTransport?
+    )
 
     private let localDeviceID: DeviceID
     private let lock = NSLock()
@@ -215,8 +223,14 @@ private final class SimulatedWireTransport: PeerTransport, @unchecked Sendable {
         self.localDeviceID = localDeviceID
     }
 
-    func connect(to coordinator: ControlSessionCoordinator, display: DisplayDescriptor) {
-        lock.withLock { connection = (coordinator, display) }
+    func connect(
+        to coordinator: ControlSessionCoordinator,
+        display: DisplayDescriptor,
+        responseTransport: SimulatedWireTransport? = nil
+    ) {
+        lock.withLock {
+            connection = (coordinator, display, responseTransport)
+        }
     }
 
     func start(localDevice: DeviceDescriptor, workspace: WorkspaceSnapshot, key: Data) async throws {}
@@ -232,11 +246,20 @@ private final class SimulatedWireTransport: PeerTransport, @unchecked Sendable {
         case let .controllerClaim(epoch):
             await connection.coordinator.observeControllerClaim(epoch)
         case let .activate(activation):
-            _ = await connection.coordinator.receiveActivation(
+            let accepted = await connection.coordinator.receiveActivation(
                 activation,
                 from: localDeviceID,
                 targetDisplay: connection.display
             )
+            if let responseTransport = connection.responseTransport {
+                try await responseTransport.send(
+                    ControlEnvelope(message: .activationResult(
+                        sessionID: activation.sessionID,
+                        accepted: accepted
+                    )),
+                    to: localDeviceID
+                )
+            }
         case let .activationResult(sessionID, accepted):
             _ = await connection.coordinator.receiveActivationResult(
                 sessionID: sessionID,

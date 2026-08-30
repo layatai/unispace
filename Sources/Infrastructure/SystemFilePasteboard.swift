@@ -74,15 +74,23 @@ public final class SystemFilePasteboard: FilePasteboard {
 
         var urls: [URL] = []
         var seen = Set<URL>()
-        for item in items {
-            guard let value = item.string(forType: .fileURL),
-                  let url = URL(string: value),
-                  url.isFileURL else { continue }
+        let objects = pasteboard.readObjects(
+            forClasses: [NSURL.self],
+            options: [.urlReadingFileURLsOnly: true]
+        ) ?? []
+        for object in objects {
+            guard let value = object as? NSURL else { continue }
+            let url = value as URL
+            guard url.isFileURL else { continue }
             let normalized = url.standardizedFileURL
             guard seen.insert(normalized).inserted else { continue }
             urls.append(normalized)
         }
         guard !urls.isEmpty else { return }
         continuation.yield(PasteboardFileSelection(changeCount: changeCount, urls: urls))
+    }
+
+    func pollNowForTesting() {
+        poll()
     }
 }

@@ -186,6 +186,51 @@ final class FileTransferInfrastructureTests: XCTestCase {
         XCTAssertNil(result)
     }
 
+    @MainActor
+    func testSharedPasteboardRoutesTextAndFinderFilesWithoutCrossConsumption() async throws {
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
+        defer { pasteboard.releaseGlobally() }
+        let clipboard = SystemClipboardService(
+            pasteboard: pasteboard,
+            pollingInterval: .seconds(60)
+        )
+        let files = SystemFilePasteboard(
+            pasteboard: pasteboard,
+            pollingInterval: .seconds(60)
+        )
+        let clipboardEvents = clipboard.events()
+        let fileEvents = files.events()
+
+        let textItem = NSPasteboardItem()
+        textItem.setString("shared continuity text", forType: .string)
+        pasteboard.clearContents()
+        XCTAssertTrue(pasteboard.writeObjects([textItem]))
+        clipboard.pollNowForTesting()
+        files.pollNowForTesting()
+
+        let text = await firstValue(from: clipboardEvents, timeout: .seconds(1))
+        XCTAssertEqual(text?.representations, [
+            ClipboardRepresentation(kind: .plainText, value: "shared continuity text")
+        ])
+
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = directory.appendingPathComponent("Finder copy.txt")
+        try Data("file payload".utf8).write(to: source)
+        pasteboard.clearContents()
+        XCTAssertTrue(pasteboard.writeObjects([source as NSURL]))
+        clipboard.pollNowForTesting()
+        files.pollNowForTesting()
+
+        let unexpectedText = await firstValue(
+            from: clipboardEvents,
+            timeout: .milliseconds(100)
+        )
+        XCTAssertNil(unexpectedText)
+        let selection = await firstValue(from: fileEvents, timeout: .seconds(1))
+        XCTAssertEqual(selection?.urls, [source.standardizedFileURL])
+    }
+
     func testBonjourServiceNameMeetsDNSServiceLengthLimit() {
         let serviceName = NetworkFileTransferTransport.serviceType
             .split(separator: ".")

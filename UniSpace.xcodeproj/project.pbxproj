@@ -23,6 +23,7 @@
 		1715553FA76B59428C5E1AAA /* SimulatedE2ETests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 256563740902D273A25CC9B0 /* SimulatedE2ETests.swift */; };
 		1717E7750DAD1E6D14EF4CD1 /* WorkspaceReplicaMerger.swift in Sources */ = {isa = PBXBuildFile; fileRef = 955E18CB8A8476625C1772C6 /* WorkspaceReplicaMerger.swift */; };
 		17C45A140C3610C2474A89A7 /* ContinuityView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 78EF074FC7F6C76A69345A71 /* ContinuityView.swift */; };
+		18FE967A9F32A884A7AB69CC /* ControlRoutingPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = A22156FBFA8C341F3E0E3494 /* ControlRoutingPolicy.swift */; };
 		1CF86561870DB5B6B5215E3B /* CGEventInputInjector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FB1C3CA1F6EAACE025F81C8 /* CGEventInputInjector.swift */; };
 		22C3836F82F335609B866861 /* UniSpaceUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5BB0E1195B12A9CCB81CDE1 /* UniSpaceUITests.swift */; };
 		22C43ADAB634554371FF0519 /* FileTransferCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2CB43EB0672129457FEECEC /* FileTransferCoordinatorTests.swift */; };
@@ -304,6 +305,7 @@
 		955E18CB8A8476625C1772C6 /* WorkspaceReplicaMerger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceReplicaMerger.swift; sourceTree = "<group>"; };
 		9714DC0D2D51439743192501 /* PersistentFileSourceProviderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistentFileSourceProviderTests.swift; sourceTree = "<group>"; };
 		9B6E8B1FA2B7DDB5F10F7EDE /* SystemLoginItemController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemLoginItemController.swift; sourceTree = "<group>"; };
+		A22156FBFA8C341F3E0E3494 /* ControlRoutingPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlRoutingPolicy.swift; sourceTree = "<group>"; };
 		A35CD7D5BF4D7C94C7427086 /* ClipboardProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipboardProtocol.swift; sourceTree = "<group>"; };
 		A42489EAE57770BAFD49642F /* ClipboardProtocolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipboardProtocolTests.swift; sourceTree = "<group>"; };
 		A5EF85F3792D7B832147692C /* Contracts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Contracts.swift; sourceTree = "<group>"; };
@@ -562,6 +564,7 @@
 				AC72E0E969F746A48E24DD19 /* ClipboardFrameCodec.swift */,
 				CAC323F46C734473E86D5564 /* ClipboardSyncEngine.swift */,
 				A5EF85F3792D7B832147692C /* Contracts.swift */,
+				A22156FBFA8C341F3E0E3494 /* ControlRoutingPolicy.swift */,
 				895B8982AB6DAE8ACF98E4F0 /* ControlSessionCoordinator.swift */,
 				B8E5A6E1D4BB67A7DC9361AD /* EdgeRouter.swift */,
 				7F7715DBADB331DC400DEB3E /* FileTransferContracts.swift */,
@@ -905,6 +908,7 @@
 				0062445B03508AAB39A13C1E /* ClipboardFrameCodec.swift in Sources */,
 				11C75A2AAACF14ABBBCB6DE8 /* ClipboardSyncEngine.swift in Sources */,
 				24B33FD1749F833343D4F583 /* Contracts.swift in Sources */,
+				18FE967A9F32A884A7AB69CC /* ControlRoutingPolicy.swift in Sources */,
 				F74B32ADBD01F401851A3406 /* ControlSessionCoordinator.swift in Sources */,
 				29CE3E95448FF99F748E7C04 /* EdgeRouter.swift in Sources */,
 				365AC41D407C6034376F50A5 /* FileTransferContracts.swift in Sources */,
