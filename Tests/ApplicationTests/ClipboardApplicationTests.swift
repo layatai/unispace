@@ -322,7 +322,7 @@ final class ClipboardApplicationTests: XCTestCase {
 
         fixture.transport.emit(.update(
             fixture.remote.id,
-            fixture.envelope(from: fixture.remote, text: "active again", revision: 1)
+            fixture.envelope(from: fixture.remote, text: "active again", revision: 2)
         ))
         let secondApplied = await eventually {
             fixture.clipboard.appliedPayloads.map(\.plainText) == ["new active", "active again"]

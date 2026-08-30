@@ -67,13 +67,12 @@ final class FileTransferViewModel: ObservableObject {
     }
 
     var effectiveDestinationID: DeviceID? {
-        if let selectedDestinationID,
-           connectedDeviceIDs.contains(selectedDestinationID) {
-            return selectedDestinationID
-        }
-        return candidateDevices.first(where: {
-            connectedDeviceIDs.contains($0.id)
-        })?.id
+        FileTransferDestinationResolver.resolve(
+            selectedDeviceID: selectedDestinationID,
+            continuityTargetID: nil,
+            candidates: candidateDevices,
+            connectedDeviceIDs: connectedDeviceIDs
+        )
     }
 
     func bind(to appModel: AppModel) {
@@ -231,7 +230,6 @@ final class FileTransferViewModel: ObservableObject {
         if selectedDestinationID == nil, let inferred = appModel.continuityTargetID {
             selectedDestinationID = inferred
         }
-        await coordinator.setAutomaticDestination(selectedDestinationID ?? appModel.continuityTargetID)
 
         guard let workspace = appModel.workspace else {
             reportedConfigurationFailureWorkspaceID = nil
@@ -253,17 +251,25 @@ final class FileTransferViewModel: ObservableObject {
                 key: key,
                 capabilities: [.fileTransferV1]
             )
-            guard configuration != configuredWorkspace else { return }
-            try await coordinator.start(
-                localDevice: configuration.localDevice,
-                workspace: configuration.workspace,
-                key: configuration.key
+            if configuration != configuredWorkspace {
+                try await coordinator.start(
+                    localDevice: configuration.localDevice,
+                    workspace: configuration.workspace,
+                    key: configuration.key
+                )
+                configuredWorkspace = configuration
+                reportedConfigurationFailureWorkspaceID = nil
+                let recovered = await coordinator.snapshots()
+                records = Dictionary(uniqueKeysWithValues: recovered.map { ($0.id, $0) })
+                sortTransfers()
+            }
+            let destination = FileTransferDestinationResolver.resolve(
+                selectedDeviceID: selectedDestinationID,
+                continuityTargetID: appModel.continuityTargetID,
+                candidates: candidateDevices,
+                connectedDeviceIDs: connectedDeviceIDs
             )
-            configuredWorkspace = configuration
-            reportedConfigurationFailureWorkspaceID = nil
-            let recovered = await coordinator.snapshots()
-            records = Dictionary(uniqueKeysWithValues: recovered.map { ($0.id, $0) })
-            sortTransfers()
+            await coordinator.setAutomaticDestination(destination)
         } catch {
             configuredWorkspace = nil
             await coordinator.stop()
