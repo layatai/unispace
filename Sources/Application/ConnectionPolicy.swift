@@ -51,6 +51,11 @@ public enum ControlSessionPhase: String, Sendable, Equatable {
     case receiving
 }
 
+public enum RealtimeConnectionRole: Sendable, Equatable {
+    case dialer
+    case listener
+}
+
 public struct ControlSessionSnapshot: Sendable, Equatable {
     public let phase: ControlSessionPhase
     public let peerID: DeviceID?

@@ -627,7 +627,7 @@ final class InfrastructureTests: XCTestCase {
         )
         let server = QUICRealtimeTransport(listenPort: .any, directPort: .any, enableBonjour: false)
         try server.start(localDevice: serverDevice, workspace: serverWorkspace, key: key)
-        server.setDesiredPeer(clientID)
+        server.setDesiredPeer(clientID, shouldDial: false)
         let port = try await waitForRealtimePort(of: server)
 
         let routedServer = DeviceDescriptor(
@@ -663,7 +663,7 @@ final class InfrastructureTests: XCTestCase {
             if source == clientID, incoming == frame { received.fulfill() }
         }
         try client.start(localDevice: clientDevice, workspace: clientWorkspace, key: key)
-        client.setDesiredPeer(serverID)
+        client.setDesiredPeer(serverID, shouldDial: true)
 
         var sent = false
         for _ in 0..<100 where !sent {
@@ -1580,7 +1580,7 @@ final class InfrastructureTests: XCTestCase {
         await transport.stop()
     }
 
-    func testCrossPlatformPointerLaneAuthenticatesAndDeliversLatestState() async throws {
+    func testAuthenticatedPointerLanePreservesWindowsInitiatedFlow() async throws {
         let workspaceID = WorkspaceID()
         let key = PairingCryptoSession.randomData(count: 32)
         let macID = DeviceID()
@@ -1598,10 +1598,10 @@ final class InfrastructureTests: XCTestCase {
             localDeviceID: macID,
             devices: [mac, windows]
         )
-        let transport = CrossPlatformPointerTransport(listenPort: .any)
+        let transport = AuthenticatedPointerTransport(listenPort: .any)
         try transport.start(localDevice: mac, workspace: workspace, key: key)
         defer { transport.stop() }
-        let pointerPort = try await waitForCrossPlatformPointerPort(of: transport)
+        let pointerPort = try await waitForAuthenticatedPointerPort(of: transport)
 
         let rawClient = NWConnection(
             host: "127.0.0.1",
@@ -1664,6 +1664,113 @@ final class InfrastructureTests: XCTestCase {
         XCTAssertFalse(sentToUnknownDevice)
         await fulfillment(of: [received], timeout: 3)
         transport.stop()
+    }
+
+    func testAuthenticatedPointerLaneLetsMacControllerDialReceiver() async throws {
+        let workspaceID = WorkspaceID()
+        let key = PairingCryptoSession.randomData(count: 32)
+        let controllerID = DeviceID()
+        let receiverID = DeviceID()
+        let controller = DeviceDescriptor(
+            id: controllerID,
+            name: "Controller",
+            capabilities: [.udpPointerV2],
+            platform: .macOS
+        )
+        let receiver = DeviceDescriptor(
+            id: receiverID,
+            name: "Receiver",
+            capabilities: [.udpPointerV2],
+            platform: .macOS
+        )
+        let receiverWorkspace = WorkspaceSnapshot(
+            id: workspaceID,
+            name: "Pointer",
+            localDeviceID: receiverID,
+            devices: [controller, receiver]
+        )
+        let receiverTransport = AuthenticatedPointerTransport(
+            listenPort: .any,
+            directPort: .any
+        )
+        try receiverTransport.start(localDevice: receiver, workspace: receiverWorkspace, key: key)
+        defer { receiverTransport.stop() }
+        let receiverPort = try await waitForAuthenticatedPointerPort(of: receiverTransport)
+
+        let routedReceiver = DeviceDescriptor(
+            id: receiverID,
+            name: receiver.name,
+            peerAddresses: [try PeerAddress("127.0.0.1")],
+            capabilities: [.udpPointerV2],
+            platform: .macOS
+        )
+        let controllerWorkspace = WorkspaceSnapshot(
+            id: workspaceID,
+            name: "Pointer",
+            localDeviceID: controllerID,
+            devices: [controller, routedReceiver]
+        )
+        let controllerTransport = AuthenticatedPointerTransport(
+            listenPort: .any,
+            directPort: receiverPort
+        )
+        defer { controllerTransport.stop() }
+        let received = expectation(description: "Mac receiver got pointer state")
+        let frame = PortableRealtimePointerFrame(
+            workspaceID: workspaceID,
+            sessionID: SessionID(),
+            controllerID: controllerID,
+            epoch: .init(generation: 1, controllerID: controllerID),
+            generation: 2,
+            sequence: 3,
+            deltaX: 4,
+            deltaY: -5,
+            cumulativeDeltaX: 14,
+            cumulativeDeltaY: -15,
+            absoluteX: 640,
+            absoluteY: 480,
+            timestampNanos: 6
+        )
+        try controllerTransport.start(
+            localDevice: controller,
+            workspace: controllerWorkspace,
+            key: key
+        )
+        controllerTransport.setDesiredPeer(receiverID, shouldDial: true)
+
+        var prewarmed = false
+        for _ in 0..<100 where !prewarmed {
+            prewarmed = try await controllerTransport.send(frame, to: receiverID)
+            if !prewarmed { try await Task.sleep(for: .milliseconds(20)) }
+        }
+        XCTAssertTrue(prewarmed, "The receiver rejected UDP that overtook activation")
+        receiverTransport.setDesiredPeer(controllerID, shouldDial: false)
+        let activeFrame = PortableRealtimePointerFrame(
+            workspaceID: frame.workspaceID,
+            sessionID: frame.sessionID,
+            controllerID: frame.controllerID,
+            epoch: frame.epoch,
+            generation: frame.generation,
+            sequence: frame.sequence + 1,
+            deltaX: frame.deltaX,
+            deltaY: frame.deltaY,
+            cumulativeDeltaX: frame.cumulativeDeltaX,
+            cumulativeDeltaY: frame.cumulativeDeltaY,
+            absoluteX: frame.absoluteX,
+            absoluteY: frame.absoluteY,
+            timestampNanos: frame.timestampNanos
+        )
+        receiverTransport.frameHandler = { source, incoming in
+            if source == controllerID, incoming == activeFrame { received.fulfill() }
+        }
+
+        var sent = false
+        for _ in 0..<100 where !sent {
+            sent = try await controllerTransport.send(activeFrame, to: receiverID)
+            if !sent { try await Task.sleep(for: .milliseconds(20)) }
+        }
+        XCTAssertTrue(sent, "The controller-owned UDP lane did not authenticate")
+        await fulfillment(of: [received], timeout: 3)
     }
 
     private func display(id: DisplayID, deviceID: DeviceID) -> DisplayDescriptor {
@@ -1739,14 +1846,14 @@ private func waitForRealtimePort(of transport: QUICRealtimeTransport) async thro
     throw XCTSkip("Realtime QUIC listener did not become ready")
 }
 
-private func waitForCrossPlatformPointerPort(
-    of transport: CrossPlatformPointerTransport
+private func waitForAuthenticatedPointerPort(
+    of transport: AuthenticatedPointerTransport
 ) async throws -> NWEndpoint.Port {
     for _ in 0..<100 {
         if let port = transport.activePort { return port }
         try await Task.sleep(for: .milliseconds(20))
     }
-    throw InfrastructureTestFailure.listenerNotReady("Windows pointer listener")
+    throw InfrastructureTestFailure.listenerNotReady("Authenticated pointer listener")
 }
 
 private enum InfrastructureTestFailure: Error {

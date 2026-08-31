@@ -75,6 +75,7 @@
 		8E3850CC638FBADFE66DFE00 /* SystemTailnetAddressProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E450FB99AE7F4C9BB087CB4 /* SystemTailnetAddressProvider.swift */; };
 		8E6BA003D246813AC1906B0B /* FrameCodec.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1425648D0C5F8712AC268 /* FrameCodec.swift */; };
 		8E8D0D149CC8932E23A6D7DC /* FileWorkspaceStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6BD24036F75164EC8ED3CE84 /* FileWorkspaceStore.swift */; };
+		94F94E0629103ADDC5F8F32D /* AuthenticatedPointerTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3CB4B943AD906BC099B164E8 /* AuthenticatedPointerTransport.swift */; };
 		9B0F95C15B4BECBD8BBED6DE /* TransferCenterView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 448153996FA9A3A4DC5A90F0 /* TransferCenterView.swift */; };
 		9C4AE39AE934CEDF88992640 /* UniSpaceApplication.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = CD69866EFD7AE9229BB70567 /* UniSpaceApplication.framework */; };
 		A3D52A32EFB3044F88769084 /* UniSpaceDomain.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D0CF733F292C646448A74827 /* UniSpaceDomain.framework */; };
@@ -85,7 +86,6 @@
 		AC007143369DCAF64CBBA867 /* SystemPermissionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9BC99509AFF12E2820267B0 /* SystemPermissionService.swift */; };
 		AFDC60F8666AE6E6C9B7DBE9 /* SettingsRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7F83A6EAED5A346AA0A2F73 /* SettingsRootView.swift */; };
 		B32FE24449F28948AA7AF7CE /* UniSpaceDomain.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D0CF733F292C646448A74827 /* UniSpaceDomain.framework */; };
-		B35CA45B94A61215A5647A21 /* CrossPlatformPointerTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 337227C68BC5632299CFAA6F /* CrossPlatformPointerTransport.swift */; };
 		B35E9D0EFFE55D974ED02498 /* FileTransferInfrastructureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A76232103B3515AEFE9323D /* FileTransferInfrastructureTests.swift */; };
 		B41063357019F965414B17AF /* Identifiers.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAE63ADE4DBD602BB708A723 /* Identifiers.swift */; };
 		B5D02F54E1C4E6A95FCF65CA /* ContinuityContextSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEE21E7D2C9D729B2FA16FC3 /* ContinuityContextSnapshot.swift */; };
@@ -287,10 +287,10 @@
 		2A76232103B3515AEFE9323D /* FileTransferInfrastructureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileTransferInfrastructureTests.swift; sourceTree = "<group>"; };
 		2CF070D689C1AA7C27334F7E /* WorkspaceLifecycle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceLifecycle.swift; sourceTree = "<group>"; };
 		32B913D6ED478D7DC6D20CCE /* NetworkClipboardTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NetworkClipboardTransport.swift; sourceTree = "<group>"; };
-		337227C68BC5632299CFAA6F /* CrossPlatformPointerTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrossPlatformPointerTransport.swift; sourceTree = "<group>"; };
 		35A90BE2C791C3DCDC9D0E4B /* FileTransferPortableInteropTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileTransferPortableInteropTests.swift; sourceTree = "<group>"; };
 		3705E48046B8D56DACF3CF21 /* PairingNetworkService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingNetworkService.swift; sourceTree = "<group>"; };
 		38E342977FC8695FF8EE7EF6 /* ContinuityWorkspaceConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContinuityWorkspaceConfiguration.swift; sourceTree = "<group>"; };
+		3CB4B943AD906BC099B164E8 /* AuthenticatedPointerTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthenticatedPointerTransport.swift; sourceTree = "<group>"; };
 		448153996FA9A3A4DC5A90F0 /* TransferCenterView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransferCenterView.swift; sourceTree = "<group>"; };
 		469284CBAF267B56A4B56BBA /* WorkspaceReplicaMergerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceReplicaMergerTests.swift; sourceTree = "<group>"; };
 		478444AE3F889D2F9D43B479 /* PortableInputMapper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PortableInputMapper.swift; sourceTree = "<group>"; };
@@ -551,11 +551,11 @@
 		9E66C956860CBBB2058449B3 /* Infrastructure */ = {
 			isa = PBXGroup;
 			children = (
+				3CB4B943AD906BC099B164E8 /* AuthenticatedPointerTransport.swift */,
 				C4AC57E967E60EA86351A838 /* CGEventInputCapture.swift */,
 				4FB1C3CA1F6EAACE025F81C8 /* CGEventInputInjector.swift */,
 				BAE6F2A5F3EBA813F7D0C9A5 /* CheckpointingTransferStore.swift */,
 				4DC7CDECCF5F3E49CB27E553 /* ConnectionRetrySchedule.swift */,
-				337227C68BC5632299CFAA6F /* CrossPlatformPointerTransport.swift */,
 				6BD24036F75164EC8ED3CE84 /* FileWorkspaceStore.swift */,
 				6546C790629F2520FF8A74A1 /* KeychainTrustStore.swift */,
 				32B913D6ED478D7DC6D20CCE /* NetworkClipboardTransport.swift */,
@@ -999,11 +999,11 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				94F94E0629103ADDC5F8F32D /* AuthenticatedPointerTransport.swift in Sources */,
 				A90B7085E683AE39234AEF0F /* CGEventInputCapture.swift in Sources */,
 				1CF86561870DB5B6B5215E3B /* CGEventInputInjector.swift in Sources */,
 				4B9377363BC8B881C0979AEC /* CheckpointingTransferStore.swift in Sources */,
 				3A880F050C6A00143E1A1765 /* ConnectionRetrySchedule.swift in Sources */,
-				B35CA45B94A61215A5647A21 /* CrossPlatformPointerTransport.swift in Sources */,
 				8E8D0D149CC8932E23A6D7DC /* FileWorkspaceStore.swift in Sources */,
 				350D80ED00B86BF2137208A8 /* KeychainTrustStore.swift in Sources */,
 				F903B1C9240B0D33456CB138 /* NetworkClipboardTransport.swift in Sources */,

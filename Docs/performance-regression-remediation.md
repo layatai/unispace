@@ -8,6 +8,22 @@
 - Keep clipboard and file-transfer recovery independent from remote-control input.
 - Preserve the existing macOS and Macifier wire protocols.
 
+## Fox production evidence
+
+The notarized 1.1.4 build authenticated the Fox control connection, but its
+QUIC realtime lane failed before sending a packet. Network.framework reported
+TLS minimum 1.3 with maximum 1.2 and rejected every attempt with
+`NO_SUPPORTED_VERSIONS_ENABLED`. The loopback QUIC integration tests pass in
+both Debug and optimized Release, so they do not cover this routed-endpoint
+failure.
+
+Pointer motion consequently used the reliable TCP control socket. On Fox that
+socket averaged 73–124 ms RTT while a direct Tailscale probe took 17 ms; the
+socket accumulated 4.3 MiB retransmitted and 21.7 MiB out-of-order. Samples on
+both Macs showed 9–16% CPU in pointer encryption, TCP receive/decode, event-tap
+suppression, and injection. TCP head-of-line blocking is the direct cause of
+the visible pointer lag.
+
 ## Connection ownership
 
 | Connection | Proactive dial owner |
@@ -15,7 +31,8 @@
 | macOS controller to macOS receiver | Controller Mac |
 | macOS receiver to macOS receiver | Neither |
 | Macifier Windows to macOS controller | Macifier, targeting the accepted controller only |
-| Realtime pointer | Active controller, for the active target only |
+| Authenticated UDP pointer | Active controller, for the active target only |
+| Legacy QUIC pointer | Active controller only when the peer lacks UDP pointer v2 |
 | Clipboard and file transfer | Current continuity target or explicit transfer destination only |
 
 The last accepted controller is persisted per workspace. A workspace without a
@@ -46,9 +63,13 @@ workspace or key revision changes. Published properties are assigned only when
 their values differ.
 
 Secondary transports keep passive listeners but dial only their desired peer.
-Realtime connects only for an activating or active control session. Clipboard
-connects only while sharing has a target. File transfer connects only to the
-selected or automatic destination.
+Realtime connects only for an activating or active control session. Modern
+macOS peers use the existing authenticated, replay-protected UDP pointer-v2
+wire format already supported by Macifier. The receiver listens passively; the
+controller is the sole Mac dialer. QUIC remains a compatibility fallback for a
+peer that does not advertise UDP pointer v2. Clipboard connects only while
+sharing has a target. File transfer connects only to the selected or automatic
+destination.
 
 ## Regression gates
 
@@ -61,6 +82,8 @@ selected or automatic destination.
 - Delayed activation preserves activation-before-input ordering with bounded
   buffering, no heartbeat loss, and no pointer stall above 50 ms.
 - Existing unit, coverage, UI, native-input, and Windows CI gates remain intact.
+- A routed Fox session sends pointer state over UDP 61341, does not retry QUIC
+  61339, and keeps pointer delivery independent from the TCP control RTT.
 
 ## Delivery
 

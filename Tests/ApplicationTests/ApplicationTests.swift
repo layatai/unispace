@@ -616,12 +616,13 @@ final class ApplicationTests: XCTestCase {
         let local = DeviceID()
         let remote = DeviceID()
         let injector = InjectorSpy()
+        let transport = TransportSpy()
         let coordinator = ControlSessionCoordinator(
             localDeviceID: local,
             workspaceID: WorkspaceID(),
             capture: CaptureSpy(),
             injector: injector,
-            transport: TransportSpy()
+            transport: transport
         )
         let epoch = ControllerEpoch(generation: 1, controllerID: remote)
         await coordinator.observeControllerClaim(epoch)
@@ -667,6 +668,9 @@ final class ApplicationTests: XCTestCase {
         XCTAssertFalse(mismatchedDisplay)
         XCTAssertTrue(accepted)
         XCTAssertEqual(injector.activationCount, 1)
+        XCTAssertEqual(transport.realtimePeerIDs.last ?? nil, remote)
+        XCTAssertEqual(transport.realtimeRoles.last, .listener)
+        XCTAssertFalse(transport.realtimeRoles.contains(.dialer))
         guard case .receiving = await coordinator.currentState() else {
             return XCTFail("Ready receiver must enter the receiving state")
         }
@@ -741,6 +745,8 @@ final class ApplicationTests: XCTestCase {
 
         XCTAssertEqual(transport.realtimeFrames.count, 1)
         XCTAssertEqual(transport.realtimeFrames.first?.cumulativeDeltaX, 2)
+        XCTAssertEqual(transport.realtimePeerIDs.last ?? nil, remote)
+        XCTAssertEqual(transport.realtimeRoles.last, .dialer)
         XCTAssertEqual(transport.frames.map(\.event), [
             .mouseButton(button: .left, isDown: true, clickCount: 1),
             .pointerMove(deltaX: 5, deltaY: 0, absoluteX: 17, absoluteY: 11)
@@ -1466,9 +1472,13 @@ private final class TransportSpy: PeerTransport, @unchecked Sendable {
     private let useRealtime: Bool
     private var storedFrames: [InputFrame] = []
     private var storedRealtimeFrames: [RealtimePointerFrame] = []
+    private var storedRealtimePeerIDs: [DeviceID?] = []
+    private var storedRealtimeRoles: [RealtimeConnectionRole] = []
     private var storedControlMessages: [ControlMessage] = []
     var frames: [InputFrame] { lock.withLock { storedFrames } }
     var realtimeFrames: [RealtimePointerFrame] { lock.withLock { storedRealtimeFrames } }
+    var realtimePeerIDs: [DeviceID?] { lock.withLock { storedRealtimePeerIDs } }
+    var realtimeRoles: [RealtimeConnectionRole] { lock.withLock { storedRealtimeRoles } }
     var controlMessages: [ControlMessage] { lock.withLock { storedControlMessages } }
     init(frameSendError: Error? = nil, useRealtime: Bool = false) {
         self.frameSendError = frameSendError
@@ -1477,6 +1487,12 @@ private final class TransportSpy: PeerTransport, @unchecked Sendable {
     func start(localDevice: DeviceDescriptor, workspace: WorkspaceSnapshot, key: Data) async throws {}
     func stop() async {}
     func reconnect(to deviceID: DeviceID) {}
+    func setRealtimePeer(_ deviceID: DeviceID?, role: RealtimeConnectionRole) {
+        lock.withLock {
+            storedRealtimePeerIDs.append(deviceID)
+            storedRealtimeRoles.append(role)
+        }
+    }
     func events() -> AsyncStream<PeerEvent> { stream }
     func send(_ envelope: ControlEnvelope, to deviceID: DeviceID) async throws {
         lock.withLock { storedControlMessages.append(envelope.message) }

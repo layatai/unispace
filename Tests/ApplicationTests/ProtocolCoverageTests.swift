@@ -391,6 +391,7 @@ final class ProtocolCoverageTests: XCTestCase {
         XCTAssertEqual(portableRealtime.generation, 2)
         XCTAssertEqual(portableRealtime.cumulativeDeltaX, 6)
         XCTAssertEqual(portableRealtime.absoluteY, 9)
+        XCTAssertEqual(PortableInputMapper.map(portableRealtime), realtime)
     }
 
     func testCodecRejectsEveryInvalidHeaderAndProtocolVersion() throws {

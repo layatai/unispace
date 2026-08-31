@@ -166,7 +166,7 @@ public actor ControlSessionCoordinator {
             targetCapabilities: targetCapabilities
         )
         capture.setSuppressionEnabled(true)
-        transport.setRealtimePeer(target)
+        transport.setRealtimePeer(target, role: .dialer)
         let supportsExplicitAcknowledgement = targetCapabilities.contains(.activationAcknowledgementV1)
         let activationResults = (requiresActivationConfirmation || supportsExplicitAcknowledgement)
             ? beginActivationWait(target: target, sessionID: sessionID)
@@ -253,7 +253,7 @@ public actor ControlSessionCoordinator {
             normalizedPosition: activation.normalizedPosition
         )
         setState(.receiving(epoch: epoch, source: source, session: activation.sessionID))
-        transport.setRealtimePeer(source)
+        transport.setRealtimePeer(source, role: .listener)
         lastHeartbeatNanos = clock.nowNanoseconds()
         startWatchdog(source: source, sessionID: activation.sessionID)
         return true
@@ -457,7 +457,7 @@ public actor ControlSessionCoordinator {
         watchdogTask?.cancel()
         watchdogTask = nil
         activeControlRoute = nil
-        transport.setRealtimePeer(nil)
+        transport.setRealtimePeer(nil, role: .listener)
         currentFlags = 0
         smoothedHeartbeatIntervalNanos = nil
         smoothedRoundTripNanos = nil

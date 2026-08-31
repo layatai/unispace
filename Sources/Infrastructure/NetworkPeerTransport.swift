@@ -88,7 +88,7 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
     private var deferredAnnouncements: [ObjectIdentifier: DeferredAnnouncement] = [:]
     private var supersededConnections = Set<ObjectIdentifier>()
     private var realtimeTransport: QUICRealtimeTransport?
-    private var crossPlatformPointerTransport: CrossPlatformPointerTransport?
+    private var authenticatedPointerTransport: AuthenticatedPointerTransport?
     private var running = false
 
     public init(
@@ -223,7 +223,7 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
                     realtimeTransport = realtime
                     return desiredRealtimePeerID
                 }
-                realtime.setDesiredPeer(desiredPeer)
+                realtime.setDesiredPeer(desiredPeer, shouldDial: desiredPeer != nil)
             } catch {
                 emit(.health(nil, .init(
                     health: .degraded,
@@ -233,18 +233,19 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
             }
         }
         if enableRealtime,
-           workspace.devices.contains(where: {
-               $0.platform == .windows && $0.capabilities.contains(.udpPointerV2)
-           }) {
+           workspace.devices.contains(where: { $0.capabilities.contains(.udpPointerV2) }) {
             do {
-                let pointerTransport = CrossPlatformPointerTransport()
+                let pointerTransport = AuthenticatedPointerTransport()
+                pointerTransport.frameHandler = { [weak self] source, frame in
+                    self?.emit(.realtimeInput(source, PortableInputMapper.map(frame)))
+                }
                 try pointerTransport.start(localDevice: localDevice, workspace: workspace, key: currentKey)
-                lock.withLock { crossPlatformPointerTransport = pointerTransport }
+                lock.withLock { authenticatedPointerTransport = pointerTransport }
             } catch {
                 emit(.health(nil, .init(
                     health: .degraded,
                     transport: .tcp,
-                    detail: "Windows UDP pointer lane unavailable; using reliable input"
+                    detail: "UDP pointer lane unavailable; using reliable input"
                 )))
             }
         }
@@ -287,14 +288,17 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
         }
     }
 
-    public func setRealtimePeer(_ deviceID: DeviceID?) {
+    public func setRealtimePeer(_ deviceID: DeviceID?, role: RealtimeConnectionRole) {
         queue.async { [weak self] in
             guard let self else { return }
-            let realtime = self.lock.withLock { () -> QUICRealtimeTransport? in
+            let lanes = self.lock.withLock { () -> (QUICRealtimeTransport?, AuthenticatedPointerTransport?, Bool) in
                 self.desiredRealtimePeerID = deviceID
-                return self.realtimeTransport
+                let supportsUDP = deviceID.flatMap { self.knownPeers[$0] }?.capabilities.contains(.udpPointerV2) == true
+                return (self.realtimeTransport, self.authenticatedPointerTransport, supportsUDP)
             }
-            realtime?.setDesiredPeer(deviceID)
+            let shouldDial = role == .dialer
+            lanes.1?.setDesiredPeer(deviceID, shouldDial: shouldDial)
+            lanes.0?.setDesiredPeer(lanes.2 ? nil : deviceID, shouldDial: shouldDial)
         }
     }
 
@@ -337,12 +341,16 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
 
     @discardableResult
     public func sendRealtime(_ frame: RealtimePointerFrame, to deviceID: DeviceID) async throws -> Bool {
+        let supportsUDP = lock.withLock {
+            knownPeers[deviceID]?.capabilities.contains(.udpPointerV2) == true
+        }
+        if supportsUDP,
+           let pointerTransport = lock.withLock({ authenticatedPointerTransport }),
+           try await pointerTransport.send(PortableInputMapper.map(frame), to: deviceID) {
+            return true
+        }
         if isWindowsPeer(deviceID) {
             let portable = PortableInputMapper.map(frame)
-            if let pointerTransport = lock.withLock({ crossPlatformPointerTransport }),
-               try await pointerTransport.send(portable, to: deviceID) {
-                return true
-            }
             try await send(data: WireFrameCodec.encodePortableRealtimePointer(portable), to: deviceID)
             return false
         }
@@ -370,9 +378,9 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
     }
 
     private func stopSynchronously() {
-        let values: (NWListener?, NWListener?, NWListener?, NWBrowser?, NWBrowser?, QUICRealtimeTransport?, CrossPlatformPointerTransport?, [SecurePeerConnection]) = lock.withLock {
+        let values: (NWListener?, NWListener?, NWListener?, NWBrowser?, NWBrowser?, QUICRealtimeTransport?, AuthenticatedPointerTransport?, [SecurePeerConnection]) = lock.withLock {
             let active = Array(connections.values) + Array(pendingConnections.values)
-            let values = (listener, quicListener, crossPlatformQUICListener, browser, quicBrowser, realtimeTransport, crossPlatformPointerTransport, active)
+            let values = (listener, quicListener, crossPlatformQUICListener, browser, quicBrowser, realtimeTransport, authenticatedPointerTransport, active)
             listener = nil
             quicListener = nil
             crossPlatformQUICListener = nil
@@ -381,7 +389,7 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
             browser = nil
             quicBrowser = nil
             realtimeTransport = nil
-            crossPlatformPointerTransport = nil
+            authenticatedPointerTransport = nil
             localDevice = nil
             workspaceID = nil
             key = nil

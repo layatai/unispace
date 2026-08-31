@@ -33,6 +33,24 @@ public enum PortableInputMapper {
         )
     }
 
+    public static func map(_ frame: PortableRealtimePointerFrame) -> RealtimePointerFrame {
+        RealtimePointerFrame(
+            workspaceID: frame.workspaceID,
+            sessionID: frame.sessionID,
+            controllerID: frame.controllerID,
+            epoch: frame.epoch,
+            generation: frame.generation,
+            sequence: frame.sequence,
+            deltaX: frame.deltaX,
+            deltaY: frame.deltaY,
+            cumulativeDeltaX: frame.cumulativeDeltaX,
+            cumulativeDeltaY: frame.cumulativeDeltaY,
+            absoluteX: frame.absoluteX,
+            absoluteY: frame.absoluteY,
+            timestampNanos: frame.timestampNanos
+        )
+    }
+
     public static func map(_ event: InputEvent) -> PortableInputEvent? {
         switch event {
         case let .pointerMove(deltaX, deltaY, absoluteX, absoluteY):

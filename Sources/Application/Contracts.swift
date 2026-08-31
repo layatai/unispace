@@ -110,7 +110,7 @@ public protocol PeerTransport: Sendable {
     func start(localDevice: DeviceDescriptor, workspace: WorkspaceSnapshot, key: Data) async throws
     func stop() async
     func updateConnectionPolicy(_ policy: PeerConnectionPolicy)
-    func setRealtimePeer(_ deviceID: DeviceID?)
+    func setRealtimePeer(_ deviceID: DeviceID?, role: RealtimeConnectionRole)
     func reconnect(to deviceID: DeviceID)
     func events() -> AsyncStream<PeerEvent>
     func send(_ envelope: ControlEnvelope, to deviceID: DeviceID) async throws
@@ -121,7 +121,7 @@ public protocol PeerTransport: Sendable {
 
 public extension PeerTransport {
     func updateConnectionPolicy(_ policy: PeerConnectionPolicy) {}
-    func setRealtimePeer(_ deviceID: DeviceID?) {}
+    func setRealtimePeer(_ deviceID: DeviceID?, role: RealtimeConnectionRole) {}
 
     @discardableResult
     func sendRealtime(_ frame: RealtimePointerFrame, to deviceID: DeviceID) async throws -> Bool {
