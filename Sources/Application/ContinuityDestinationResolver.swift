@@ -7,12 +7,14 @@ public enum ContinuityDestinationResolver {
         controllerID: DeviceID?,
         controlSession: ControlSessionSnapshot,
         devices: [DeviceDescriptor],
-        connectedDeviceIDs: Set<DeviceID>
+        connectedDeviceIDs: Set<DeviceID>,
+        requiredCapabilities: Set<DeviceCapability> = []
     ) -> DeviceID? {
         let compatibleConnectedPeers = Set(devices.lazy.filter {
             $0.id != localDeviceID &&
                 connectedDeviceIDs.contains($0.id) &&
-                supportsClipboard($0)
+                (requiredCapabilities.isEmpty ||
+                    !$0.capabilities.isDisjoint(with: requiredCapabilities))
         }.map(\.id))
 
         if let controllerID,
@@ -30,10 +32,5 @@ public enum ContinuityDestinationResolver {
         return compatibleConnectedPeers.count == 1
             ? compatibleConnectedPeers.first
             : nil
-    }
-
-    private static func supportsClipboard(_ device: DeviceDescriptor) -> Bool {
-        device.capabilities.contains(.clipboardTextV1) ||
-            device.capabilities.contains(.clipboardURLV1)
     }
 }

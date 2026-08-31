@@ -68,8 +68,28 @@ final class ContinuityDestinationResolverTests: XCTestCase {
             controllerID: incompatible.id,
             controlSession: .idle,
             devices: [local, incompatible],
-            connectedDeviceIDs: [incompatible.id]
+            connectedDeviceIDs: [incompatible.id],
+            requiredCapabilities: [.clipboardTextV1, .clipboardURLV1]
         ))
+    }
+
+    func testResolverSelectsOnlyPeersWithTheRequestedSecondaryCapability() {
+        let local = device("00000000-0000-0000-0000-000000000001")
+        let clipboardOnly = device("00000000-0000-0000-0000-000000000002")
+        let filePeer = DeviceDescriptor(
+            id: DeviceID(rawValue: UUID(uuidString: "00000000-0000-0000-0000-000000000003")!),
+            name: "File peer",
+            capabilities: [.fileTransferV1]
+        )
+
+        XCTAssertEqual(ContinuityDestinationResolver.resolve(
+            localDeviceID: local.id,
+            controllerID: local.id,
+            controlSession: .idle,
+            devices: [local, clipboardOnly, filePeer],
+            connectedDeviceIDs: [clipboardOnly.id, filePeer.id],
+            requiredCapabilities: [.fileTransferV1]
+        ), filePeer.id)
     }
 
     private func device(_ uuid: String) -> DeviceDescriptor {

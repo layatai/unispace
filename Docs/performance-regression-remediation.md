@@ -83,12 +83,12 @@ peer that does not advertise UDP pointer v2. Clipboard connects only while
 sharing has a target. File transfer connects only to the selected or automatic
 destination.
 
-The continuity target is resolved from the authenticated control plane before
-the clipboard channel exists: remote controller, active control-session peer,
-then a sole connected compatible peer. That target is passed to the clipboard
-transport, which establishes TCP 61342 and reports its independent connection
-state. Clipboard connectivity controls the `Waiting`/`Encrypted` badge; it does
-not gate target selection.
+Secondary targets are resolved from the authenticated control plane before
+their dedicated channels exist: remote controller, active control-session
+peer, then a sole connected compatible peer. Clipboard uses that target to
+establish TCP 61342; file transfer uses it to establish TCP 61340. Dedicated
+connectivity controls readiness such as the `Waiting`/`Encrypted` badge and the
+Send Files action; it does not gate target selection or channel bootstrap.
 
 ## Regression gates
 
@@ -100,6 +100,8 @@ not gate target selection.
 - Passive and inbound-only peers show `Offline` and expose no manual retry.
 - Clipboard selects one control-connected target before TCP 61342 is connected;
   an idle multi-peer workspace selects none and never dials every peer.
+- File transfer selects one control-connected target before TCP 61340 is
+  connected, then enables Send Files only after authentication.
 - Identical context produces no Keychain read, QoS update, or UI publication.
 - Delayed activation preserves activation-before-input ordering with bounded
   buffering, no heartbeat loss, and no pointer stall above 50 ms.

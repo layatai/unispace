@@ -199,7 +199,8 @@ final class ClipboardViewModel: ObservableObject {
             controllerID: context.controllerID,
             controlSession: context.controlSession,
             devices: context.workspace?.devices ?? [],
-            connectedDeviceIDs: context.connectedDeviceIDs
+            connectedDeviceIDs: context.connectedDeviceIDs,
+            requiredCapabilities: [.clipboardTextV1, .clipboardURLV1]
         )
     }
 }
