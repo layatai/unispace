@@ -1058,6 +1058,54 @@ final class ApplicationTests: XCTestCase {
         await coordinator.stop()
     }
 
+    func testAcknowledgedActivationForwardsInputWhileConfirmationIsPending() async throws {
+        let local = DeviceID()
+        let remote = DeviceID()
+        let transport = TransportSpy()
+        let coordinator = ControlSessionCoordinator(
+            localDeviceID: local,
+            workspaceID: WorkspaceID(),
+            capture: CaptureSpy(),
+            injector: InjectorSpy(),
+            transport: transport,
+            activationTimeout: .seconds(10)
+        )
+        _ = await coordinator.makeLocalController()
+
+        let activation = Task {
+            try await coordinator.activate(
+                target: remote,
+                displayID: DisplayID(),
+                entryEdge: .left,
+                normalizedPosition: 0.5,
+                targetCapabilities: [.activationAcknowledgementV1],
+                initialEvent: .pointerMove(
+                    deltaX: 1,
+                    deltaY: 0,
+                    absoluteX: 100,
+                    absoluteY: 50
+                )
+            )
+        }
+        let sessionID = try await activationSessionID(in: transport)
+
+        _ = await coordinator.handleCaptured(.key(code: 12, isDown: true, isRepeat: false))
+        await coordinator.flushPendingInput()
+
+        XCTAssertEqual(transport.frames.map(\.event), [
+            .pointerMove(deltaX: 1, deltaY: 0, absoluteX: 100, absoluteY: 50),
+            .key(code: 12, isDown: true, isRepeat: false)
+        ])
+        let acknowledged = await coordinator.receiveActivationResult(
+            sessionID: sessionID,
+            from: remote,
+            accepted: true
+        )
+        XCTAssertTrue(acknowledged)
+        try await activation.value
+        await coordinator.stop()
+    }
+
     func testLegacyActivationRequiresHeartbeatConfirmation() async throws {
         let local = DeviceID()
         let remote = DeviceID()

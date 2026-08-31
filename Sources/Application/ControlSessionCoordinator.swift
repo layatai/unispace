@@ -133,7 +133,8 @@ public actor ControlSessionCoordinator {
         entryEdge: DisplayEdge,
         normalizedPosition: Double,
         targetCapabilities: Set<DeviceCapability> = [],
-        requiresActivationConfirmation: Bool = false
+        requiresActivationConfirmation: Bool = false,
+        initialEvent: InputEvent? = nil
     ) async throws {
         guard let epoch = election.currentEpoch, epoch.controllerID == localDeviceID else { return }
         if case .idle = state {
@@ -167,6 +168,9 @@ public actor ControlSessionCoordinator {
                 ))),
                 to: target
             )
+            if let initialEvent {
+                _ = await handleCaptured(initialEvent)
+            }
             if let activationResults {
                 if !supportsExplicitAcknowledgement {
                     await sendHeartbeat(target: target, sessionID: sessionID)

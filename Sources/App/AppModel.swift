@@ -43,7 +43,7 @@ final class AppModel: ObservableObject {
     private var currentEpoch: ControllerEpoch?
     private var lastBoundaryTime: UInt64 = 0
     private var controlTransferGuard = ControlTransferGuard()
-    private var pendingActivationEvents: [InputEvent]?
+    private var pendingActivationEvent: InputEvent?
 
     let localDeviceID: DeviceID
 
@@ -285,7 +285,7 @@ final class AppModel: ObservableObject {
 
     func stopControlling() {
         controlTransferGuard.beginStop()
-        pendingActivationEvents = nil
+        pendingActivationEvent = nil
         capture.setSuppressionEnabled(false)
         Task {
             await coordinator?.deactivateCurrentSession()
@@ -578,8 +578,8 @@ final class AppModel: ObservableObject {
 
     @discardableResult
     private func captureSynchronously(_ event: InputEvent) -> Bool {
-        if pendingActivationEvents != nil {
-            pendingActivationEvents?.append(event)
+        if pendingActivationEvent != nil {
+            Task { @MainActor [weak self] in await self?.forwardCaptured(event) }
             return true
         }
         if case let .pointerMove(_, _, x, y) = event {
@@ -603,7 +603,7 @@ final class AppModel: ObservableObject {
                    transition,
                    sourceDisplay: sourceDisplay
                ) {
-                pendingActivationEvents = [event]
+                pendingActivationEvent = event
                 capture.setSuppressionEnabled(true)
                 Task { @MainActor [weak self] in
                     await self?.completeActivation(transition, attempt: attempt)
@@ -622,7 +622,7 @@ final class AppModel: ObservableObject {
     ) async {
         guard let coordinator else {
             controlTransferGuard.activationFailed(attempt)
-            pendingActivationEvents = nil
+            pendingActivationEvent = nil
             capture.setSuppressionEnabled(false)
             return
         }
@@ -633,29 +633,26 @@ final class AppModel: ObservableObject {
                 entryEdge: transition.entryEdge,
                 normalizedPosition: transition.normalizedPosition,
                 targetCapabilities: capabilities(of: transition.targetDeviceID),
-                requiresActivationConfirmation: true
+                requiresActivationConfirmation: true,
+                initialEvent: pendingActivationEvent
             )
             guard case .controlling = await coordinator.currentState() else {
                 controlTransferGuard.activationFailed(attempt)
-                pendingActivationEvents = nil
+                pendingActivationEvent = nil
                 capture.setSuppressionEnabled(false)
                 return
             }
             guard controlTransferGuard.activationSucceeded(attempt) else {
-                pendingActivationEvents = nil
+                pendingActivationEvent = nil
                 await coordinator.deactivateCurrentSession()
                 capture.setSuppressionEnabled(false)
                 return
             }
-            let events = pendingActivationEvents ?? []
-            pendingActivationEvents = nil
-            for event in events {
-                _ = await coordinator.handleCaptured(event)
-            }
+            pendingActivationEvent = nil
             statusMessage = "Controlling \(deviceName(transition.targetDeviceID))"
         } catch {
             controlTransferGuard.activationFailed(attempt)
-            pendingActivationEvents = nil
+            pendingActivationEvent = nil
             capture.setSuppressionEnabled(false)
             lastError = error.localizedDescription
         }
