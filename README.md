@@ -23,6 +23,8 @@
   <a href="#networking">Networking</a>
   ·
   <a href="Documentation/Protocol/portable-gestures.md">Gesture support</a>
+  ·
+  <a href="Docs/SeamlessWindow.md">Seamless-window roadmap</a>
 </p>
 
 <p align="center">
@@ -38,6 +40,7 @@ UniSpace is a native macOS Dock and menu-bar controller for sharing one Mac's ke
 - **LAN or Tailscale:** discover nearby devices with Bonjour or connect directly with a MagicDNS name or Tailscale IP.
 - **Responsive under imperfect networks:** trusted sessions keep bulk file content separate from reliable keyboard, button, drag, and scroll events and replaceable pointer motion.
 - **A safe way home:** press `Control-Option-Command-Escape` at any time to stop remote control and return locally.
+- **Planned seamless-window mode:** present one application window on another trusted Mac without streaming the desktop background. See the [architecture and roadmap](Docs/SeamlessWindow.md).
 
 <p align="center">
   <img src="Documentation/Images/control-center.png" width="820" alt="UniSpace control center showing two Macs online and required permissions allowed">
@@ -109,9 +112,14 @@ Compatible versions also share text and links and transfer regular files between
 macOS and Windows. See [Docs/FileTransfer.md](Docs/FileTransfer.md) for file-transfer
 protocol, staging, recovery, and compatibility details.
 
-Directories, macOS packages, symbolic links, reparse points, special files, screen
-sharing, Windows-to-Mac control, an internet relay, Touch ID or power-button forwarding,
-login/UAC secure-desktop control, Secure Input bypasses, and live cross-device drag
+Seamless-window mode is planned but is not available in current releases. Its first
+version is scoped to individual macOS application windows; arbitrary display or
+whole-desktop capture remains intentionally unsupported. See the [seamless-window
+architecture and roadmap](Docs/SeamlessWindow.md).
+
+Directories, macOS packages, symbolic links, reparse points, special files,
+Windows-to-Mac control, an internet relay, Touch ID or power-button forwarding,
+login/UAC secure-desktop control, Secure Input bypasses, and arbitrary file-drag
 continuation remain intentionally unsupported.
 
 <details>
