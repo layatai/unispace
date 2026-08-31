@@ -129,9 +129,10 @@ final class TransferQoSInfrastructureTests: XCTestCase {
             )
         }
 
-        XCTAssertTrue(await eventually {
+        let firstChunkSent = await eventually {
             underlying.chunkCount() == 1
-        })
+        }
+        XCTAssertTrue(firstChunkSent)
         try? await Task.sleep(for: .milliseconds(80))
         XCTAssertEqual(underlying.chunkCount(), 1)
 

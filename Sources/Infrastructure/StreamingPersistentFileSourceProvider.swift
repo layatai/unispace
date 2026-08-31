@@ -292,6 +292,8 @@ public actor StreamingPersistentFileSourceProvider: FileSourceProvider {
                         modificationDate: storedEntry.modificationDate,
                         sha256: storedEntry.sha256
                     )
+                    let access = url.startAccessingSecurityScopedResource()
+                    defer { if access { url.stopAccessingSecurityScopedResource() } }
                     try validate(live, tolerantDateComparison: true)
                     entries[storedEntry.entryID] = live
                 }
@@ -392,10 +394,10 @@ public actor StreamingPersistentFileSourceProvider: FileSourceProvider {
         offset: UInt64
     ) throws -> ReadSession {
         if let session = sessions[key] { return session }
-        try validate(entry, tolerantDateComparison: false)
-        validationCount &+= 1
         let access = entry.url.startAccessingSecurityScopedResource()
         do {
+            try validate(entry, tolerantDateComparison: false)
+            validationCount &+= 1
             let handle = try FileHandle(forReadingFrom: entry.url)
             try handle.seek(toOffset: offset)
             let session = ReadSession(
