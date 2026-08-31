@@ -149,13 +149,16 @@ final class UniSpaceUITests: XCTestCase {
     }
 
     @MainActor
-    func testDevicesExposeRefreshRetryAndConfirmedNetworkRestart() {
+    func testDevicesKeepInboundOnlyPeersOfflineAndExposeNetworkRestart() {
         let app = launchApp(mode: "--ui-testing-connections")
 
         app.staticTexts["section-devices"].click()
-        XCTAssertTrue(app.buttons["refresh-connections"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.buttons["Retry connection to Office PC"].exists)
-        XCTAssertTrue(app.staticTexts["Reconnecting"].exists)
+        let refresh = app.buttons["refresh-connections"]
+        XCTAssertTrue(refresh.waitForExistence(timeout: 5))
+        XCTAssertFalse(refresh.isEnabled)
+        XCTAssertFalse(app.buttons["Retry connection to Office PC"].exists)
+        XCTAssertTrue(app.staticTexts["Offline"].exists)
+        XCTAssertFalse(app.staticTexts["Reconnecting"].exists)
         XCTAssertTrue(app.staticTexts["The trusted peer is temporarily unavailable"].exists)
 
         let connectionActions = app.descendants(matching: .any)["connection-actions"]

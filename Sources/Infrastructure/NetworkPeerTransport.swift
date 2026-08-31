@@ -721,12 +721,12 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
                 detail: error.localizedDescription
             )))
         case let .failed(error):
-            emit(.health(managed.deviceID ?? expectedDeviceID, .init(
-                health: .reconnecting,
-                transport: managed.transportKind,
-                detail: error.localizedDescription
-            )))
-            remove(managed, objectID: objectID, expectedDeviceID: expectedDeviceID)
+            remove(
+                managed,
+                objectID: objectID,
+                expectedDeviceID: expectedDeviceID,
+                failureDetail: error.localizedDescription
+            )
         case .cancelled:
             remove(managed, objectID: objectID, expectedDeviceID: expectedDeviceID)
         default:
@@ -901,10 +901,13 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
     private func remove(
         _ managed: SecurePeerConnection,
         objectID: ObjectIdentifier,
-        expectedDeviceID: DeviceID?
+        expectedDeviceID: DeviceID?,
+        failureDetail: String? = nil
     ) {
         var removedActive = false
         var wasSuperseded = false
+        var retryDeviceID: DeviceID?
+        var shouldRetry = false
         lock.lock()
         wasSuperseded = supersededConnections.remove(objectID) != nil
         pendingConnections.removeValue(forKey: objectID)
@@ -915,13 +918,33 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
             stabilityTokens.removeValue(forKey: deviceID)
             removedActive = true
         }
+        let candidateID = deviceID ?? expectedDeviceID
+        if removedActive || deviceID == nil && candidateID.flatMap({ connections[$0] }) == nil {
+            retryDeviceID = candidateID
+        }
+        if let retryDeviceID {
+            shouldRetry = running &&
+                outboundPeerIDs.contains(retryDeviceID) &&
+                Self.hasReconnectRoute(
+                    peer: knownPeers[retryDeviceID],
+                    discoveredPeer: discoveredDevices[retryDeviceID],
+                    tcpEndpoint: discoveredTCPEndpoints[retryDeviceID],
+                    quicEndpoint: discoveredQUICEndpoints[retryDeviceID]
+                )
+        }
         lock.unlock()
         guard !wasSuperseded else { return }
+        if let retryDeviceID {
+            emit(.health(retryDeviceID, .init(
+                health: shouldRetry ? .reconnecting : .disconnected,
+                transport: managed.transportKind,
+                detail: failureDetail
+            )))
+        }
         if let deviceID, removedActive {
-            emit(.health(deviceID, .init(health: .reconnecting, transport: managed.transportKind)))
             emit(.disconnected(deviceID))
         }
-        if removedActive || deviceID == nil, let retryDeviceID = deviceID ?? expectedDeviceID {
+        if shouldRetry, let retryDeviceID {
             scheduleDirectConnection(to: retryDeviceID, immediately: false)
         }
     }

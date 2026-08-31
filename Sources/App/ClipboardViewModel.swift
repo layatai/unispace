@@ -194,17 +194,12 @@ final class ClipboardViewModel: ObservableObject {
         context: ContinuityContextSnapshot,
         localDeviceID: DeviceID
     ) -> DeviceID? {
-        let target = context.controllerID != localDeviceID
-            ? context.controllerID
-            : context.controlSession.peerID
-        if let target,
-           context.connectedDeviceIDs.contains(target),
-           connectedDeviceIDs.contains(target) {
-            return target
-        }
-        let remoteConnected = connectedDeviceIDs
-            .intersection(context.connectedDeviceIDs)
-            .filter { $0 != localDeviceID }
-        return remoteConnected.count == 1 ? remoteConnected.first : nil
+        ContinuityDestinationResolver.resolve(
+            localDeviceID: localDeviceID,
+            controllerID: context.controllerID,
+            controlSession: context.controlSession,
+            devices: context.workspace?.devices ?? [],
+            connectedDeviceIDs: context.connectedDeviceIDs
+        )
     }
 }
