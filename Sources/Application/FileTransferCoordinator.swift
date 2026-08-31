@@ -73,7 +73,7 @@ public actor FileTransferCoordinator {
         self.pasteboard = pasteboard
         self.limits = limits
         var captured: AsyncStream<FileTransferCoordinatorEvent>.Continuation?
-        stream = AsyncStream { captured = $0 }
+        stream = AsyncStream(bufferingPolicy: .bufferingNewest(128)) { captured = $0 }
         continuation = captured!
     }
 
@@ -123,6 +123,8 @@ public actor FileTransferCoordinator {
         connectedPeers.removeAll()
         automaticDestination = nil
         pendingPasteboardSelection = nil
+        await store.suspendAll()
+        await sourceProvider.suspendAll()
         await transport.stop()
     }
 
@@ -355,7 +357,7 @@ public actor FileTransferCoordinator {
             await offerPendingPasteboardSelectionIfPossible()
         case let .disconnected(deviceID):
             connectedPeers.remove(deviceID)
-            pauseTransfers(with: deviceID)
+            await pauseTransfers(with: deviceID)
         case let .message(deviceID, envelope):
             do {
                 guard let workspace else { return }
@@ -789,9 +791,15 @@ public actor FileTransferCoordinator {
         }
     }
 
-    private func pauseTransfers(with peer: DeviceID) {
+    private func pauseTransfers(with peer: DeviceID) async {
         for record in records.values where record.peerDeviceID == peer && !record.state.isTerminal {
             cancelTransferTask(record.manifest.transferID)
+            switch record.direction {
+            case .incoming:
+                await store.suspend(record.manifest.transferID)
+            case .outgoing:
+                await sourceProvider.suspend(record.manifest.transferID)
+            }
             if record.state == .transferring || record.state == .verifying || record.state == .preparing {
                 setState(.paused, for: record.manifest.transferID, enforceTransition: false)
             }

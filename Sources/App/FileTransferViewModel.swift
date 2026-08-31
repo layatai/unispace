@@ -16,6 +16,10 @@ final class FileTransferViewModel: ObservableObject {
 
     private let trustStore: KeychainTrustStore
     private let coordinator: FileTransferCoordinator
+    private let qosTransport: QoSFileTransferTransport?
+    private let checkpointStore: CheckpointingTransferStore?
+    private let streamingSource: StreamingPersistentFileSourceProvider?
+    private let eventPump = FileTransferEventPump()
     private var records: [TransferID: FileTransferSnapshot] = [:]
     private var bindingTask: Task<Void, Never>?
     private var eventTask: Task<Void, Never>?
@@ -29,12 +33,23 @@ final class FileTransferViewModel: ObservableObject {
         self.trustStore = trustStore
         if let coordinator {
             self.coordinator = coordinator
+            qosTransport = nil
+            checkpointStore = nil
+            streamingSource = nil
         } else {
             let pasteboard = SystemFilePasteboard()
+            let qosTransport = QoSFileTransferTransport(
+                underlying: NetworkFileTransferTransport()
+            )
+            let checkpointStore = CheckpointingTransferStore()
+            let streamingSource = StreamingPersistentFileSourceProvider()
+            self.qosTransport = qosTransport
+            self.checkpointStore = checkpointStore
+            self.streamingSource = streamingSource
             self.coordinator = FileTransferCoordinator(
-                transport: NetworkFileTransferTransport(),
-                store: SandboxTransferStore(),
-                sourceProvider: SystemFileSourceProvider(),
+                transport: qosTransport,
+                store: checkpointStore,
+                sourceProvider: streamingSource,
                 pasteboard: pasteboard
             )
         }
@@ -82,7 +97,7 @@ final class FileTransferViewModel: ObservableObject {
             while !Task.isCancelled {
                 guard let self, let appModel else { return }
                 await self.refreshContext(from: appModel)
-                try? await Task.sleep(for: .milliseconds(500))
+                try? await Task.sleep(for: .milliseconds(250))
             }
         }
     }
@@ -90,13 +105,23 @@ final class FileTransferViewModel: ObservableObject {
     func stop() {
         bindingTask?.cancel()
         bindingTask = nil
+        eventTask?.cancel()
+        eventTask = nil
         configuredWorkspace = nil
         reportedConfigurationFailureWorkspaceID = nil
         candidateDevices = []
         knownDevices = []
         connectedDeviceIDs = []
         let coordinator = self.coordinator
-        Task { await coordinator.stop() }
+        let checkpointStore = self.checkpointStore
+        let streamingSource = self.streamingSource
+        let eventPump = self.eventPump
+        Task {
+            await eventPump.reset()
+            await coordinator.stop()
+            await checkpointStore?.suspendAll()
+            await streamingSource?.suspendAll()
+        }
     }
 
     func chooseFiles() {
@@ -209,11 +234,11 @@ final class FileTransferViewModel: ObservableObject {
     private func startEventObservation() {
         guard eventTask == nil else { return }
         let coordinator = self.coordinator
-        eventTask = Task { [weak self, coordinator] in
+        let eventPump = self.eventPump
+        eventTask = Task { [weak self, coordinator, eventPump] in
             let events = await coordinator.events()
-            for await event in events {
-                guard !Task.isCancelled, let self else { return }
-                self.receive(event)
+            await eventPump.run(events: events) { [weak self] event in
+                self?.receiveImmediately(event)
             }
         }
     }
@@ -222,6 +247,7 @@ final class FileTransferViewModel: ObservableObject {
         knownDevices = appModel.devices
         candidateDevices = appModel.continuityCandidateDevices
         connectedDeviceIDs = await coordinator.connectedDeviceIDs()
+        await updateTransferQoS(from: appModel)
 
         if let selectedDestinationID,
            !knownDevices.contains(where: { $0.id == selectedDestinationID }) {
@@ -238,6 +264,8 @@ final class FileTransferViewModel: ObservableObject {
                 records.removeAll()
                 transfers = []
                 await coordinator.stop()
+                await checkpointStore?.suspendAll()
+                await streamingSource?.suspendAll()
             }
             return
         }
@@ -273,6 +301,8 @@ final class FileTransferViewModel: ObservableObject {
         } catch {
             configuredWorkspace = nil
             await coordinator.stop()
+            await checkpointStore?.suspendAll()
+            await streamingSource?.suspendAll()
             if reportedConfigurationFailureWorkspaceID != workspace.id {
                 reportedConfigurationFailureWorkspaceID = workspace.id
                 lastError = userMessage(for: error)
@@ -280,7 +310,19 @@ final class FileTransferViewModel: ObservableObject {
         }
     }
 
-    private func receive(_ event: FileTransferCoordinatorEvent) {
+    private func updateTransferQoS(from appModel: AppModel) async {
+        guard let qosTransport else { return }
+        let active = appModel.isRemoteControlSessionActive
+        let peer = active ? (appModel.activeControlPeerID ?? appModel.continuityTargetID) : nil
+        let latency = peer.flatMap { appModel.connectionSnapshots[$0]?.latencyMilliseconds }
+        await qosTransport.updateControlQuality(FileTransferControlQuality(
+            isControlActive: active,
+            activePeerID: peer,
+            latencyMilliseconds: latency
+        ))
+    }
+
+    private func receiveImmediately(_ event: FileTransferCoordinatorEvent) {
         switch event {
         case let .snapshot(snapshot):
             records[snapshot.id] = snapshot
@@ -358,5 +400,93 @@ final class FileTransferViewModel: ObservableObject {
         case .unknown:
             "The file transfer could not be completed."
         }
+    }
+}
+
+/// Consumes the high-frequency coordinator stream away from the main actor and
+/// retains only the newest byte-progress snapshot per transfer. State changes,
+/// failures, completion, cancellation, and removal bypass the throttle.
+private actor FileTransferEventPump {
+    typealias Sink = @MainActor @Sendable (FileTransferCoordinatorEvent) -> Void
+
+    private let interval: Duration
+    private var latestSnapshots: [TransferID: FileTransferSnapshot] = [:]
+    private var pendingSnapshots: [TransferID: FileTransferSnapshot] = [:]
+    private var flushTasks: [TransferID: Task<Void, Never>] = [:]
+    private var generation: UInt64 = 0
+
+    init(interval: Duration = .milliseconds(100)) {
+        self.interval = interval
+    }
+
+    func run(
+        events: AsyncStream<FileTransferCoordinatorEvent>,
+        sink: @escaping Sink
+    ) async {
+        let activeGeneration = generation
+        for await event in events {
+            guard !Task.isCancelled, activeGeneration == generation else { return }
+            await consume(event, sink: sink, generation: activeGeneration)
+        }
+    }
+
+    func reset() {
+        generation &+= 1
+        latestSnapshots.removeAll(keepingCapacity: true)
+        pendingSnapshots.removeAll(keepingCapacity: true)
+        flushTasks.values.forEach { $0.cancel() }
+        flushTasks.removeAll(keepingCapacity: true)
+    }
+
+    private func consume(
+        _ event: FileTransferCoordinatorEvent,
+        sink: @escaping Sink,
+        generation activeGeneration: UInt64
+    ) async {
+        switch event {
+        case let .removed(transferID):
+            latestSnapshots.removeValue(forKey: transferID)
+            pendingSnapshots.removeValue(forKey: transferID)
+            flushTasks.removeValue(forKey: transferID)?.cancel()
+            await sink(event)
+        case let .snapshot(snapshot):
+            let previous = latestSnapshots[snapshot.id]
+            latestSnapshots[snapshot.id] = snapshot
+            let isStateChange = previous == nil
+                || previous?.state != snapshot.state
+                || previous?.failureCode != snapshot.failureCode
+                || previous?.stagedURLs != snapshot.stagedURLs
+                || snapshot.state.isTerminal
+            if isStateChange {
+                pendingSnapshots.removeValue(forKey: snapshot.id)
+                flushTasks.removeValue(forKey: snapshot.id)?.cancel()
+                await sink(event)
+                return
+            }
+            pendingSnapshots[snapshot.id] = snapshot
+            guard flushTasks[snapshot.id] == nil else { return }
+            let transferID = snapshot.id
+            let interval = self.interval
+            flushTasks[transferID] = Task { [weak self] in
+                try? await Task.sleep(for: interval)
+                guard !Task.isCancelled else { return }
+                await self?.flush(
+                    transferID,
+                    sink: sink,
+                    generation: activeGeneration
+                )
+            }
+        }
+    }
+
+    private func flush(
+        _ transferID: TransferID,
+        sink: @escaping Sink,
+        generation activeGeneration: UInt64
+    ) async {
+        flushTasks.removeValue(forKey: transferID)
+        guard activeGeneration == generation,
+              let snapshot = pendingSnapshots.removeValue(forKey: transferID) else { return }
+        await sink(.snapshot(snapshot))
     }
 }

@@ -1,3 +1,3 @@
 import UniSpaceInfrastructure
 
-typealias SystemFileSourceProvider = PersistentSystemFileSourceProvider
+typealias SystemFileSourceProvider = StreamingPersistentFileSourceProvider

@@ -416,6 +416,7 @@ public final class NetworkFileTransferTransport: FileTransferTransport, @uncheck
         tcp.keepaliveIdle = 5
         let parameters = NWParameters(tls: nil, tcp: tcp)
         parameters.includePeerToPeer = true
+        parameters.serviceClass = .background
         return parameters
     }
 }

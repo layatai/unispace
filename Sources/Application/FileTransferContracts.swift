@@ -41,7 +41,14 @@ public protocol FileSourceProvider: Sendable {
     ) async throws -> Data
 
     func recoverOutgoingTransfers(limits: FileTransferLimits) async throws -> [PreparedOutgoingTransfer]
+    func suspend(_ transferID: TransferID) async
+    func suspendAll() async
     func removeOutgoingTransfer(_ transferID: TransferID) async
+}
+
+public extension FileSourceProvider {
+    func suspend(_ transferID: TransferID) async {}
+    func suspendAll() async {}
 }
 
 public protocol TransferStore: Sendable {
@@ -52,9 +59,16 @@ public protocol TransferStore: Sendable {
     func finalizeTransfer(_ transferID: TransferID) async throws -> [URL]
     func completedURLs(for transferID: TransferID) async throws -> [URL]
     func recoverIncomingTransfers(limits: FileTransferLimits) async throws -> [RecoveredIncomingTransfer]
+    func suspend(_ transferID: TransferID) async
+    func suspendAll() async
     func cancel(_ transferID: TransferID) async
     func remove(_ transferID: TransferID) async
     func removeExpired(now: Date, limits: FileTransferLimits) async
+}
+
+public extension TransferStore {
+    func suspend(_ transferID: TransferID) async {}
+    func suspendAll() async {}
 }
 
 public struct RecoveredIncomingTransfer: Sendable, Equatable {
