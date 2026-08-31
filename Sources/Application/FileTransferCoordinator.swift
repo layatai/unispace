@@ -73,7 +73,7 @@ public actor FileTransferCoordinator {
         self.pasteboard = pasteboard
         self.limits = limits
         var captured: AsyncStream<FileTransferCoordinatorEvent>.Continuation?
-        stream = AsyncStream(bufferingPolicy: .bufferingNewest(128)) { captured = $0 }
+        stream = AsyncStream { captured = $0 }
         continuation = captured!
     }
 

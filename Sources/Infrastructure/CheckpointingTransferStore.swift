@@ -98,6 +98,8 @@ public actor CheckpointingTransferStore: TransferStore {
 
     private var cache: [TransferID: StoredTransfer] = [:]
     private var sessions: [SessionKey: WriteSession] = [:]
+    private var checkpointTasks: [SessionKey: Task<Void, Never>] = [:]
+    private var checkpointTaskIDs: [SessionKey: UUID] = [:]
     private var handleOpenCount: UInt64 = 0
     private var checkpointCount: UInt64 = 0
     private var metadataWriteCount: UInt64 = 0
@@ -124,6 +126,7 @@ public actor CheckpointingTransferStore: TransferStore {
     }
 
     deinit {
+        checkpointTasks.values.forEach { $0.cancel() }
         sessions.values.forEach { try? $0.handle.close() }
     }
 
@@ -224,6 +227,9 @@ public actor CheckpointingTransferStore: TransferStore {
         if shouldCheckpoint(session, nowNanoseconds: now) {
             stored = try checkpoint(session, stored: stored, nowNanoseconds: now)
             cache[chunk.transferID] = stored
+            cancelScheduledCheckpoint(key)
+        } else {
+            scheduleCheckpoint(for: key, session: session, nowNanoseconds: now)
         }
         return session.writtenOffset
     }
@@ -483,6 +489,49 @@ public actor CheckpointingTransferStore: TransferStore {
             || elapsed >= checkpointConfiguration.maximumIntervalNanoseconds
     }
 
+    private func scheduleCheckpoint(
+        for key: SessionKey,
+        session: WriteSession,
+        nowNanoseconds: UInt64
+    ) {
+        checkpointTasks[key]?.cancel()
+        let requiredInterval = session.bytesSinceCheckpoint >= checkpointConfiguration.byteInterval
+            ? checkpointConfiguration.minimumIntervalNanoseconds
+            : checkpointConfiguration.maximumIntervalNanoseconds
+        let elapsed = nowNanoseconds >= session.lastCheckpointNanoseconds
+            ? nowNanoseconds - session.lastCheckpointNanoseconds
+            : requiredInterval
+        let delay = requiredInterval > elapsed ? requiredInterval - elapsed : 0
+        let clock = self.clock
+        let taskID = UUID()
+        checkpointTaskIDs[key] = taskID
+        checkpointTasks[key] = Task { [weak self] in
+            do {
+                try await clock.sleep(for: .nanoseconds(Int64(clamping: delay)))
+            } catch {
+                return
+            }
+            await self?.performScheduledCheckpoint(for: key, taskID: taskID)
+        }
+    }
+
+    private func performScheduledCheckpoint(for key: SessionKey, taskID: UUID) {
+        guard checkpointTaskIDs[key] == taskID else { return }
+        checkpointTaskIDs.removeValue(forKey: key)
+        checkpointTasks.removeValue(forKey: key)
+        guard let session = sessions[key],
+              var stored = try? load(key.transferID) else { return }
+        let now = clock.nowNanoseconds()
+        guard shouldCheckpoint(session, nowNanoseconds: now),
+              let checkpointed = try? checkpoint(
+                  session,
+                  stored: stored,
+                  nowNanoseconds: now
+              ) else { return }
+        stored = checkpointed
+        cache[key.transferID] = stored
+    }
+
     @discardableResult
     private func checkpoint(
         _ session: WriteSession,
@@ -514,8 +563,14 @@ public actor CheckpointingTransferStore: TransferStore {
     }
 
     private func closeSession(_ key: SessionKey) {
+        cancelScheduledCheckpoint(key)
         guard let session = sessions.removeValue(forKey: key) else { return }
         try? session.handle.close()
+    }
+
+    private func cancelScheduledCheckpoint(_ key: SessionKey) {
+        checkpointTaskIDs.removeValue(forKey: key)
+        checkpointTasks.removeValue(forKey: key)?.cancel()
     }
 
     private func ensureRootExists() throws {

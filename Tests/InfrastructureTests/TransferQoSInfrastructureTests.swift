@@ -217,6 +217,49 @@ final class TransferQoSInfrastructureTests: XCTestCase {
         _ = try await store.finalizeTransfer(manifest.transferID)
     }
 
+    func testCheckpointingStorePersistsDirtySessionWhenWritesPause() async throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let clock = CheckpointTestClock()
+        let payload = Data("paused transfer".utf8)
+        let entry = TransferManifestEntry(
+            filename: "payload.txt",
+            byteCount: UInt64(payload.count),
+            sha256: Data(SHA256.hash(data: payload))
+        )
+        let manifest = makeManifest(entry: entry)
+        let store = CheckpointingTransferStore(
+            rootURL: root,
+            checkpointConfiguration: TransferCheckpointConfiguration(
+                byteInterval: 1_024 * 1_024,
+                minimumIntervalNanoseconds: 10,
+                maximumIntervalNanoseconds: 100
+            ),
+            clock: clock
+        )
+
+        try await store.prepareIncoming(manifest: manifest, limits: .default)
+        _ = try await store.write(TransferChunk(
+            transferID: manifest.transferID,
+            entryID: entry.id,
+            offset: 0,
+            data: payload
+        ), limits: .default)
+        let offsetBeforeDeadline = try await store.verifiedOffsets(for: manifest.transferID)
+        XCTAssertEqual(offsetBeforeDeadline.first?.offset, 0)
+
+        let timerScheduled = await eventually { clock.pendingSleepCount == 1 }
+        XCTAssertTrue(timerScheduled)
+        clock.advance(by: 100)
+
+        let checkpointed = await eventually {
+            await store.diagnostics().checkpointCount == 1
+        }
+        XCTAssertTrue(checkpointed)
+        let offsetAfterDeadline = try await store.verifiedOffsets(for: manifest.transferID)
+        XCTAssertEqual(offsetAfterDeadline.first?.offset, UInt64(payload.count))
+    }
+
     func testStreamingSourceUsesOneHandleForSequentialReads() async throws {
         let metadataRoot = temporaryDirectory()
         let sourceRoot = temporaryDirectory()
@@ -304,6 +347,59 @@ final class TransferQoSInfrastructureTests: XCTestCase {
             try? await Task.sleep(for: .milliseconds(10))
         }
         return await condition()
+    }
+}
+
+private final class CheckpointTestClock: MonotonicClock, @unchecked Sendable {
+    private struct Waiter {
+        let deadline: UInt64
+        let continuation: CheckedContinuation<Void, Error>
+    }
+
+    private let lock = NSLock()
+    private var value: UInt64 = 0
+    private var waiters: [UUID: Waiter] = [:]
+
+    var pendingSleepCount: Int { lock.qosTestWithLock { waiters.count } }
+
+    func nowNanoseconds() -> UInt64 { lock.qosTestWithLock { value } }
+
+    func sleep(for duration: Duration) async throws {
+        let id = UUID()
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                let cancelled = lock.qosTestWithLock { () -> Bool in
+                    guard !Task.isCancelled else { return true }
+                    waiters[id] = Waiter(
+                        deadline: value &+ Self.nanoseconds(duration),
+                        continuation: continuation
+                    )
+                    return false
+                }
+                if cancelled { continuation.resume(throwing: CancellationError()) }
+            }
+        } onCancel: {
+            let continuation = self.lock.qosTestWithLock {
+                self.waiters.removeValue(forKey: id)?.continuation
+            }
+            continuation?.resume(throwing: CancellationError())
+        }
+    }
+
+    func advance(by nanoseconds: UInt64) {
+        let due = lock.qosTestWithLock { () -> [CheckedContinuation<Void, Error>] in
+            value &+= nanoseconds
+            let ids = waiters.compactMap { $0.value.deadline <= value ? $0.key : nil }
+            return ids.compactMap { waiters.removeValue(forKey: $0)?.continuation }
+        }
+        due.forEach { $0.resume() }
+    }
+
+    private static func nanoseconds(_ duration: Duration) -> UInt64 {
+        let components = duration.components
+        let seconds = UInt64(max(components.seconds, 0))
+        let attoseconds = UInt64(max(components.attoseconds, 0))
+        return seconds &* 1_000_000_000 &+ attoseconds / 1_000_000_000
     }
 }
 
