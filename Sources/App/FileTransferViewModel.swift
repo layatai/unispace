@@ -21,10 +21,13 @@ final class FileTransferViewModel: ObservableObject {
     private let streamingSource: StreamingPersistentFileSourceProvider?
     private let eventPump = FileTransferEventPump()
     private var records: [TransferID: FileTransferSnapshot] = [:]
-    private var bindingTask: Task<Void, Never>?
+    private var bindingCancellable: AnyCancellable?
+    private var contextTask: Task<Void, Never>?
     private var eventTask: Task<Void, Never>?
     private var configuredWorkspace: ContinuityWorkspaceConfiguration?
+    private var cachedWorkspaceKey: (WorkspaceID, UInt64, Data)?
     private var reportedConfigurationFailureWorkspaceID: WorkspaceID?
+    private var controlConnectedDeviceIDs = Set<DeviceID>()
 
     init(
         trustStore: KeychainTrustStore = KeychainTrustStore(),
@@ -73,7 +76,7 @@ final class FileTransferViewModel: ObservableObject {
     }
 
     deinit {
-        bindingTask?.cancel()
+        contextTask?.cancel()
         eventTask?.cancel()
     }
 
@@ -86,32 +89,41 @@ final class FileTransferViewModel: ObservableObject {
             selectedDeviceID: selectedDestinationID,
             continuityTargetID: nil,
             candidates: candidateDevices,
-            connectedDeviceIDs: connectedDeviceIDs
+            connectedDeviceIDs: connectedDeviceIDs.intersection(controlConnectedDeviceIDs)
         )
     }
 
     func bind(to appModel: AppModel) {
-        guard bindingTask == nil else { return }
+        guard bindingCancellable == nil else { return }
         startEventObservation()
-        bindingTask = Task { [weak self, weak appModel] in
-            while !Task.isCancelled {
-                guard let self, let appModel else { return }
-                await self.refreshContext(from: appModel)
-                try? await Task.sleep(for: .milliseconds(250))
+        bindingCancellable = appModel.continuityContextPublisher
+            .receive(on: RunLoop.main)
+            .sink { [weak self, weak appModel] context in
+                Task { @MainActor [weak self, weak appModel] in
+                    guard let self, let appModel else { return }
+                    self.contextTask?.cancel()
+                    let localDevice = appModel.localDevice
+                    self.contextTask = Task { @MainActor [weak self] in
+                        await self?.refreshContext(context, localDevice: localDevice)
+                    }
+                }
             }
-        }
     }
 
     func stop() {
-        bindingTask?.cancel()
-        bindingTask = nil
+        bindingCancellable?.cancel()
+        bindingCancellable = nil
+        contextTask?.cancel()
+        contextTask = nil
         eventTask?.cancel()
         eventTask = nil
         configuredWorkspace = nil
         reportedConfigurationFailureWorkspaceID = nil
+        cachedWorkspaceKey = nil
         candidateDevices = []
         knownDevices = []
         connectedDeviceIDs = []
+        controlConnectedDeviceIDs = []
         let coordinator = self.coordinator
         let checkpointStore = self.checkpointStore
         let streamingSource = self.streamingSource
@@ -243,21 +255,33 @@ final class FileTransferViewModel: ObservableObject {
         }
     }
 
-    private func refreshContext(from appModel: AppModel) async {
-        knownDevices = appModel.devices
-        candidateDevices = appModel.continuityCandidateDevices
-        connectedDeviceIDs = await coordinator.connectedDeviceIDs()
-        await updateTransferQoS(from: appModel)
+    private func refreshContext(
+        _ context: ContinuityContextSnapshot,
+        localDevice: DeviceDescriptor
+    ) async {
+        let devices = context.workspace?.devices ?? []
+        let candidates = devices
+            .filter { $0.id != localDevice.id && context.connectedDeviceIDs.contains($0.id) }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        controlConnectedDeviceIDs = context.connectedDeviceIDs
+        if knownDevices != devices { knownDevices = devices }
+        if candidateDevices != candidates { candidateDevices = candidates }
+        await updateTransferQoS(from: context)
 
         if let selectedDestinationID,
            !knownDevices.contains(where: { $0.id == selectedDestinationID }) {
             self.selectedDestinationID = nil
         }
-        if selectedDestinationID == nil, let inferred = appModel.continuityTargetID {
+        let continuityTarget = continuityTargetID(
+            context: context,
+            localDeviceID: localDevice.id,
+            candidates: candidates
+        )
+        if selectedDestinationID == nil, let inferred = continuityTarget {
             selectedDestinationID = inferred
         }
 
-        guard let workspace = appModel.workspace else {
+        guard let workspace = context.workspace else {
             reportedConfigurationFailureWorkspaceID = nil
             if configuredWorkspace != nil {
                 configuredWorkspace = nil
@@ -267,15 +291,24 @@ final class FileTransferViewModel: ObservableObject {
                 await checkpointStore?.suspendAll()
                 await streamingSource?.suspendAll()
             }
+            cachedWorkspaceKey = nil
             return
         }
         do {
-            guard let key = try trustStore.workspaceKey(for: workspace.id) else {
+            let key: Data
+            if let cachedWorkspaceKey,
+               cachedWorkspaceKey.0 == workspace.id,
+               cachedWorkspaceKey.1 == context.workspaceKeyRevision {
+                key = cachedWorkspaceKey.2
+            } else if let loaded = try trustStore.workspaceKey(for: workspace.id) {
+                key = loaded
+                cachedWorkspaceKey = (workspace.id, context.workspaceKeyRevision, loaded)
+            } else {
                 throw FileTransferFailureCode.permissionFailure
             }
             let configuration = ContinuityWorkspaceConfiguration(
                 workspace: workspace,
-                localDevice: appModel.localDevice,
+                localDevice: localDevice,
                 key: key,
                 capabilities: [.fileTransferV1]
             )
@@ -293,9 +326,9 @@ final class FileTransferViewModel: ObservableObject {
             }
             let destination = FileTransferDestinationResolver.resolve(
                 selectedDeviceID: selectedDestinationID,
-                continuityTargetID: appModel.continuityTargetID,
+                continuityTargetID: continuityTarget,
                 candidates: candidateDevices,
-                connectedDeviceIDs: connectedDeviceIDs
+                connectedDeviceIDs: connectedDeviceIDs.intersection(context.connectedDeviceIDs)
             )
             await coordinator.setAutomaticDestination(destination)
         } catch {
@@ -310,16 +343,33 @@ final class FileTransferViewModel: ObservableObject {
         }
     }
 
-    private func updateTransferQoS(from appModel: AppModel) async {
+    private func updateTransferQoS(from context: ContinuityContextSnapshot) async {
         guard let qosTransport else { return }
-        let active = appModel.isRemoteControlSessionActive
-        let peer = active ? (appModel.activeControlPeerID ?? appModel.continuityTargetID) : nil
-        let latency = peer.flatMap { appModel.connectionSnapshots[$0]?.latencyMilliseconds }
+        let active = context.controlSession.protectsInputLatency
+        let peer = active ? context.controlSession.peerID : nil
+        let latency = context.controlSession.latencyMilliseconds
         await qosTransport.updateControlQuality(FileTransferControlQuality(
             isControlActive: active,
             activePeerID: peer,
             latencyMilliseconds: latency
         ))
+    }
+
+    private func continuityTargetID(
+        context: ContinuityContextSnapshot,
+        localDeviceID: DeviceID,
+        candidates: [DeviceDescriptor]
+    ) -> DeviceID? {
+        if let controllerID = context.controllerID,
+           controllerID != localDeviceID,
+           context.connectedDeviceIDs.contains(controllerID) {
+            return controllerID
+        }
+        if let peerID = context.controlSession.peerID,
+           context.connectedDeviceIDs.contains(peerID) {
+            return peerID
+        }
+        return candidates.count == 1 ? candidates[0].id : nil
     }
 
     private func receiveImmediately(_ event: FileTransferCoordinatorEvent) {
@@ -330,6 +380,8 @@ final class FileTransferViewModel: ObservableObject {
             records[snapshot.id] = snapshot
         case let .removed(transferID):
             records.removeValue(forKey: transferID)
+        case let .connections(deviceIDs):
+            if connectedDeviceIDs != deviceIDs { connectedDeviceIDs = deviceIDs }
         }
         sortTransfers()
     }
@@ -456,6 +508,8 @@ private actor FileTransferEventPump {
             latestSnapshots.removeValue(forKey: transferID)
             pendingSnapshots.removeValue(forKey: transferID)
             flushTasks.removeValue(forKey: transferID)?.cancel()
+            await sink(event)
+        case .connections:
             await sink(event)
         case let .snapshot(snapshot):
             let previous = latestSnapshots[snapshot.id]

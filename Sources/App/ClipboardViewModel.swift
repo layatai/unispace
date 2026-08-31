@@ -17,8 +17,11 @@ final class ClipboardViewModel: ObservableObject {
     private let defaults: UserDefaults
     private let trustStore: KeychainTrustStore
     private let coordinator: ClipboardCoordinator
-    private var bindingTask: Task<Void, Never>?
+    private var bindingCancellable: AnyCancellable?
+    private var contextTask: Task<Void, Never>?
+    private var connectionTask: Task<Void, Never>?
     private var configuredWorkspace: ContinuityWorkspaceConfiguration?
+    private var cachedWorkspaceKey: (WorkspaceID, UInt64, Data)?
     private var reportedConfigurationFailureWorkspaceID: WorkspaceID?
 
     init(
@@ -35,7 +38,10 @@ final class ClipboardViewModel: ObservableObject {
         )
     }
 
-    deinit { bindingTask?.cancel() }
+    deinit {
+        contextTask?.cancel()
+        connectionTask?.cancel()
+    }
 
     var activeDestinationName: String? {
         guard let activeDestinationID else { return nil }
@@ -58,14 +64,20 @@ final class ClipboardViewModel: ObservableObject {
     }
 
     func bind(to appModel: AppModel) {
-        guard bindingTask == nil else { return }
-        bindingTask = Task { [weak self, weak appModel] in
-            while !Task.isCancelled {
-                guard let self, let appModel else { return }
-                await self.refreshContext(from: appModel)
-                try? await Task.sleep(for: .milliseconds(350))
+        guard bindingCancellable == nil else { return }
+        startConnectionObservation()
+        bindingCancellable = appModel.continuityContextPublisher
+            .receive(on: RunLoop.main)
+            .sink { [weak self, weak appModel] context in
+                Task { @MainActor [weak self, weak appModel] in
+                    guard let self, let appModel else { return }
+                    self.contextTask?.cancel()
+                    let localDevice = appModel.localDevice
+                    self.contextTask = Task { @MainActor [weak self] in
+                        await self?.refreshContext(context, localDevice: localDevice)
+                    }
+                }
             }
-        }
     }
 
     func setSharingEnabled(_ enabled: Bool) {
@@ -78,9 +90,14 @@ final class ClipboardViewModel: ObservableObject {
     func dismissError() { lastError = nil }
 
     func stop() {
-        bindingTask?.cancel()
-        bindingTask = nil
+        bindingCancellable?.cancel()
+        bindingCancellable = nil
+        contextTask?.cancel()
+        contextTask = nil
+        connectionTask?.cancel()
+        connectionTask = nil
         configuredWorkspace = nil
+        cachedWorkspaceKey = nil
         reportedConfigurationFailureWorkspaceID = nil
         connectedDeviceIDs = []
         activeDestinationID = nil
@@ -89,11 +106,28 @@ final class ClipboardViewModel: ObservableObject {
         Task { await coordinator.stop() }
     }
 
-    private func refreshContext(from appModel: AppModel) async {
-        knownDevices = appModel.devices
-        connectedDeviceIDs = await coordinator.connectedDeviceIDs()
+    private func startConnectionObservation() {
+        guard connectionTask == nil else { return }
+        let coordinator = self.coordinator
+        connectionTask = Task { [weak self, coordinator] in
+            let events = await coordinator.connectionEvents()
+            for await deviceIDs in events {
+                guard !Task.isCancelled, let self else { return }
+                if self.connectedDeviceIDs != deviceIDs {
+                    self.connectedDeviceIDs = deviceIDs
+                }
+            }
+        }
+    }
 
-        guard let workspace = appModel.workspace else {
+    private func refreshContext(
+        _ context: ContinuityContextSnapshot,
+        localDevice: DeviceDescriptor
+    ) async {
+        let devices = context.workspace?.devices ?? []
+        if knownDevices != devices { knownDevices = devices }
+
+        guard let workspace = context.workspace else {
             reportedConfigurationFailureWorkspaceID = nil
             if configuredWorkspace != nil {
                 configuredWorkspace = nil
@@ -101,16 +135,25 @@ final class ClipboardViewModel: ObservableObject {
                 connectedDeviceIDs = []
                 await coordinator.stop()
             }
+            cachedWorkspaceKey = nil
             return
         }
 
         do {
-            guard let key = try trustStore.workspaceKey(for: workspace.id) else {
+            let key: Data
+            if let cachedWorkspaceKey,
+               cachedWorkspaceKey.0 == workspace.id,
+               cachedWorkspaceKey.1 == context.workspaceKeyRevision {
+                key = cachedWorkspaceKey.2
+            } else if let loaded = try trustStore.workspaceKey(for: workspace.id) {
+                key = loaded
+                cachedWorkspaceKey = (workspace.id, context.workspaceKeyRevision, loaded)
+            } else {
                 throw ClipboardProtocolError.workspaceMismatch
             }
             let configuration = ContinuityWorkspaceConfiguration(
                 workspace: workspace,
-                localDevice: appModel.localDevice,
+                localDevice: localDevice,
                 key: key,
                 capabilities: [.clipboardTextV1, .clipboardURLV1]
             )
@@ -135,8 +178,10 @@ final class ClipboardViewModel: ObservableObject {
             return
         }
 
-        connectedDeviceIDs = await coordinator.connectedDeviceIDs()
-        let inferredFromApp = inferredDestination(from: appModel)
+        let inferredFromApp = inferredDestination(
+            context: context,
+            localDeviceID: localDevice.id
+        )
         let coordinatorDestination = await coordinator.automaticDestinationDeviceID()
         let inferred = inferredFromApp ?? coordinatorDestination
         if activeDestinationID != inferred {
@@ -145,12 +190,21 @@ final class ClipboardViewModel: ObservableObject {
         }
     }
 
-    private func inferredDestination(from appModel: AppModel) -> DeviceID? {
-        if let target = appModel.continuityTargetID,
+    private func inferredDestination(
+        context: ContinuityContextSnapshot,
+        localDeviceID: DeviceID
+    ) -> DeviceID? {
+        let target = context.controllerID != localDeviceID
+            ? context.controllerID
+            : context.controlSession.peerID
+        if let target,
+           context.connectedDeviceIDs.contains(target),
            connectedDeviceIDs.contains(target) {
             return target
         }
-        let remoteConnected = connectedDeviceIDs.filter { $0 != appModel.localDeviceID }
+        let remoteConnected = connectedDeviceIDs
+            .intersection(context.connectedDeviceIDs)
+            .filter { $0 != localDeviceID }
         return remoteConnected.count == 1 ? remoteConnected.first : nil
     }
 }

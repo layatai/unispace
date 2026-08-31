@@ -82,8 +82,11 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
     private var discoveredQUICEndpoints: [DeviceID: NWEndpoint] = [:]
     private var retryAttempts: [DeviceID: Int] = [:]
     private var retryTokens: [DeviceID: UUID] = [:]
+    private var outboundPeerIDs = Set<DeviceID>()
+    private var desiredRealtimePeerID: DeviceID?
     private var stabilityTokens: [DeviceID: UUID] = [:]
     private var deferredAnnouncements: [ObjectIdentifier: DeferredAnnouncement] = [:]
+    private var supersededConnections = Set<ObjectIdentifier>()
     private var realtimeTransport: QUICRealtimeTransport?
     private var crossPlatformPointerTransport: CrossPlatformPointerTransport?
     private var running = false
@@ -216,7 +219,11 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
                     workspace: workspace,
                     key: currentKey
                 )
-                lock.withLock { realtimeTransport = realtime }
+                let desiredPeer = lock.withLock { () -> DeviceID? in
+                    realtimeTransport = realtime
+                    return desiredRealtimePeerID
+                }
+                realtime.setDesiredPeer(desiredPeer)
             } catch {
                 emit(.health(nil, .init(
                     health: .degraded,
@@ -241,18 +248,63 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
                 )))
             }
         }
-        for peer in workspace.devices where peer.id != localDevice.id && !peer.peerAddresses.isEmpty {
-            scheduleDirectConnection(to: peer.id, immediately: true)
-        }
     }
 
     public func stop() async { stopSynchronously() }
+
+    public func updateConnectionPolicy(_ policy: PeerConnectionPolicy) {
+        queue.async { [weak self] in
+            guard let self else { return }
+            let result = self.lock.withLock { () -> ([SecurePeerConnection], [DeviceID]) in
+                guard self.running else {
+                    self.outboundPeerIDs = policy.outboundPeerIDs
+                    return ([], [])
+                }
+                self.outboundPeerIDs = policy.outboundPeerIDs
+                let cancelledIDs = self.retryTokens.keys.filter { !policy.outboundPeerIDs.contains($0) }
+                for id in cancelledIDs {
+                    self.retryTokens.removeValue(forKey: id)
+                    self.retryAttempts.removeValue(forKey: id)
+                }
+                let pending = self.pendingConnections.filter {
+                    guard let expected = $0.value.expectedDeviceID else { return false }
+                    return !policy.outboundPeerIDs.contains(expected) && $0.value.isOutbound
+                }
+                for (objectID, _) in pending {
+                    self.pendingConnections.removeValue(forKey: objectID)
+                    self.deferredAnnouncements.removeValue(forKey: objectID)
+                }
+                let staleActive = self.connections.values.filter {
+                    $0.isOutbound && $0.deviceID.map {
+                        !policy.outboundPeerIDs.contains($0)
+                    } == true
+                }
+                let candidates = policy.outboundPeerIDs.filter { self.connections[$0] == nil }
+                return (pending.map(\.value) + staleActive, Array(candidates))
+            }
+            result.0.forEach { $0.cancel() }
+            result.1.forEach { self.scheduleDirectConnection(to: $0, immediately: true) }
+        }
+    }
+
+    public func setRealtimePeer(_ deviceID: DeviceID?) {
+        queue.async { [weak self] in
+            guard let self else { return }
+            let realtime = self.lock.withLock { () -> QUICRealtimeTransport? in
+                self.desiredRealtimePeerID = deviceID
+                return self.realtimeTransport
+            }
+            realtime?.setDesiredPeer(deviceID)
+        }
+    }
 
     public func reconnect(to deviceID: DeviceID) {
         queue.async { [weak self] in
             guard let self else { return }
             let pending = self.lock.withLock { () -> [SecurePeerConnection] in
-                guard self.running, self.connections[deviceID] == nil else { return [] }
+                guard self.running,
+                      self.outboundPeerIDs.contains(deviceID),
+                      self.connections[deviceID] == nil else { return [] }
                 self.retryTokens.removeValue(forKey: deviceID)
                 self.retryAttempts[deviceID] = 0
                 let matches = self.pendingConnections.filter { $0.value.expectedDeviceID == deviceID }
@@ -342,8 +394,11 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
             knownPeers.removeAll()
             retryAttempts.removeAll()
             retryTokens.removeAll()
+            outboundPeerIDs.removeAll()
+            desiredRealtimePeerID = nil
             stabilityTokens.removeAll()
             deferredAnnouncements.removeAll()
+            supersededConnections.removeAll()
             running = false
             return values
         }
@@ -487,7 +542,7 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
             let device = DeviceDescriptor(id: id, name: record["name"] ?? "Mac")
             current[id] = device
             currentEndpoints[id] = result.endpoint
-            if localDevice.id < id, connections[id] == nil,
+            if outboundPeerIDs.contains(id), connections[id] == nil,
                !pendingConnections.values.contains(where: { $0.expectedDeviceID == id }) {
                 candidates.append((device, result.endpoint))
             }
@@ -517,7 +572,7 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
                 let id = DeviceID(rawValue: uuid)
                 currentEndpoints[id] = result.endpoint
                 guard id != localDevice.id,
-                      localDevice.id < id,
+                      outboundPeerIDs.contains(id),
                       connections[id]?.transportKind != .quic,
                       !pendingConnections.values.contains(where: {
                           $0.expectedDeviceID == id && $0.transportKind == .quic
@@ -841,7 +896,9 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
         expectedDeviceID: DeviceID?
     ) {
         var removedActive = false
+        var wasSuperseded = false
         lock.lock()
+        wasSuperseded = supersededConnections.remove(objectID) != nil
         pendingConnections.removeValue(forKey: objectID)
         deferredAnnouncements.removeValue(forKey: objectID)
         let deviceID = managed.deviceID
@@ -851,6 +908,7 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
             removedActive = true
         }
         lock.unlock()
+        guard !wasSuperseded else { return }
         if let deviceID, removedActive {
             emit(.health(deviceID, .init(health: .reconnecting, transport: managed.transportKind)))
             emit(.disconnected(deviceID))
@@ -876,6 +934,7 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
     private func scheduleDirectConnection(to deviceID: DeviceID, immediately: Bool) {
         let schedule = lock.withLock { () -> (UUID, TimeInterval)? in
             guard running, connections[deviceID] == nil,
+                  outboundPeerIDs.contains(deviceID),
                   retryTokens[deviceID] == nil,
                   Self.hasReconnectRoute(
                     peer: knownPeers[deviceID],
@@ -884,9 +943,7 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
                     quicEndpoint: discoveredQUICEndpoints[deviceID]
                   ) else { return nil }
             let attempt = retryAttempts[deviceID, default: 0]
-            let delays: [TimeInterval] = [0.25, 0.5, 1, 2, 4, 5]
-            let baseDelay = immediately ? 0 : delays[min(attempt, delays.count - 1)]
-            let delay = baseDelay == 0 ? 0 : baseDelay * Double.random(in: 0.85...1.15)
+            let delay = immediately ? 0 : ConnectionRetrySchedule.delay(forAttempt: max(attempt - 1, 0))
             let token = UUID()
             retryTokens[deviceID] = token
             return (token, delay)
@@ -932,7 +989,7 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
         }) {
             connect(to: endpoint, expectedDevice: peer, isOutbound: true, transport: .quic)
             queue.asyncAfter(deadline: .now() + 0.75) { [weak self] in
-                self?.attemptTCPFallback(to: peer, endpoint: tcpEndpoint ?? address.map({
+                self?.transitionToTCPFallback(to: peer, endpoint: tcpEndpoint ?? address.map({
                     NWEndpoint.hostPort(host: NWEndpoint.Host($0.host), port: self?.configuredDirectPort ?? Self.controlPort)
                 }))
             }
@@ -948,6 +1005,19 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
             to: peer,
             endpoint: .hostPort(host: NWEndpoint.Host(address.host), port: configuredDirectPort)
         )
+    }
+
+    private func transitionToTCPFallback(to peer: DeviceDescriptor, endpoint: NWEndpoint?) {
+        let superseded = lock.withLock { () -> [SecurePeerConnection] in
+            guard running, connections[peer.id] == nil else { return [] }
+            let matches = pendingConnections.filter {
+                $0.value.expectedDeviceID == peer.id && $0.value.transportKind == .quic
+            }
+            supersededConnections.formUnion(matches.keys)
+            return matches.map(\.value)
+        }
+        superseded.forEach { $0.cancel() }
+        attemptTCPFallback(to: peer, endpoint: endpoint)
     }
 
     private func attemptTCPFallback(to peer: DeviceDescriptor, endpoint: NWEndpoint?) {

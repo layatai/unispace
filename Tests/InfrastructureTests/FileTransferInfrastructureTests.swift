@@ -404,6 +404,7 @@ final class FileTransferInfrastructureTests: XCTestCase {
             workspace: clientWorkspace,
             key: key
         )
+        clientTransport.setDesiredPeer(server.id)
         await fulfillment(of: [connected], timeout: 5)
         try await clientTransport.send(
             FileTransferEnvelope(

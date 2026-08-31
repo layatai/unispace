@@ -10,8 +10,14 @@ final class ClipboardInfrastructureTests: XCTestCase {
     func testEncryptedClipboardTransportConnectsAndTransfersUpdate() async throws {
         let workspaceID = WorkspaceID()
         let key = PairingCryptoSession.randomData(count: 32)
-        let server = DeviceDescriptor(id: DeviceID(), name: "Server")
-        let client = DeviceDescriptor(id: DeviceID(), name: "Client")
+        let server = DeviceDescriptor(
+            id: DeviceID(rawValue: UUID(uuidString: "00000000-0000-0000-0000-000000000002")!),
+            name: "Server"
+        )
+        let client = DeviceDescriptor(
+            id: DeviceID(rawValue: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!),
+            name: "Client"
+        )
         let serverWorkspace = WorkspaceSnapshot(
             id: workspaceID,
             name: "Clipboard",
@@ -24,6 +30,7 @@ final class ClipboardInfrastructureTests: XCTestCase {
             enableBonjour: false
         )
         try await serverTransport.start(localDevice: server, workspace: serverWorkspace, key: key)
+        serverTransport.setDesiredPeer(client.id)
         let port = try await waitForPort(serverTransport)
 
         let routedServer = DeviceDescriptor(
@@ -58,6 +65,7 @@ final class ClipboardInfrastructureTests: XCTestCase {
         }
 
         try await clientTransport.start(localDevice: client, workspace: clientWorkspace, key: key)
+        clientTransport.setDesiredPeer(server.id)
         await fulfillment(of: [connected], timeout: 5)
         let representations = [ClipboardRepresentation(kind: .plainText, value: "hello")]
         try await clientTransport.send(

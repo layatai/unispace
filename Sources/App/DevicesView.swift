@@ -40,6 +40,7 @@ struct DevicesView: View {
                         .menuStyle(.borderlessButton)
                         .help("Connection actions")
                         .accessibilityLabel("Connection actions")
+                        .accessibilityIdentifier("connection-actions")
 
                         capacityMeter
                     }

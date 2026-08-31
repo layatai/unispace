@@ -103,6 +103,7 @@ public actor FileTransferCoordinator {
         self.localDevice = localDevice
         self.workspace = workspace
         connectedPeers.removeAll()
+        yield(.connections(connectedPeers))
         automaticDestination = nil
         records.removeAll()
         lastPasteboardChangeCount = nil
@@ -121,8 +122,10 @@ public actor FileTransferCoordinator {
         transferTasks.removeAll()
         transferTaskTokens.removeAll()
         connectedPeers.removeAll()
+        yield(.connections(connectedPeers))
         automaticDestination = nil
         pendingPasteboardSelection = nil
+        transport.setDesiredPeer(nil)
         await store.suspendAll()
         await sourceProvider.suspendAll()
         await transport.stop()
@@ -152,10 +155,14 @@ public actor FileTransferCoordinator {
 
     public func setAutomaticDestination(_ deviceID: DeviceID?) async {
         guard deviceID != localDevice?.id else {
+            guard automaticDestination != nil else { return }
             automaticDestination = nil
+            transport.setDesiredPeer(nil)
             return
         }
+        guard automaticDestination != deviceID else { return }
         automaticDestination = deviceID
+        transport.setDesiredPeer(deviceID)
         await offerPendingPasteboardSelectionIfPossible()
     }
 
@@ -353,10 +360,12 @@ public actor FileTransferCoordinator {
         switch event {
         case let .connected(deviceID):
             connectedPeers.insert(deviceID)
+            yield(.connections(connectedPeers))
             await resumeTransfers(with: deviceID)
             await offerPendingPasteboardSelectionIfPossible()
         case let .disconnected(deviceID):
             connectedPeers.remove(deviceID)
+            yield(.connections(connectedPeers))
             await pauseTransfers(with: deviceID)
         case let .message(deviceID, envelope):
             do {

@@ -7,6 +7,12 @@ import UniSpaceInfrastructure
 
 @MainActor
 final class AppModel: ObservableObject {
+    private struct PendingActivationInput {
+        let initialEvent: InputEvent?
+        let stream: AsyncStream<InputEvent>
+        let continuation: AsyncStream<InputEvent>.Continuation
+    }
+
     enum SetupState: Equatable {
         case needsWorkspace
         case ready
@@ -21,6 +27,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var connectedDevices: Set<DeviceID> = []
     @Published private(set) var connectionSnapshots: [DeviceID: ConnectionSnapshot] = [:]
     @Published private(set) var currentControllerID: DeviceID?
+    @Published private(set) var controlSessionSnapshot = ControlSessionSnapshot.idle
+    @Published private(set) var workspaceKeyRevision: UInt64 = 0
     @Published private(set) var statusMessage = "Not configured"
     @Published var lastError: String?
     @Published private(set) var inputMonitoringPermission: PermissionState = .unknown
@@ -29,6 +37,7 @@ final class AppModel: ObservableObject {
 
     private let workspaceStore = FileWorkspaceStore()
     private let trustStore = KeychainTrustStore()
+    private let controllerIdentityStore = UserDefaultsControllerIdentityStore()
     private let permissionService = SystemPermissionService()
     private let displayCatalog = SystemDisplayCatalog()
     private let tailnetAddressProvider = SystemTailnetAddressProvider()
@@ -39,11 +48,13 @@ final class AppModel: ObservableObject {
     private let injector = CGEventInputInjector()
     private var coordinator: ControlSessionCoordinator?
     private var networkTask: Task<Void, Never>?
+    private var sessionTask: Task<Void, Never>?
+    private var networkRestartTask: Task<Void, Never>?
     private var screenChangeSubscription: AnyCancellable?
     private var currentEpoch: ControllerEpoch?
     private var lastBoundaryTime: UInt64 = 0
     private var controlTransferGuard = ControlTransferGuard()
-    private var pendingActivationEvent: InputEvent?
+    private var pendingActivationInput: PendingActivationInput?
 
     let localDeviceID: DeviceID
 
@@ -99,7 +110,11 @@ final class AppModel: ObservableObject {
         }
         do {
             workspace = try workspaceStore.load()
-            if workspace != nil {
+            if let workspace {
+                currentControllerID = controllerIdentityStore.controllerID(for: workspace.id)
+                currentEpoch = currentControllerID.map {
+                    ControllerEpoch(generation: workspace.generation, controllerID: $0)
+                }
                 setupState = .ready
                 Task { await startTrustedNetwork(claimControl: false) }
             }
@@ -110,6 +125,8 @@ final class AppModel: ObservableObject {
 
     deinit {
         networkTask?.cancel()
+        sessionTask?.cancel()
+        networkRestartTask?.cancel()
     }
 
     var localDevice: DeviceDescriptor {
@@ -138,8 +155,16 @@ final class AppModel: ObservableObject {
     var devices: [DeviceDescriptor] { workspace?.devices ?? [] }
     var allDisplays: [DisplayDescriptor] { devices.flatMap(\.displays) }
     var isLocalController: Bool { currentControllerID == localDeviceID }
+    var peerConnectionPolicy: PeerConnectionPolicy {
+        guard let workspace else { return .passive }
+        return ControlConnectionRoutingPolicy.policy(
+            localDeviceID: localDeviceID,
+            workspace: workspace,
+            controllerID: currentControllerID
+        )
+    }
     var hasReconnectableDevices: Bool {
-        devices.contains { $0.id != localDeviceID && !connectedDevices.contains($0.id) }
+        !peerConnectionPolicy.outboundPeerIDs.subtracting(connectedDevices).isEmpty
     }
 
     var needsPermissions: Bool {
@@ -157,6 +182,7 @@ final class AppModel: ObservableObject {
         let key = PairingCryptoSession.randomData(count: 32)
         do {
             try trustStore.storeWorkspaceKey(key, for: snapshot.id)
+            workspaceKeyRevision &+= 1
             try workspaceStore.save(snapshot)
             workspace = snapshot
             setupState = .ready
@@ -235,6 +261,9 @@ final class AppModel: ObservableObject {
         candidates = []
         networkTask?.cancel()
         networkTask = nil
+        sessionTask?.cancel()
+        sessionTask = nil
+        finishPendingActivationInput()
         await coordinator?.stop()
         coordinator = nil
         await transport.stop()
@@ -254,6 +283,7 @@ final class AppModel: ObservableObject {
         }
 
         self.workspace = nil
+        controllerIdentityStore.setControllerID(nil, for: workspace.id)
         connectedDevices = []
         currentControllerID = nil
         currentEpoch = nil
@@ -274,6 +304,10 @@ final class AppModel: ObservableObject {
             controlTransferGuard.reset()
             currentEpoch = epoch
             currentControllerID = localDeviceID
+            if let workspace {
+                controllerIdentityStore.setControllerID(localDeviceID, for: workspace.id)
+            }
+            transport.updateConnectionPolicy(peerConnectionPolicy)
             if var workspace, epoch.generation > workspace.generation {
                 workspace.generation = epoch.generation
                 persistAndBroadcastLocally(workspace)
@@ -285,7 +319,7 @@ final class AppModel: ObservableObject {
 
     func stopControlling() {
         controlTransferGuard.beginStop()
-        pendingActivationEvent = nil
+        finishPendingActivationInput()
         capture.setSuppressionEnabled(false)
         Task {
             await coordinator?.deactivateCurrentSession()
@@ -308,9 +342,12 @@ final class AppModel: ObservableObject {
     }
 
     func refreshConnections() {
-        let offline = devices.filter { $0.id != localDeviceID && !connectedDevices.contains($0.id) }
+        let allowed = peerConnectionPolicy.outboundPeerIDs
+        let offline = devices.filter { allowed.contains($0.id) && !connectedDevices.contains($0.id) }
         guard !offline.isEmpty else {
-            statusMessage = "All devices are connected"
+            statusMessage = allowed.isEmpty
+                ? "Waiting for the controller to restore connections"
+                : "All devices are connected"
             return
         }
         for device in offline {
@@ -323,6 +360,7 @@ final class AppModel: ObservableObject {
 
     func reconnect(to deviceID: DeviceID) {
         guard deviceID != localDeviceID,
+              peerConnectionPolicy.outboundPeerIDs.contains(deviceID),
               let device = devices.first(where: { $0.id == deviceID }),
               !connectedDevices.contains(deviceID) else { return }
         let transportKind = connectionSnapshots[deviceID]?.transport ?? .tcp
@@ -336,9 +374,14 @@ final class AppModel: ObservableObject {
     }
 
     func restartNetworking() {
+        guard networkRestartTask == nil else { return }
         let shouldRetainControl = isLocalController
         statusMessage = "Restarting networking"
-        Task { await startTrustedNetwork(claimControl: shouldRetainControl) }
+        networkRestartTask = Task { [weak self] in
+            guard let self else { return }
+            await self.startTrustedNetwork(claimControl: shouldRetainControl)
+            self.networkRestartTask = nil
+        }
     }
 
     func setLaunchAtLogin(_ enabled: Bool) {
@@ -382,6 +425,11 @@ final class AppModel: ObservableObject {
         Task {
             let removedDisplays = Set(workspace.devices.first(where: { $0.id == deviceID })?.displays.map(\.id) ?? [])
             workspace.devices.removeAll { $0.id == deviceID }
+            if currentControllerID == deviceID {
+                currentControllerID = nil
+                currentEpoch = nil
+                controllerIdentityStore.setControllerID(nil, for: workspace.id)
+            }
             workspace.topology.links.removeAll {
                 removedDisplays.contains($0.source.displayID) || removedDisplays.contains($0.destination.displayID)
             }
@@ -392,6 +440,7 @@ final class AppModel: ObservableObject {
             }
             do {
                 try trustStore.rotateWorkspaceKey(newKey, for: workspace.id)
+                workspaceKeyRevision &+= 1
                 try workspaceStore.save(workspace)
                 self.workspace = workspace
                 await startTrustedNetwork(claimControl: isLocalController)
@@ -446,8 +495,13 @@ final class AppModel: ObservableObject {
     private func completeJoin(snapshot: WorkspaceSnapshot, key: Data) {
         do {
             try trustStore.storeWorkspaceKey(key, for: snapshot.id)
+            workspaceKeyRevision &+= 1
             try workspaceStore.save(snapshot)
             workspace = snapshot
+            currentControllerID = controllerIdentityStore.controllerID(for: snapshot.id)
+            currentEpoch = currentControllerID.map {
+                ControllerEpoch(generation: snapshot.generation, controllerID: $0)
+            }
             setupState = .ready
             Task { await startTrustedNetwork(claimControl: false) }
         } catch {
@@ -496,6 +550,8 @@ final class AppModel: ObservableObject {
             guard let keyring = try trustStore.workspaceKeyring(for: workspace.id) else { return }
             networkTask?.cancel()
             networkTask = nil
+            sessionTask?.cancel()
+            sessionTask = nil
             await coordinator?.stop()
             coordinator = nil
             await transport.stop()
@@ -517,20 +573,44 @@ final class AppModel: ObservableObject {
                 workspace: refreshedWorkspace,
                 workspaceKeys: keyring.candidates
             )
-            coordinator = ControlSessionCoordinator(
+            let coordinator = ControlSessionCoordinator(
                 localDeviceID: localDeviceID,
                 workspaceID: workspace.id,
                 capture: capture,
                 injector: injector,
                 transport: transport,
-                election: ControllerStateMachine(nextGeneration: workspace.generation + 1)
+                election: ControllerStateMachine(
+                    currentEpoch: currentEpoch,
+                    nextGeneration: workspace.generation + 1
+                )
             )
+            self.coordinator = coordinator
+            transport.updateConnectionPolicy(peerConnectionPolicy)
             startCaptureIfPossible()
             networkTask = Task { [weak self] in
                 guard let self else { return }
                 for await event in transport.events() {
                     if Task.isCancelled { break }
                     await self.handlePeerEvent(event)
+                }
+            }
+            sessionTask = Task { [weak self, coordinator] in
+                for await snapshot in await coordinator.sessionSnapshots() {
+                    guard !Task.isCancelled, let self else { return }
+                    if self.controlSessionSnapshot != snapshot {
+                        let previous = self.controlSessionSnapshot
+                        self.controlSessionSnapshot = snapshot
+                        if snapshot.phase == .idle, previous.phase != .idle {
+                            self.finishPendingActivationInput()
+                            if previous.phase == .receiving {
+                                self.controlTransferGuard.reset()
+                            } else {
+                                self.controlTransferGuard.beginStop()
+                                self.controlTransferGuard.completeStop()
+                                self.statusMessage = "Control returned to this Mac"
+                            }
+                        }
+                    }
                 }
             }
             setupState = .ready
@@ -578,8 +658,8 @@ final class AppModel: ObservableObject {
 
     @discardableResult
     private func captureSynchronously(_ event: InputEvent) -> Bool {
-        if pendingActivationEvent != nil {
-            Task { @MainActor [weak self] in await self?.forwardCaptured(event) }
+        if let pendingActivationInput {
+            pendingActivationInput.continuation.yield(event)
             return true
         }
         if case let .pointerMove(_, _, x, y) = event {
@@ -603,7 +683,14 @@ final class AppModel: ObservableObject {
                    transition,
                    sourceDisplay: sourceDisplay
                ) {
-                pendingActivationEvent = event
+                let pair = AsyncStream<InputEvent>.makeStream(
+                    bufferingPolicy: .bufferingNewest(256)
+                )
+                pendingActivationInput = PendingActivationInput(
+                    initialEvent: event,
+                    stream: pair.stream,
+                    continuation: pair.continuation
+                )
                 capture.setSuppressionEnabled(true)
                 Task { @MainActor [weak self] in
                     await self?.completeActivation(transition, attempt: attempt)
@@ -622,7 +709,12 @@ final class AppModel: ObservableObject {
     ) async {
         guard let coordinator else {
             controlTransferGuard.activationFailed(attempt)
-            pendingActivationEvent = nil
+            finishPendingActivationInput()
+            capture.setSuppressionEnabled(false)
+            return
+        }
+        guard let pending = pendingActivationInput else {
+            controlTransferGuard.activationFailed(attempt)
             capture.setSuppressionEnabled(false)
             return
         }
@@ -634,25 +726,25 @@ final class AppModel: ObservableObject {
                 normalizedPosition: transition.normalizedPosition,
                 targetCapabilities: capabilities(of: transition.targetDeviceID),
                 requiresActivationConfirmation: true,
-                initialEvent: pendingActivationEvent
+                initialEvent: pending.initialEvent,
+                pendingEvents: pending.stream
             )
             guard case .controlling = await coordinator.currentState() else {
                 controlTransferGuard.activationFailed(attempt)
-                pendingActivationEvent = nil
+                finishPendingActivationInput()
                 capture.setSuppressionEnabled(false)
                 return
             }
             guard controlTransferGuard.activationSucceeded(attempt) else {
-                pendingActivationEvent = nil
+                finishPendingActivationInput()
                 await coordinator.deactivateCurrentSession()
                 capture.setSuppressionEnabled(false)
                 return
             }
-            pendingActivationEvent = nil
             statusMessage = "Controlling \(deviceName(transition.targetDeviceID))"
         } catch {
             controlTransferGuard.activationFailed(attempt)
-            pendingActivationEvent = nil
+            finishPendingActivationInput()
             capture.setSuppressionEnabled(false)
             lastError = error.localizedDescription
         }
@@ -665,6 +757,11 @@ final class AppModel: ObservableObject {
             controlTransferGuard.completeStop()
             statusMessage = "Control returned to this Mac"
         }
+    }
+
+    private func finishPendingActivationInput() {
+        pendingActivationInput?.continuation.finish()
+        pendingActivationInput = nil
     }
 
     private func handleInjectedPointer(x: Double, y: Double) async {
@@ -769,6 +866,10 @@ final class AppModel: ObservableObject {
         case let .controllerClaim(epoch):
             currentEpoch = max(currentEpoch ?? epoch, epoch)
             currentControllerID = currentEpoch?.controllerID
+            if let workspace, let currentControllerID {
+                controllerIdentityStore.setControllerID(currentControllerID, for: workspace.id)
+            }
+            transport.updateConnectionPolicy(peerConnectionPolicy)
             if var workspace, epoch.generation > workspace.generation {
                 workspace.generation = epoch.generation
                 persistAndBroadcastLocally(workspace)
@@ -812,6 +913,9 @@ final class AppModel: ObservableObject {
             await coordinator?.deactivateCurrentSession()
             if case .receiving? = previousState {
                 controlTransferGuard.reset()
+            } else if case .activating? = previousState {
+                controlTransferGuard.beginStop()
+                controlTransferGuard.completeStop()
             } else if case .controlling? = previousState {
                 controlTransferGuard.beginStop()
                 controlTransferGuard.completeStop()
@@ -855,6 +959,7 @@ final class AppModel: ObservableObject {
             guard let workspace else { return }
             do {
                 try trustStore.rotateWorkspaceKey(newKey, for: workspace.id)
+                workspaceKeyRevision &+= 1
                 await startTrustedNetwork(claimControl: isLocalController)
             } catch {
                 lastError = error.localizedDescription
@@ -887,15 +992,29 @@ final class AppModel: ObservableObject {
             controlTransferGuard.returned(to: targetDisplay, enteringFrom: destination.edge)
             statusMessage = "Controller ready"
         } else {
+            let pair = AsyncStream<InputEvent>.makeStream(
+                bufferingPolicy: .bufferingNewest(256)
+            )
+            pendingActivationInput = PendingActivationInput(
+                initialEvent: nil,
+                stream: pair.stream,
+                continuation: pair.continuation
+            )
             try? await coordinator.activate(
                 target: targetDisplay.deviceID,
                 displayID: targetDisplay.id,
                 entryEdge: destination.edge,
                 normalizedPosition: normalizedPosition,
                 targetCapabilities: capabilities(of: targetDisplay.deviceID),
-                requiresActivationConfirmation: true
+                requiresActivationConfirmation: true,
+                pendingEvents: pair.stream
             )
-            statusMessage = "Controlling \(deviceName(targetDisplay.deviceID))"
+            if case .controlling = await coordinator.currentState() {
+                statusMessage = "Controlling \(deviceName(targetDisplay.deviceID))"
+            } else {
+                finishPendingActivationInput()
+                capture.setSuppressionEnabled(false)
+            }
         }
     }
 

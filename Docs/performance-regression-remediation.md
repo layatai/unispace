@@ -1,0 +1,71 @@
+# Performance regression remediation
+
+## Goals
+
+- Keep idle CPU below 2% on the Fox validation Mac.
+- Stop repeated Keychain reads and unchanged SwiftUI publications.
+- Ensure only the connection owner probes an unavailable peer.
+- Keep clipboard and file-transfer recovery independent from remote-control input.
+- Preserve the existing macOS and Macifier wire protocols.
+
+## Connection ownership
+
+| Connection | Proactive dial owner |
+| --- | --- |
+| macOS controller to macOS receiver | Controller Mac |
+| macOS receiver to macOS receiver | Neither |
+| Macifier Windows to macOS controller | Macifier, targeting the accepted controller only |
+| Realtime pointer | Active controller, for the active target only |
+| Clipboard and file transfer | Current continuity target or explicit transfer destination only |
+
+The last accepted controller is persisted per workspace. A workspace without a
+persisted controller uses one deterministic bootstrap Mac until a controller
+claim is observed. Windows peers are never selected as a macOS outbound target
+because Macifier is the outbound client.
+
+Each peer has at most one connection attempt in flight. Retry delays are 1, 2,
+4, 8, and 15 seconds, followed by one attempt per minute, with 15% jitter.
+Backoff resets only after ten seconds of stable connectivity. Network recovery,
+a changed route, a controller change, and an explicit refresh may wake a retry.
+
+## Controller isolation
+
+`ControlSessionCoordinator` publishes a typed, read-only session snapshot.
+Continuity consumes that snapshot but cannot restart the trusted control
+transport, stop a control session, or alter input suppression.
+
+Activation input uses a bounded stream. The activation envelope is written
+before buffered input is drained, so confirmation does not create per-event
+main-actor tasks or allow input to overtake activation.
+
+## Event-driven continuity
+
+Clipboard and file-transfer view models subscribe to immutable application
+context instead of polling `AppModel`. The workspace key is cached until the
+workspace or key revision changes. Published properties are assigned only when
+their values differ.
+
+Secondary transports keep passive listeners but dial only their desired peer.
+Realtime connects only for an activating or active control session. Clipboard
+connects only while sharing has a target. File transfer connects only to the
+selected or automatic destination.
+
+## Regression gates
+
+- Four-node topology with one unavailable node: only the dial owner retries.
+- No overlapping QUIC and TCP attempt for the same peer.
+- At most one attempt per unavailable peer per minute after the circuit opens.
+- Controller transfer cancels retries owned by the former controller.
+- Macifier reconnects only to its persisted controller.
+- Identical context produces no Keychain read, QoS update, or UI publication.
+- Delayed activation preserves activation-before-input ordering with bounded
+  buffering, no heartbeat loss, and no pointer stall above 50 ms.
+- Existing unit, coverage, UI, native-input, and Windows CI gates remain intact.
+
+## Delivery
+
+1. Validate connection ownership and retry diagnostics on Fox for 15 minutes.
+2. Validate idle Keychain, scene-update, and CPU counters.
+3. Validate remote input during clipboard activity and a large file transfer.
+4. Run the signed native-input smoke and Macifier Windows CI.
+5. Notarize and install only after all gates pass.

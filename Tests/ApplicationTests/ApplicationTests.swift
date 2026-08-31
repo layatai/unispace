@@ -1072,6 +1072,7 @@ final class ApplicationTests: XCTestCase {
         )
         _ = await coordinator.makeLocalController()
 
+        let pending = AsyncStream<InputEvent>.makeStream(bufferingPolicy: .bufferingNewest(8))
         let activation = Task {
             try await coordinator.activate(
                 target: remote,
@@ -1084,12 +1085,15 @@ final class ApplicationTests: XCTestCase {
                     deltaY: 0,
                     absoluteX: 100,
                     absoluteY: 50
-                )
+                ),
+                pendingEvents: pending.stream
             )
         }
         let sessionID = try await activationSessionID(in: transport)
 
-        _ = await coordinator.handleCaptured(.key(code: 12, isDown: true, isRepeat: false))
+        pending.continuation.yield(.key(code: 12, isDown: true, isRepeat: false))
+        pending.continuation.finish()
+        for _ in 0..<100 where transport.frames.count < 2 { await Task.yield() }
         await coordinator.flushPendingInput()
 
         XCTAssertEqual(transport.frames.map(\.event), [

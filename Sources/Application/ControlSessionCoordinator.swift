@@ -30,6 +30,7 @@ public actor ControlSessionCoordinator {
 
     public enum State: Equatable, Sendable {
         case idle
+        case activating(epoch: ControllerEpoch, target: DeviceID, session: SessionID)
         case controlling(epoch: ControllerEpoch, target: DeviceID, session: SessionID)
         case receiving(epoch: ControllerEpoch, source: DeviceID, session: SessionID)
     }
@@ -62,6 +63,8 @@ public actor ControlSessionCoordinator {
     private let inputSender: OrderedInputSender
     private let clock: MonotonicClock
     private let activationTimeout: Duration
+    private let sessionStream: AsyncStream<ControlSessionSnapshot>
+    private let sessionContinuation: AsyncStream<ControlSessionSnapshot>.Continuation
     private var election: ControllerStateMachine
     private var remoteInputState = RemoteInputState()
     private var currentFlags: UInt64 = 0
@@ -87,6 +90,8 @@ public actor ControlSessionCoordinator {
     private var activeControlRoute: ActiveControlRoute?
     private var pendingActivation: PendingActivation?
     private var activationTimeoutTask: Task<Void, Never>?
+    private var activationInputTask: Task<Void, Never>?
+    private var lastSessionSnapshot = ControlSessionSnapshot.idle
 
     public init(
         localDeviceID: DeviceID,
@@ -108,15 +113,22 @@ public actor ControlSessionCoordinator {
         self.clock = clock
         self.activationTimeout = activationTimeout
         self.election = election
+        let pair = AsyncStream<ControlSessionSnapshot>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        sessionStream = pair.stream
+        sessionContinuation = pair.continuation
+        sessionContinuation.yield(.idle)
     }
 
+    deinit { sessionContinuation.finish() }
+
     public func currentState() -> State { state }
+    public func sessionSnapshots() -> AsyncStream<ControlSessionSnapshot> { sessionStream }
 
     @discardableResult
     public func makeLocalController() async -> ControllerEpoch {
         let epoch = election.claim(for: localDeviceID)
         await endCurrentSession(notifyPeer: true)
-        state = .idle
+        setState(.idle)
         return epoch
     }
 
@@ -134,7 +146,8 @@ public actor ControlSessionCoordinator {
         normalizedPosition: Double,
         targetCapabilities: Set<DeviceCapability> = [],
         requiresActivationConfirmation: Bool = false,
-        initialEvent: InputEvent? = nil
+        initialEvent: InputEvent? = nil,
+        pendingEvents: AsyncStream<InputEvent>? = nil
     ) async throws {
         guard let epoch = election.currentEpoch, epoch.controllerID == localDeviceID else { return }
         if case .idle = state {
@@ -144,7 +157,7 @@ public actor ControlSessionCoordinator {
         }
         let sessionID = SessionID()
         resetRealtimeSender(incrementGeneration: true)
-        state = .controlling(epoch: epoch, target: target, session: sessionID)
+        setState(.activating(epoch: epoch, target: target, session: sessionID))
         activeControlRoute = ActiveControlRoute(
             target: target,
             displayID: displayID,
@@ -153,6 +166,7 @@ public actor ControlSessionCoordinator {
             targetCapabilities: targetCapabilities
         )
         capture.setSuppressionEnabled(true)
+        transport.setRealtimePeer(target)
         let supportsExplicitAcknowledgement = targetCapabilities.contains(.activationAcknowledgementV1)
         let activationResults = (requiresActivationConfirmation || supportsExplicitAcknowledgement)
             ? beginActivationWait(target: target, sessionID: sessionID)
@@ -168,8 +182,18 @@ public actor ControlSessionCoordinator {
                 ))),
                 to: target
             )
+            setState(.controlling(epoch: epoch, target: target, session: sessionID))
             if let initialEvent {
                 _ = await handleCaptured(initialEvent)
+            }
+            if let pendingEvents {
+                activationInputTask?.cancel()
+                activationInputTask = Task { [weak self] in
+                    for await event in pendingEvents {
+                        guard !Task.isCancelled, let self else { return }
+                        _ = await self.handleCaptured(event)
+                    }
+                }
             }
             if let activationResults {
                 if !supportsExplicitAcknowledgement {
@@ -228,7 +252,8 @@ public actor ControlSessionCoordinator {
             enteringFrom: activation.entryEdge,
             normalizedPosition: activation.normalizedPosition
         )
-        state = .receiving(epoch: epoch, source: source, session: activation.sessionID)
+        setState(.receiving(epoch: epoch, source: source, session: activation.sessionID))
+        transport.setRealtimePeer(source)
         lastHeartbeatNanos = clock.nowNanoseconds()
         startWatchdog(source: source, sessionID: activation.sessionID)
         return true
@@ -328,6 +353,7 @@ public actor ControlSessionCoordinator {
             previous: smoothedRoundTripNanos,
             sample: now - sentAtNanos
         )
+        publishSessionSnapshotIfChanged()
         return Int((smoothedRoundTripNanos ?? 0) / 1_000_000)
     }
 
@@ -388,7 +414,8 @@ public actor ControlSessionCoordinator {
 
     public func peerDisconnected(_ deviceID: DeviceID) async {
         switch state {
-        case let .controlling(_, target, _) where target == deviceID:
+        case let .activating(_, target, _) where target == deviceID,
+             let .controlling(_, target, _) where target == deviceID:
             await endCurrentSession(notifyPeer: false)
         case let .receiving(_, source, _) where source == deviceID:
             await endCurrentSession(notifyPeer: false)
@@ -418,7 +445,9 @@ public actor ControlSessionCoordinator {
     private func endCurrentSession(notifyPeer: Bool) async {
         let previous = state
         cancelPendingActivation()
-        state = .idle
+        setState(.idle)
+        activationInputTask?.cancel()
+        activationInputTask = nil
         pointerFlushTask?.cancel()
         pointerFlushTask = nil
         pendingPointerEvent = nil
@@ -428,6 +457,7 @@ public actor ControlSessionCoordinator {
         watchdogTask?.cancel()
         watchdogTask = nil
         activeControlRoute = nil
+        transport.setRealtimePeer(nil)
         currentFlags = 0
         smoothedHeartbeatIntervalNanos = nil
         smoothedRoundTripNanos = nil
@@ -445,7 +475,8 @@ public actor ControlSessionCoordinator {
         await inputSender.cancelPending()
 
         switch previous {
-        case let .controlling(_, target, sessionID):
+        case let .activating(_, target, sessionID),
+             let .controlling(_, target, sessionID):
             if notifyPeer {
                 try? await transport.send(ControlEnvelope(message: .releaseAll(sessionID)), to: target)
                 try? await transport.send(ControlEnvelope(message: .deactivate(sessionID)), to: target)
@@ -457,6 +488,31 @@ public actor ControlSessionCoordinator {
         case .idle:
             break
         }
+    }
+
+    private func setState(_ value: State) {
+        state = value
+        publishSessionSnapshotIfChanged()
+    }
+
+    private func publishSessionSnapshotIfChanged() {
+        let latency = smoothedRoundTripNanos
+            .map { Int($0 / 1_000_000) }
+            .flatMap { $0 >= 30 ? 30 : nil }
+        let snapshot: ControlSessionSnapshot
+        switch state {
+        case .idle:
+            snapshot = .idle
+        case let .activating(_, target, _):
+            snapshot = .init(phase: .activating, peerID: target, latencyMilliseconds: latency)
+        case let .controlling(_, target, _):
+            snapshot = .init(phase: .controlling, peerID: target, latencyMilliseconds: latency)
+        case let .receiving(_, source, _):
+            snapshot = .init(phase: .receiving, peerID: source)
+        }
+        guard snapshot != lastSessionSnapshot else { return }
+        lastSessionSnapshot = snapshot
+        sessionContinuation.yield(snapshot)
     }
 
     private func beginActivationWait(

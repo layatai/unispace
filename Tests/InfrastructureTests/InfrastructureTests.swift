@@ -503,6 +503,7 @@ final class InfrastructureTests: XCTestCase {
             }
         }
         try await client.start(localDevice: clientDevice, workspace: clientWorkspace, key: key)
+        client.updateConnectionPolicy(.init(outboundPeerIDs: [serverID]))
         await fulfillment(of: [serverConnected, clientConnected, capabilitiesReceived], timeout: 8)
         try await client.send(
             ControlEnvelope(message: .controllerClaim(.init(generation: 1, controllerID: clientID))),
@@ -597,6 +598,7 @@ final class InfrastructureTests: XCTestCase {
         }
 
         try await client.start(localDevice: clientDevice, workspace: clientWorkspace, key: key)
+        client.updateConnectionPolicy(.init(outboundPeerIDs: [serverID]))
         await fulfillment(of: [serverConnected, clientConnected], timeout: 8)
         try await client.send(
             ControlEnvelope(message: .controllerClaim(.init(generation: 1, controllerID: clientID))),
@@ -625,6 +627,7 @@ final class InfrastructureTests: XCTestCase {
         )
         let server = QUICRealtimeTransport(listenPort: .any, directPort: .any, enableBonjour: false)
         try server.start(localDevice: serverDevice, workspace: serverWorkspace, key: key)
+        server.setDesiredPeer(clientID)
         let port = try await waitForRealtimePort(of: server)
 
         let routedServer = DeviceDescriptor(
@@ -660,6 +663,7 @@ final class InfrastructureTests: XCTestCase {
             if source == clientID, incoming == frame { received.fulfill() }
         }
         try client.start(localDevice: clientDevice, workspace: clientWorkspace, key: key)
+        client.setDesiredPeer(serverID)
 
         var sent = false
         for _ in 0..<100 where !sent {
@@ -729,6 +733,7 @@ final class InfrastructureTests: XCTestCase {
             }
         }
         try await client.start(localDevice: clientDevice, workspace: clientWorkspace, key: key)
+        client.updateConnectionPolicy(.init(outboundPeerIDs: [serverID]))
         await fulfillment(of: [firstConnection], timeout: 8)
         await firstServer.stop()
         await fulfillment(of: [disconnected], timeout: 5)
@@ -809,6 +814,7 @@ final class InfrastructureTests: XCTestCase {
         }
 
         try await client.start(localDevice: clientDevice, workspace: clientWorkspace, key: key)
+        client.updateConnectionPolicy(.init(outboundPeerIDs: [serverID]))
         await fulfillment(of: [firstConnection], timeout: 8)
         await firstServer.stop()
         await fulfillment(of: [disconnected], timeout: 5)
@@ -908,6 +914,7 @@ final class InfrastructureTests: XCTestCase {
             workspace: workspace,
             key: PairingCryptoSession.randomData(count: 32)
         )
+        transport.updateConnectionPolicy(.init(outboundPeerIDs: [peerID]))
         await fulfillment(of: [firstAttempt], timeout: 2)
         transport.reconnect(to: peerID)
         await fulfillment(of: [immediateRetry], timeout: 1)
@@ -916,6 +923,62 @@ final class InfrastructureTests: XCTestCase {
         listener.cancel()
         acceptedConnections.cancelAll()
         events.cancel()
+    }
+
+    func testTrustedTransportWaitsForOutboundOwnershipBeforeDialing() async throws {
+        let queue = DispatchQueue(label: "UniSpaceInfrastructureTests.Ownership")
+        let acceptedConnections = NWConnectionRetainer()
+        let listener = try NWListener(using: NetworkPeerTransport.makeParameters(), on: .any)
+        let listenerReady = expectation(description: "ownership listener ready")
+        listener.stateUpdateHandler = { state in
+            if case .ready = state { listenerReady.fulfill() }
+        }
+        listener.newConnectionHandler = { connection in
+            acceptedConnections.append(connection)
+            connection.start(queue: queue)
+        }
+        listener.start(queue: queue)
+        await fulfillment(of: [listenerReady], timeout: 3)
+        let port = try XCTUnwrap(listener.port)
+
+        let localID = DeviceID()
+        let peerID = DeviceID()
+        let local = DeviceDescriptor(id: localID, name: "Passive")
+        let peer = DeviceDescriptor(
+            id: peerID,
+            name: "Owned peer",
+            peerAddresses: [try PeerAddress("127.0.0.1")]
+        )
+        let workspace = WorkspaceSnapshot(
+            id: WorkspaceID(),
+            name: "Ownership",
+            localDeviceID: localID,
+            devices: [local, peer]
+        )
+        let transport = NetworkPeerTransport(
+            listenPort: .any,
+            directPort: port,
+            enableBonjour: false,
+            enableQUIC: false,
+            enableRealtime: false
+        )
+        try await transport.start(
+            localDevice: local,
+            workspace: workspace,
+            key: PairingCryptoSession.randomData(count: 32)
+        )
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(acceptedConnections.count, 0)
+
+        transport.updateConnectionPolicy(.init(outboundPeerIDs: [peerID]))
+        for _ in 0..<100 where acceptedConnections.count == 0 {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(acceptedConnections.count, 1)
+
+        await transport.stop()
+        listener.cancel()
+        acceptedConnections.cancelAll()
     }
 
     func testTrustedTransportRetriesWhenReachablePeerNeverAuthenticates() async throws {
@@ -973,6 +1036,7 @@ final class InfrastructureTests: XCTestCase {
             workspace: workspace,
             key: PairingCryptoSession.randomData(count: 32)
         )
+        transport.updateConnectionPolicy(.init(outboundPeerIDs: [peerID]))
         await fulfillment(of: [retried], timeout: 3)
 
         await transport.stop()
@@ -1729,6 +1793,8 @@ private final class SecureConnectionRetainer: @unchecked Sendable {
 private final class NWConnectionRetainer: @unchecked Sendable {
     private let lock = NSLock()
     private var connections: [NWConnection] = []
+
+    var count: Int { lock.withLock { connections.count } }
 
     func append(_ connection: NWConnection) {
         lock.withLock { connections.append(connection) }

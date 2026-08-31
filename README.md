@@ -114,6 +114,9 @@ Compatible versions also share text and links and transfer regular files between
 macOS and Windows. See [Docs/FileTransfer.md](Docs/FileTransfer.md) for file-transfer
 protocol, staging, recovery, and compatibility details.
 
+Connection ownership, continuity isolation, and performance release gates are
+documented in [Docs/performance-regression-remediation.md](Docs/performance-regression-remediation.md).
+
 Directories, macOS packages, symbolic links, reparse points, special files, screen
 sharing, Windows-to-Mac control, an internet relay, Touch ID or power-button forwarding,
 login/UAC secure-desktop control, Secure Input bypasses, and live cross-device drag

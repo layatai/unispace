@@ -158,14 +158,17 @@ final class UniSpaceUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Reconnecting"].exists)
         XCTAssertTrue(app.staticTexts["The trusted peer is temporarily unavailable"].exists)
 
-        app.buttons["Connection actions"].click()
+        let connectionActions = app.descendants(matching: .any)["connection-actions"]
+        XCTAssertTrue(connectionActions.waitForExistence(timeout: 5))
+        connectionActions.click()
         let restart = app.menuItems["Restart Networking…"]
         XCTAssertTrue(restart.waitForExistence(timeout: 2))
         restart.click()
+        let restartDialog = app.sheets.firstMatch
         XCTAssertTrue(app.staticTexts["Restart networking?"].waitForExistence(timeout: 2))
-        XCTAssertTrue(app.buttons["Restart Networking"].exists)
-        XCTAssertTrue(app.buttons["Cancel"].exists)
-        app.buttons["Cancel"].click()
+        XCTAssertTrue(restartDialog.buttons["Restart Networking"].exists)
+        XCTAssertTrue(restartDialog.buttons["Cancel"].exists)
+        restartDialog.buttons["Cancel"].click()
         app.terminate()
     }
 

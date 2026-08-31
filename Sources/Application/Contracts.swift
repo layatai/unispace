@@ -45,6 +45,11 @@ public protocol WorkspaceStore: Sendable {
     func remove() throws
 }
 
+public protocol ControllerIdentityStore: Sendable {
+    func controllerID(for workspaceID: WorkspaceID) -> DeviceID?
+    func setControllerID(_ deviceID: DeviceID?, for workspaceID: WorkspaceID)
+}
+
 public protocol TrustStore: Sendable {
     func workspaceKey(for workspaceID: WorkspaceID) throws -> Data?
     func storeWorkspaceKey(_ key: Data, for workspaceID: WorkspaceID) throws
@@ -104,6 +109,8 @@ public enum PeerEvent: Sendable, Equatable {
 public protocol PeerTransport: Sendable {
     func start(localDevice: DeviceDescriptor, workspace: WorkspaceSnapshot, key: Data) async throws
     func stop() async
+    func updateConnectionPolicy(_ policy: PeerConnectionPolicy)
+    func setRealtimePeer(_ deviceID: DeviceID?)
     func reconnect(to deviceID: DeviceID)
     func events() -> AsyncStream<PeerEvent>
     func send(_ envelope: ControlEnvelope, to deviceID: DeviceID) async throws
@@ -113,6 +120,9 @@ public protocol PeerTransport: Sendable {
 }
 
 public extension PeerTransport {
+    func updateConnectionPolicy(_ policy: PeerConnectionPolicy) {}
+    func setRealtimePeer(_ deviceID: DeviceID?) {}
+
     @discardableResult
     func sendRealtime(_ frame: RealtimePointerFrame, to deviceID: DeviceID) async throws -> Bool {
         try await send(frame.reliableFallback, to: deviceID)

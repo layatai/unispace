@@ -40,6 +40,7 @@ public final class NetworkClipboardTransport: ClipboardTransport, @unchecked Sen
     private var pendingConnections: [ObjectIdentifier: SecureClipboardConnection] = [:]
     private var retryAttempts: [DeviceID: Int] = [:]
     private var retryTokens: [DeviceID: UUID] = [:]
+    private var desiredPeerID: DeviceID?
     private var listenerRetryAttempt = 0
     private var listenerRetryToken: UUID?
     private var running = false
@@ -121,12 +122,36 @@ public final class NetworkClipboardTransport: ClipboardTransport, @unchecked Sen
         listener.start(queue: queue)
         browser?.start(queue: queue)
 
-        for peer in workspace.devices where peer.id != localDevice.id && !peer.peerAddresses.isEmpty {
-            scheduleDirectConnection(to: peer.id, immediately: true)
-        }
     }
 
     public func stop() async { stopSynchronously() }
+
+    public func setDesiredPeer(_ deviceID: DeviceID?) {
+        queue.async { [weak self] in
+            guard let self else { return }
+            let cancelled = self.lock.clipboardWithLock { () -> [SecureClipboardConnection] in
+                self.desiredPeerID = deviceID
+                let staleRetryIDs = self.retryTokens.keys.filter { $0 != deviceID }
+                for id in staleRetryIDs {
+                    self.retryTokens.removeValue(forKey: id)
+                    self.retryAttempts.removeValue(forKey: id)
+                }
+                let stale = self.pendingConnections.filter {
+                    $0.value.isOutbound && $0.value.expectedDeviceID != deviceID
+                }
+                for (objectID, _) in stale { self.pendingConnections.removeValue(forKey: objectID) }
+                let staleActive = self.connections.filter { $0.key != deviceID }.map(\.value)
+                return stale.map(\.value) + staleActive
+            }
+            cancelled.forEach { $0.cancel() }
+            guard let deviceID else { return }
+            let ownsDial = self.lock.clipboardWithLock {
+                PeerConnectionPolicy.macCanDial(self.knownPeers[deviceID]) &&
+                    (self.localDevice.map { $0.id < deviceID } ?? false)
+            }
+            if ownsDial { self.scheduleDirectConnection(to: deviceID, immediately: true) }
+        }
+    }
 
     public func send(_ envelope: ClipboardEnvelope, to deviceID: DeviceID) async throws {
         guard let connection = lock.clipboardWithLock({ connections[deviceID] }) else {
@@ -149,6 +174,7 @@ public final class NetworkClipboardTransport: ClipboardTransport, @unchecked Sen
             pendingConnections.removeAll()
             retryAttempts.removeAll()
             retryTokens.removeAll()
+            desiredPeerID = nil
             listenerRetryAttempt = 0
             listenerRetryToken = nil
             knownPeers.removeAll()
@@ -276,7 +302,9 @@ public final class NetworkClipboardTransport: ClipboardTransport, @unchecked Sen
                   let deviceString = record["device"],
                   let uuid = UUID(uuidString: deviceString) else { continue }
             let deviceID = DeviceID(rawValue: uuid)
-            guard deviceID != configuration.0.id, configuration.0.id < deviceID else { continue }
+            guard deviceID != configuration.0.id,
+                  configuration.0.id < deviceID,
+                  deviceID == lock.clipboardWithLock({ desiredPeerID }) else { continue }
 
             let peer = lock.clipboardWithLock { () -> DeviceDescriptor? in
                 guard connections[deviceID] == nil,
@@ -372,6 +400,10 @@ public final class NetworkClipboardTransport: ClipboardTransport, @unchecked Sen
         var newlyConnected = false
         lock.clipboardWithLock {
             pendingConnections.removeValue(forKey: objectID)
+            guard desiredPeerID == deviceID else {
+                rejected = true
+                return
+            }
             if let existing = connections[deviceID], existing !== secure {
                 let prefersOutbound = localID.map { $0 < deviceID } ?? false
                 let newPreferred = secure.isOutbound == prefersOutbound
@@ -386,7 +418,6 @@ public final class NetworkClipboardTransport: ClipboardTransport, @unchecked Sen
                 newlyConnected = connections[deviceID] == nil
                 connections[deviceID] = secure
             }
-            retryAttempts[deviceID] = 0
             retryTokens.removeValue(forKey: deviceID)
         }
 
@@ -396,6 +427,13 @@ public final class NetworkClipboardTransport: ClipboardTransport, @unchecked Sen
         }
         replaced?.cancel()
         if newlyConnected { emit(.connected(deviceID)) }
+        queue.asyncAfter(deadline: .now() + 10) { [weak self, weak secure] in
+            guard let self, let secure else { return }
+            self.lock.clipboardWithLock {
+                guard self.connections[deviceID] === secure else { return }
+                self.retryAttempts[deviceID] = 0
+            }
+        }
     }
 
     private func remove(
@@ -421,13 +459,15 @@ public final class NetworkClipboardTransport: ClipboardTransport, @unchecked Sen
     private func scheduleDirectConnection(to deviceID: DeviceID, immediately: Bool) {
         let schedule: (UUID, TimeInterval)? = lock.clipboardWithLock {
             guard running,
+                  desiredPeerID == deviceID,
+                  PeerConnectionPolicy.macCanDial(knownPeers[deviceID]),
+                  localDevice.map({ $0.id < deviceID }) == true,
                   connections[deviceID] == nil,
                   retryTokens[deviceID] == nil,
                   let peer = knownPeers[deviceID],
                   !peer.peerAddresses.isEmpty else { return nil }
             let attempt = retryAttempts[deviceID, default: 0]
-            let delays: [TimeInterval] = [1, 2, 4, 8, 15]
-            let delay = immediately ? 0 : delays[min(attempt, delays.count - 1)]
+            let delay = immediately ? 0 : ConnectionRetrySchedule.delay(forAttempt: max(attempt - 1, 0))
             let token = UUID()
             retryTokens[deviceID] = token
             return (token, delay)

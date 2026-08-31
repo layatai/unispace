@@ -8,6 +8,8 @@ public actor ClipboardCoordinator {
     private let transport: any ClipboardTransport
     private let clipboard: any ClipboardService
     private let limits: ClipboardLimits
+    private let connectionStream: AsyncStream<Set<DeviceID>>
+    private let connectionContinuation: AsyncStream<Set<DeviceID>>.Continuation
 
     private var localDevice: DeviceDescriptor?
     private var workspace: WorkspaceSnapshot?
@@ -28,12 +30,18 @@ public actor ClipboardCoordinator {
         self.transport = transport
         self.clipboard = clipboard
         self.limits = limits
+        let pair = AsyncStream<Set<DeviceID>>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        connectionStream = pair.stream
+        connectionContinuation = pair.continuation
     }
 
     deinit {
         transportTask?.cancel()
         clipboardTask?.cancel()
+        connectionContinuation.finish()
     }
+
+    public func connectionEvents() -> AsyncStream<Set<DeviceID>> { connectionStream }
 
     public func start(
         localDevice: DeviceDescriptor,
@@ -50,6 +58,7 @@ public actor ClipboardCoordinator {
         self.localDevice = localDevice
         self.workspace = workspace
         connectedPeers.removeAll()
+        connectionContinuation.yield(connectedPeers)
         automaticDestination = nil
         pendingObservation = nil
         engine = ClipboardSyncEngine(localDeviceID: localDevice.id, limits: limits)
@@ -73,12 +82,14 @@ public actor ClipboardCoordinator {
         started = false
         await clipboard.stop()
         connectedPeers.removeAll()
+        connectionContinuation.yield(connectedPeers)
         automaticDestination = nil
         pendingObservation = nil
         engine?.reset()
         engine = nil
         localDevice = nil
         workspace = nil
+        transport.setDesiredPeer(nil)
         await transport.stop()
     }
 
@@ -96,6 +107,7 @@ public actor ClipboardCoordinator {
     public func setSharingEnabled(_ enabled: Bool) async {
         guard sharingEnabled != enabled else { return }
         sharingEnabled = enabled
+        transport.setDesiredPeer(enabled ? automaticDestination : nil)
         if enabled, started {
             await startClipboardObservation()
         } else {
@@ -111,10 +123,14 @@ public actor ClipboardCoordinator {
 
     public func setAutomaticDestination(_ deviceID: DeviceID?) async {
         guard deviceID != localDevice?.id else {
+            guard automaticDestination != nil else { return }
             automaticDestination = nil
+            transport.setDesiredPeer(nil)
             return
         }
+        guard automaticDestination != deviceID else { return }
         automaticDestination = deviceID
+        transport.setDesiredPeer(sharingEnabled ? deviceID : nil)
         await sendPendingObservationIfPossible()
     }
 
@@ -175,11 +191,15 @@ public actor ClipboardCoordinator {
         switch event {
         case let .connected(deviceID):
             connectedPeers.insert(deviceID)
+            connectionContinuation.yield(connectedPeers)
             await sendPendingObservationIfPossible()
         case let .disconnected(deviceID):
             connectedPeers.remove(deviceID)
+            connectionContinuation.yield(connectedPeers)
         case let .failure(deviceID):
-            if let deviceID { connectedPeers.remove(deviceID) }
+            if let deviceID, connectedPeers.remove(deviceID) != nil {
+                connectionContinuation.yield(connectedPeers)
+            }
         case let .update(deviceID, envelope):
             await receive(envelope, from: deviceID)
         }
@@ -206,6 +226,7 @@ public actor ClipboardCoordinator {
             // activity than a stale control-derived selection. Follow the most
             // recent authenticated sender in multi-peer workspaces.
             automaticDestination = peer
+            transport.setDesiredPeer(peer)
             await clipboard.apply(envelope.payload)
         } catch {
             // Invalid or stale updates are ignored without exposing their contents.

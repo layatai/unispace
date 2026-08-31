@@ -11,8 +11,13 @@ public enum FileTransferTransportEvent: Sendable, Equatable {
 public protocol FileTransferTransport: Sendable {
     func start(localDevice: DeviceDescriptor, workspace: WorkspaceSnapshot, key: Data) async throws
     func stop() async
+    func setDesiredPeer(_ deviceID: DeviceID?)
     func events() -> AsyncStream<FileTransferTransportEvent>
     func send(_ envelope: FileTransferEnvelope, to deviceID: DeviceID) async throws
+}
+
+public extension FileTransferTransport {
+    func setDesiredPeer(_ deviceID: DeviceID?) {}
 }
 
 public struct PreparedOutgoingTransfer: Sendable, Equatable {
@@ -171,6 +176,7 @@ public enum FileTransferCoordinatorEvent: Sendable, Equatable {
     case snapshot(FileTransferSnapshot)
     case removed(TransferID)
     case resync([FileTransferSnapshot])
+    case connections(Set<DeviceID>)
 }
 
 public enum FileTransferCoordinatorError: Error, LocalizedError, Equatable, Sendable {

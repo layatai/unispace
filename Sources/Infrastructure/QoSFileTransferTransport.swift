@@ -176,6 +176,10 @@ public final class QoSFileTransferTransport: FileTransferTransport, @unchecked S
         await underlying.stop()
     }
 
+    public func setDesiredPeer(_ deviceID: DeviceID?) {
+        underlying.setDesiredPeer(deviceID)
+    }
+
     public func updateControlQuality(_ quality: FileTransferControlQuality) async {
         await scheduler.updateControlQuality(quality)
     }

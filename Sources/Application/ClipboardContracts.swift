@@ -32,6 +32,11 @@ public protocol ClipboardTransport: Sendable {
         key: Data
     ) async throws
     func stop() async
+    func setDesiredPeer(_ deviceID: DeviceID?)
     func events() -> AsyncStream<ClipboardTransportEvent>
     func send(_ envelope: ClipboardEnvelope, to deviceID: DeviceID) async throws
+}
+
+public extension ClipboardTransport {
+    func setDesiredPeer(_ deviceID: DeviceID?) {}
 }
