@@ -1,0 +1,16 @@
+[Unit]
+Description=UniSpace Linux Receiver
+After=graphical-session.target network-online.target
+Wants=network-online.target
+PartOf=graphical-session.target
+ConditionPathExists=%h/.config/unispace/receiver.json
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/unispace-linux run
+Restart=on-failure
+RestartSec=2
+Environment=RUST_LOG=unispace_linux=info
+
+[Install]
+WantedBy=graphical-session.target

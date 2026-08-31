@@ -17,11 +17,11 @@ public struct PeerConnectionPolicy: Sendable, Equatable {
     }
 
     public static func macCanDial(_ peer: DeviceDescriptor?) -> Bool {
-        peer.map { $0.platform != .windows } == true
+        peer.map { !$0.platform.isPortableReceiver } == true
     }
 }
 
-/// Keeps proactive macOS dialing on one workspace node. Windows peers are
+/// Keeps proactive macOS dialing on one workspace node. Portable receivers are
 /// outbound clients and are therefore never selected as macOS dial targets.
 public enum ControlConnectionRoutingPolicy {
     public static func policy(

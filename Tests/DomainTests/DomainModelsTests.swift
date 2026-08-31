@@ -51,6 +51,13 @@ final class DomainModelsTests: XCTestCase {
         )
     }
 
+    func testLinuxUsesPortableReceiverProtocol() {
+        XCTAssertTrue(DevicePlatform.linux.isPortableReceiver)
+        XCTAssertTrue(DevicePlatform.windows.isPortableReceiver)
+        XCTAssertFalse(DevicePlatform.macOS.isPortableReceiver)
+        XCTAssertFalse(DevicePlatform.unknown.isPortableReceiver)
+    }
+
     func testLegacyDecoderIgnoresNewDeviceCapabilities() throws {
         let device = DeviceDescriptor(
             id: DeviceID(),

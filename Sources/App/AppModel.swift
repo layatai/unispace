@@ -591,7 +591,7 @@ final class AppModel: ObservableObject {
             workspace = snapshot
             setupState = .ready
             statusMessage = "Paired successfully"
-            // Restart so capability-gated Windows QUIC and pointer listeners are
+            // Restart so capability-gated portable QUIC and pointer listeners are
             // created immediately for the newly trusted receiver.
             Task { await startTrustedNetwork(claimControl: shouldRetainControl) }
         } catch {

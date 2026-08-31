@@ -1,0 +1,32 @@
+name: unispace-linux
+arch: ${NFPM_ARCH}
+platform: linux
+version: ${UNISPACE_VERSION}
+section: utils
+priority: optional
+maintainer: UniSpace <support@layatai.com>
+description: Linux receiver for UniSpace cross-device input, clipboard, and files
+homepage: https://github.com/layatai/unispace
+license: MIT
+contents:
+  - src: ../.build/linux/release/unispace-linux
+    dst: /usr/bin/unispace-linux
+  - src: packaging/unispace.service
+    dst: /usr/lib/systemd/user/unispace.service
+  - src: packaging/70-unispace-uinput.rules
+    dst: /usr/lib/udev/rules.d/70-unispace-uinput.rules
+  - src: packaging/unispace-uinput.conf
+    dst: /usr/lib/modules-load.d/unispace-uinput.conf
+  - src: packaging/unispace.desktop
+    dst: /usr/share/applications/com.layatai.unispace.desktop
+scripts:
+  postinstall: packaging/postinstall.sh
+  preremove: packaging/preremove.sh
+depends:
+  - systemd
+  - udev
+  - dbus
+recommends:
+  - zenity
+  - wl-clipboard
+  - xclip

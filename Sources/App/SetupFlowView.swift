@@ -10,6 +10,9 @@ struct SetupFlowView: View {
     private static let macifierDownloadURL = URL(
         string: "https://github.com/layatai/macifier-app/releases/latest"
     )!
+    private static let linuxDownloadURL = URL(
+        string: "https://github.com/layatai/unispace/releases/latest"
+    )!
 
     @ObservedObject var model: AppModel
     @State private var directAddress = ""
@@ -257,7 +260,7 @@ struct SetupFlowView: View {
             Text("Waiting for another device")
                 .font(.title2.bold())
 
-            Text("Keep this screen open, then continue on the Mac or Windows PC you want to add.")
+            Text("Keep this screen open, then continue on the Mac, Linux PC, or Windows PC you want to add.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -272,6 +275,18 @@ struct SetupFlowView: View {
                 )
 
                 pairingGuide(
+                    title: "Add a Linux PC",
+                    systemImage: "pc",
+                    instructions: "Open UniSpace Receiver, then enter this Mac’s address."
+                ) {
+                    Link(destination: Self.linuxDownloadURL) {
+                        Label("Download for Linux", systemImage: "arrow.up.right.square")
+                            .font(.callout.weight(.semibold))
+                    }
+                    .accessibilityIdentifier("download-linux")
+                }
+
+                pairingGuide(
                     title: "Add a Windows PC",
                     systemImage: "pc",
                     instructions: "Open Macifier, then choose UniSpace → Set up → Join workspace."
@@ -283,7 +298,7 @@ struct SetupFlowView: View {
                     .accessibilityIdentifier("download-macifier")
                 }
             }
-            .frame(maxWidth: 560)
+            .frame(maxWidth: 760)
             .padding(.top, 22)
 
             if let address = model.tailnetAddresses.first {

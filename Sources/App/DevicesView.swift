@@ -130,7 +130,7 @@ struct DevicesView: View {
 
         return HStack(spacing: 14) {
             IconTile(
-                systemImage: device.platform == .windows ? "pc" : "laptopcomputer",
+                systemImage: device.platform.isPortableReceiver ? "pc" : "laptopcomputer",
                 tint: isLocal ? .accentColor : .secondary,
                 size: 46
             )
@@ -259,7 +259,7 @@ struct DevicesView: View {
                     Text("Pair New Device")
                         .font(.headline)
                         .foregroundStyle(.primary)
-                    Text("Show a pairing code another Mac or Windows PC can join over LAN or Tailscale.")
+                    Text("Show a pairing code another Mac, Linux PC, or Windows PC can join over LAN or Tailscale.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

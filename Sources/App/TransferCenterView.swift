@@ -32,7 +32,7 @@ struct TransferCenterView: View {
         VStack(alignment: .leading, spacing: 14) {
             PageHeader(
                 title: "Transfers",
-                detail: "Encrypted, resumable file delivery between paired Macs and Windows PCs."
+                detail: "Encrypted, resumable file delivery between paired Macs, Linux PCs, and Windows PCs."
             )
 
             HStack(spacing: 12) {
@@ -82,7 +82,7 @@ struct TransferCenterView: View {
             Label("No File Transfers", systemImage: "arrow.left.arrow.right.circle")
         } description: {
             if model.candidateDevices.isEmpty {
-                Text("Bring a paired Mac or Windows PC online, then copy files or use Send Files.")
+                Text("Bring a paired Mac, Linux PC, or Windows PC online, then copy files or use Send Files.")
             } else if model.effectiveDestinationID == nil {
                 Text("The paired device is online, but its encrypted file-transfer channel is not ready yet.")
             } else {
@@ -98,7 +98,7 @@ struct TransferCenterView: View {
     }
 
     private func deviceIcon(_ device: DeviceDescriptor) -> String {
-        device.platform == .windows ? "pc" : "laptopcomputer"
+        device.platform.isPortableReceiver ? "pc" : "laptopcomputer"
     }
 
     private var transferList: some View {

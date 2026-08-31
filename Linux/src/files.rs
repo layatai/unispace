@@ -1,0 +1,447 @@
+use crate::{
+    FILE_TRANSFER_PORT,
+    config::Configuration,
+    model::Identifier,
+    secure::{ChannelProfile, SecureStream},
+};
+use anyhow::{Context, Result, ensure};
+use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
+use directories::ProjectDirs;
+use serde::Deserialize;
+use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
+use std::{
+    collections::BTreeMap,
+    fs::{self, OpenOptions},
+    io::{Read, Seek, SeekFrom, Write},
+    path::{Path, PathBuf},
+    process::{Command, Stdio},
+    time::Duration,
+};
+use tokio::time::{MissedTickBehavior, interval};
+use tracing::warn;
+use uuid::Uuid;
+
+const HEADER: usize = 39;
+const MAX_CHUNK: usize = 1024 * 1024;
+const MAX_TRANSFER: u64 = 1_099_511_627_776;
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Manifest {
+    transfer_id: Identifier,
+    workspace_id: Identifier,
+    source_device_id: Identifier,
+    destination_device_id: Identifier,
+    entries: Vec<Entry>,
+}
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Entry {
+    id: Identifier,
+    filename: String,
+    byte_count: u64,
+    sha256: String,
+}
+struct Incoming {
+    manifest: Manifest,
+    dir: PathBuf,
+    offsets: BTreeMap<Uuid, u64>,
+    completed: BTreeMap<Uuid, PathBuf>,
+}
+struct Outgoing {
+    transfer_id: Uuid,
+    manifest: Value,
+    paths: BTreeMap<Uuid, PathBuf>,
+}
+
+pub async fn run(configuration: Configuration) -> Result<()> {
+    let key = configuration.workspace_key()?;
+    let remote = configuration
+        .workspace
+        .mac()
+        .context("controller Mac missing")?;
+    let mut channel = SecureStream::connect_named(
+        &configuration.host_address,
+        configuration.device_id,
+        remote.id.raw_value,
+        configuration.workspace.id.raw_value,
+        &key,
+        ChannelProfile {
+            port: FILE_TRANSFER_PORT,
+            hello_prefix: "UniSpace secure content hello v1",
+            info_prefix: "UniSpace content channel v1",
+        },
+    )
+    .await?;
+    let mut incoming: Option<Incoming> = None;
+    let mut outgoing: Option<Outgoing> = None;
+    let mut last_selection = Vec::new();
+    let mut ticker = interval(Duration::from_secs(1));
+    ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    loop {
+        tokio::select! {
+          packet=channel.receive()=>{let packet=packet?;let (kind,payload)=decode_envelope(&packet,configuration.workspace.id.raw_value,remote.id.raw_value)?;
+            match kind{
+                1=>{let offer:Value=serde_json::from_slice(payload)?;let manifest:Manifest=serde_json::from_value(offer["manifest"].clone())?;validate_manifest(&manifest,&configuration)?;let transfer=prepare(manifest)?;let offsets=transfer.offsets.iter().map(|(id,offset)|json!({"entryID":Identifier{raw_value:*id},"offset":offset})).collect::<Vec<_>>();let id=transfer.manifest.transfer_id;incoming=Some(transfer);channel.send(&encode_json(2,configuration.workspace.id.raw_value,configuration.device_id,&json!({"transferID":id,"offsets":offsets}))?).await?;}
+                2=>{let request:Value=serde_json::from_slice(payload)?;let transfer=outgoing.as_ref().context("request without outgoing transfer")?;ensure!(id(&request,"transferID")?==transfer.transfer_id,"transfer mismatch");send_outgoing(&mut channel,&configuration,transfer,&request).await?;}
+                3=>{let transfer=incoming.as_mut().context("chunk without active transfer")?;let (transfer_id,entry_id,offset,data)=decode_chunk(payload)?;ensure!(transfer_id==transfer.manifest.transfer_id.raw_value,"transfer mismatch");let entry=transfer.manifest.entries.iter().find(|e|e.id.raw_value==entry_id).context("unknown entry")?;let expected=*transfer.offsets.get(&entry_id).unwrap_or(&0);ensure!(offset==expected&&offset+data.len() as u64<=entry.byte_count,"invalid chunk offset");let path=transfer.dir.join(format!("{}.partial",entry_id));let mut file=OpenOptions::new().create(true).truncate(false).write(true).open(path)?;file.seek(SeekFrom::Start(offset))?;file.write_all(data)?;file.sync_data()?;let verified=offset+data.len() as u64;transfer.offsets.insert(entry_id,verified);channel.send(&encode_json(4,configuration.workspace.id.raw_value,configuration.device_id,&json!({"transferID":Identifier{raw_value:transfer_id},"entryID":Identifier{raw_value:entry_id},"verifiedOffset":verified}))?).await?;}
+                5=>{let value:Value=serde_json::from_slice(payload)?;let transfer_id=id(&value,"transferID")?;let entry_id=id(&value,"entryID")?;let transfer=incoming.as_mut().context("completion without transfer")?;ensure!(transfer_id==transfer.manifest.transfer_id.raw_value,"transfer mismatch");finalize_entry(transfer,entry_id)?;let size=transfer.manifest.entries.iter().find(|e|e.id.raw_value==entry_id).unwrap().byte_count;channel.send(&encode_json(4,configuration.workspace.id.raw_value,configuration.device_id,&json!({"transferID":Identifier{raw_value:transfer_id},"entryID":Identifier{raw_value:entry_id},"verifiedOffset":size}))?).await?;}
+                6=>{let value:Value=serde_json::from_slice(payload)?;let transfer_id=id(&value,"transferID")?;let transfer=incoming.take().context("completion without transfer")?;ensure!(transfer_id==transfer.manifest.transfer_id.raw_value&&transfer.completed.len()==transfer.manifest.entries.len(),"incomplete transfer");let paths=transfer.manifest.entries.iter().map(|e|transfer.completed[&e.id.raw_value].clone()).collect::<Vec<_>>();let accepted=publish_files(&paths).is_ok();channel.send(&encode_json(7,configuration.workspace.id.raw_value,configuration.device_id,&json!({"transferID":Identifier{raw_value:transfer_id},"accepted":accepted,"failureCode":if accepted{Value::Null}else{json!("stagingFailure")}}))?).await?;}
+                7=>{let value:Value=serde_json::from_slice(payload)?;if outgoing.as_ref().is_some_and(|transfer|id(&value,"transferID").ok()==Some(transfer.transfer_id)){outgoing=None;}},
+                8|11=>{incoming=None;outgoing=None},
+                9=>if let Some(transfer)=incoming.as_ref(){let value:Value=serde_json::from_slice(payload)?;if id(&value,"transferID")?==transfer.manifest.transfer_id.raw_value{let offsets=transfer.offsets.iter().map(|(id,offset)|json!({"entryID":Identifier{raw_value:*id},"offset":offset})).collect::<Vec<_>>();channel.send(&encode_json(10,configuration.workspace.id.raw_value,configuration.device_id,&json!({"transferID":transfer.manifest.transfer_id,"offsets":offsets,"completed":false}))?).await?;}},
+                _=>{}
+            }}
+          _=ticker.tick()=>if outgoing.is_none()
+            && let Ok(paths)=clipboard_files()
+            && !paths.is_empty() && paths!=last_selection
+          {
+            last_selection=paths.clone();
+            let transfer=prepare_outgoing(&configuration,remote.id.raw_value,paths)?;
+            channel.send(&encode_json(1,configuration.workspace.id.raw_value,configuration.device_id,&json!({"manifest":transfer.manifest}))?).await?;
+            outgoing=Some(transfer);
+          }
+        }
+    }
+}
+pub async fn supervise(configuration: Configuration) {
+    loop {
+        if let Err(error) = run(configuration.clone()).await {
+            warn!(%error,"file-transfer channel disconnected");
+        }
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
+}
+
+fn decode_envelope(data: &[u8], workspace: Uuid, sender: Uuid) -> Result<(u8, &[u8])> {
+    ensure!(
+        data.len() >= HEADER && u16::from_be_bytes(data[0..2].try_into()?) == 1,
+        "invalid transfer envelope"
+    );
+    ensure!(
+        &data[3..19] == workspace.as_bytes() && &data[19..35] == sender.as_bytes(),
+        "transfer peer mismatch"
+    );
+    let length = u32::from_be_bytes(data[35..39].try_into()?) as usize;
+    ensure!(length == data.len() - HEADER, "invalid transfer length");
+    Ok((data[2], &data[HEADER..]))
+}
+fn encode_json(kind: u8, workspace: Uuid, sender: Uuid, value: &Value) -> Result<Vec<u8>> {
+    encode(kind, workspace, sender, &serde_json::to_vec(value)?)
+}
+fn encode(kind: u8, workspace: Uuid, sender: Uuid, payload: &[u8]) -> Result<Vec<u8>> {
+    ensure!(
+        payload.len() <= 2 * 1024 * 1024 - HEADER,
+        "transfer frame too large"
+    );
+    let mut out = Vec::with_capacity(HEADER + payload.len());
+    out.extend_from_slice(&1u16.to_be_bytes());
+    out.push(kind);
+    out.extend_from_slice(workspace.as_bytes());
+    out.extend_from_slice(sender.as_bytes());
+    out.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+    out.extend_from_slice(payload);
+    Ok(out)
+}
+fn decode_chunk(data: &[u8]) -> Result<(Uuid, Uuid, u64, &[u8])> {
+    ensure!(data.len() >= 44, "truncated chunk");
+    let transfer = Uuid::from_bytes(data[0..16].try_into()?);
+    let entry = Uuid::from_bytes(data[16..32].try_into()?);
+    let offset = u64::from_be_bytes(data[32..40].try_into()?);
+    let count = u32::from_be_bytes(data[40..44].try_into()?) as usize;
+    ensure!(
+        count > 0 && count <= MAX_CHUNK && data.len() == 44 + count,
+        "invalid chunk size"
+    );
+    Ok((transfer, entry, offset, &data[44..]))
+}
+fn id(value: &Value, name: &str) -> Result<Uuid> {
+    Ok(Uuid::parse_str(
+        value[name]["rawValue"]
+            .as_str()
+            .context("missing identifier")?,
+    )?)
+}
+fn validate_manifest(manifest: &Manifest, configuration: &Configuration) -> Result<()> {
+    let controller = configuration
+        .workspace
+        .mac()
+        .context("controller Mac missing")?;
+    ensure!(
+        manifest.workspace_id.raw_value == configuration.workspace.id.raw_value
+            && manifest.source_device_id.raw_value == controller.id.raw_value
+            && manifest.destination_device_id.raw_value == configuration.device_id,
+        "manifest destination mismatch"
+    );
+    ensure!(
+        !manifest.entries.is_empty() && manifest.entries.len() <= 1000,
+        "invalid manifest count"
+    );
+    let mut total = 0u64;
+    for entry in &manifest.entries {
+        ensure!(
+            !entry.filename.is_empty()
+                && entry.filename.len() <= 255
+                && !entry.filename.contains('/')
+                && !entry.filename.contains('\\')
+                && entry.filename != "."
+                && entry.filename != "..",
+            "unsafe filename"
+        );
+        ensure!(BASE64.decode(&entry.sha256)?.len() == 32, "invalid digest");
+        total = total
+            .checked_add(entry.byte_count)
+            .context("transfer overflow")?;
+    }
+    ensure!(total <= MAX_TRANSFER, "transfer too large");
+    Ok(())
+}
+fn prepare(manifest: Manifest) -> Result<Incoming> {
+    let root = ProjectDirs::from("com", "layatai", "UniSpace")
+        .context("home directory unavailable")?
+        .data_local_dir()
+        .join("Transfers")
+        .join(manifest.transfer_id.raw_value.to_string());
+    fs::create_dir_all(&root)?;
+    let mut offsets = BTreeMap::new();
+    for entry in &manifest.entries {
+        let path = root.join(format!("{}.partial", entry.id.raw_value));
+        let size = fs::metadata(path)
+            .map(|m| m.len())
+            .unwrap_or(0)
+            .min(entry.byte_count);
+        offsets.insert(entry.id.raw_value, size);
+    }
+    Ok(Incoming {
+        manifest,
+        dir: root,
+        offsets,
+        completed: BTreeMap::new(),
+    })
+}
+fn finalize_entry(transfer: &mut Incoming, entry_id: Uuid) -> Result<()> {
+    let entry = transfer
+        .manifest
+        .entries
+        .iter()
+        .find(|e| e.id.raw_value == entry_id)
+        .context("unknown entry")?;
+    ensure!(
+        transfer.offsets.get(&entry_id) == Some(&entry.byte_count),
+        "entry incomplete"
+    );
+    let partial = transfer.dir.join(format!("{}.partial", entry_id));
+    let mut file = fs::File::open(&partial)?;
+    let mut hash = Sha256::new();
+    let mut buffer = [0u8; 256 * 1024];
+    loop {
+        let count = file.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        hash.update(&buffer[..count]);
+    }
+    ensure!(
+        hash.finalize().as_slice() == BASE64.decode(&entry.sha256)?.as_slice(),
+        "file digest mismatch"
+    );
+    let final_path = unique_path(&transfer.dir, &entry.filename);
+    fs::rename(partial, &final_path)?;
+    transfer.completed.insert(entry_id, final_path);
+    Ok(())
+}
+fn unique_path(dir: &Path, name: &str) -> PathBuf {
+    let original = dir.join(name);
+    if !original.exists() {
+        return original;
+    }
+    let path = Path::new(name);
+    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("File");
+    let extension = path.extension().and_then(|s| s.to_str());
+    for index in 2..10_000 {
+        let candidate = dir.join(match extension {
+            Some(ext) => format!("{stem} ({index}).{ext}"),
+            None => format!("{stem} ({index})"),
+        });
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    dir.join(Uuid::new_v4().to_string())
+}
+fn publish_files(paths: &[PathBuf]) -> Result<()> {
+    let body = paths
+        .iter()
+        .map(|path| format!("file://{}", percent_path(path)))
+        .collect::<Vec<_>>()
+        .join("\r\n")
+        + "\r\n";
+    let wayland = std::env::var_os("WAYLAND_DISPLAY").is_some();
+    let mut command = if wayland {
+        let mut c = Command::new("wl-copy");
+        c.args(["--type", "text/uri-list"]);
+        c
+    } else {
+        let mut c = Command::new("xclip");
+        c.args(["-selection", "clipboard", "-t", "text/uri-list", "-i"]);
+        c
+    };
+    let mut child = command
+        .stdin(Stdio::piped())
+        .spawn()
+        .context("install wl-clipboard or xclip to publish received files")?;
+    child.stdin.take().unwrap().write_all(body.as_bytes())?;
+    ensure!(child.wait()?.success(), "clipboard publication failed");
+    Ok(())
+}
+fn percent_path(path: &Path) -> String {
+    path.to_string_lossy()
+        .bytes()
+        .flat_map(|byte| {
+            if byte.is_ascii_alphanumeric() || b"/-._~".contains(&byte) {
+                vec![byte as char]
+            } else {
+                format!("%{byte:02X}").chars().collect()
+            }
+        })
+        .collect()
+}
+
+fn clipboard_files() -> Result<Vec<PathBuf>> {
+    let wayland = std::env::var_os("WAYLAND_DISPLAY").is_some();
+    let output = if wayland {
+        Command::new("wl-paste")
+            .args(["--no-newline", "--type", "text/uri-list"])
+            .output()
+    } else {
+        Command::new("xclip")
+            .args(["-selection", "clipboard", "-t", "text/uri-list", "-o"])
+            .output()
+    }?;
+    if !output.status.success() {
+        return Ok(Vec::new());
+    }
+    let text = String::from_utf8(output.stdout)?;
+    Ok(text
+        .lines()
+        .filter(|line| !line.starts_with('#'))
+        .filter_map(file_uri)
+        .filter(|path| {
+            fs::symlink_metadata(path)
+                .is_ok_and(|m| m.file_type().is_file() && !m.file_type().is_symlink())
+        })
+        .collect())
+}
+fn file_uri(value: &str) -> Option<PathBuf> {
+    let value = value.trim().strip_prefix("file://")?;
+    let mut bytes = Vec::new();
+    let raw = value.as_bytes();
+    let mut i = 0;
+    while i < raw.len() {
+        if raw[i] == b'%' && i + 2 < raw.len() {
+            bytes.push(u8::from_str_radix(std::str::from_utf8(&raw[i + 1..i + 3]).ok()?, 16).ok()?);
+            i += 3
+        } else {
+            bytes.push(raw[i]);
+            i += 1
+        }
+    }
+    Some(PathBuf::from(String::from_utf8(bytes).ok()?))
+}
+fn prepare_outgoing(
+    configuration: &Configuration,
+    destination: Uuid,
+    paths: Vec<PathBuf>,
+) -> Result<Outgoing> {
+    ensure!(paths.len() <= 1000, "too many files");
+    let transfer_id = Uuid::new_v4();
+    let mut manifest_entries = Vec::new();
+    let mut mapped = BTreeMap::new();
+    let mut total = 0u64;
+    for path in paths {
+        let metadata = fs::metadata(&path)?;
+        total = total
+            .checked_add(metadata.len())
+            .context("transfer overflow")?;
+        ensure!(total <= MAX_TRANSFER, "transfer too large");
+        let filename = path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .context("invalid filename")?
+            .to_owned();
+        ensure!(
+            !filename.contains('/') && filename.len() <= 255,
+            "invalid filename"
+        );
+        let entry_id = Uuid::new_v4();
+        let mut file = fs::File::open(&path)?;
+        let mut hasher = Sha256::new();
+        let mut buffer = [0u8; 256 * 1024];
+        loop {
+            let count = file.read(&mut buffer)?;
+            if count == 0 {
+                break;
+            }
+            hasher.update(&buffer[..count]);
+        }
+        manifest_entries.push(json!({"id":Identifier{raw_value:entry_id},"filename":filename,"contentTypeIdentifier":Value::Null,"byteCount":metadata.len(),"sha256":BASE64.encode(hasher.finalize()),"modificationDate":Value::Null}));
+        mapped.insert(entry_id, path);
+    }
+    let manifest = json!({"transferID":Identifier{raw_value:transfer_id},"workspaceID":configuration.workspace.id,"sourceDeviceID":Identifier{raw_value:configuration.device_id},"destinationDeviceID":Identifier{raw_value:destination},"entries":manifest_entries,"createdAt":crate::clipboard::now_iso8601()});
+    Ok(Outgoing {
+        transfer_id,
+        manifest,
+        paths: mapped,
+    })
+}
+async fn send_outgoing(
+    channel: &mut SecureStream,
+    configuration: &Configuration,
+    transfer: &Outgoing,
+    request: &Value,
+) -> Result<()> {
+    let offsets = request["offsets"].as_array().context("missing offsets")?;
+    for value in offsets {
+        let entry_id = id(value, "entryID")?;
+        let mut offset = value["offset"].as_u64().context("missing offset")?;
+        let path = transfer
+            .paths
+            .get(&entry_id)
+            .context("unknown outgoing entry")?;
+        let mut file = fs::File::open(path)?;
+        ensure!(offset <= file.metadata()?.len(), "invalid requested offset");
+        file.seek(SeekFrom::Start(offset))?;
+        let mut buffer = vec![0u8; 256 * 1024];
+        loop {
+            let count = file.read(&mut buffer)?;
+            if count == 0 {
+                break;
+            }
+            let mut payload = Vec::with_capacity(44 + count);
+            payload.extend_from_slice(transfer.transfer_id.as_bytes());
+            payload.extend_from_slice(entry_id.as_bytes());
+            payload.extend_from_slice(&offset.to_be_bytes());
+            payload.extend_from_slice(&(count as u32).to_be_bytes());
+            payload.extend_from_slice(&buffer[..count]);
+            channel
+                .send(&encode(
+                    3,
+                    configuration.workspace.id.raw_value,
+                    configuration.device_id,
+                    &payload,
+                )?)
+                .await?;
+            offset += count as u64;
+        }
+        channel.send(&encode_json(5,configuration.workspace.id.raw_value,configuration.device_id,&json!({"transferID":Identifier{raw_value:transfer.transfer_id},"entryID":Identifier{raw_value:entry_id}}))?).await?;
+    }
+    channel
+        .send(&encode_json(
+            6,
+            configuration.workspace.id.raw_value,
+            configuration.device_id,
+            &json!({"transferID":Identifier{raw_value:transfer.transfer_id}}),
+        )?)
+        .await?;
+    Ok(())
+}

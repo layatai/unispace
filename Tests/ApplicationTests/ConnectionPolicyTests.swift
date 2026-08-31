@@ -3,15 +3,16 @@ import XCTest
 import UniSpaceDomain
 
 final class ConnectionPolicyTests: XCTestCase {
-    func testControllerOwnsMacDialingAndNeverDialsWindows() {
+    func testControllerOwnsMacDialingAndNeverDialsPortableReceivers() {
         let controller = device("00000000-0000-0000-0000-000000000002", platform: .macOS)
         let receiver = device("00000000-0000-0000-0000-000000000003", platform: .macOS)
         let windows = device("00000000-0000-0000-0000-000000000004", platform: .windows)
+        let linux = device("00000000-0000-0000-0000-000000000005", platform: .linux)
         let workspace = WorkspaceSnapshot(
             id: WorkspaceID(),
             name: "Policy",
             localDeviceID: controller.id,
-            devices: [controller, receiver, windows]
+            devices: [controller, receiver, windows, linux]
         )
 
         let controllerPolicy = ControlConnectionRoutingPolicy.policy(
@@ -68,11 +69,15 @@ final class ConnectionPolicyTests: XCTestCase {
         }
     }
 
-    func testMacOutboundPolicyRejectsWindowsAndMissingPeers() {
+    func testMacOutboundPolicyRejectsPortableReceiversAndMissingPeers() {
         XCTAssertFalse(PeerConnectionPolicy.macCanDial(nil))
         XCTAssertFalse(PeerConnectionPolicy.macCanDial(device(
             "00000000-0000-0000-0000-000000000001",
             platform: .windows
+        )))
+        XCTAssertFalse(PeerConnectionPolicy.macCanDial(device(
+            "00000000-0000-0000-0000-000000000003",
+            platform: .linux
         )))
         XCTAssertTrue(PeerConnectionPolicy.macCanDial(device(
             "00000000-0000-0000-0000-000000000002",
