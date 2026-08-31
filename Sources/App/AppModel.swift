@@ -66,6 +66,25 @@ final class AppModel: ObservableObject {
             statusMessage = "Visible to nearby devices"
             return
         }
+        if ProcessInfo.processInfo.arguments.contains("--ui-testing-connections") {
+            let local = localDevice
+            let remoteID = DeviceID()
+            let remote = DeviceDescriptor(id: remoteID, name: "Office PC", platform: .windows)
+            workspace = WorkspaceSnapshot(
+                id: WorkspaceID(),
+                name: "My UniSpace",
+                localDeviceID: localDeviceID,
+                devices: [local, remote]
+            )
+            connectionSnapshots[remoteID] = .init(
+                health: .reconnecting,
+                transport: .tcp,
+                detail: "The trusted peer is temporarily unavailable"
+            )
+            setupState = .ready
+            statusMessage = "Restoring the workspace connection"
+            return
+        }
         if ProcessInfo.processInfo.arguments.contains("--ui-testing-configured") {
             let device = localDevice
             workspace = WorkspaceSnapshot(
@@ -119,6 +138,9 @@ final class AppModel: ObservableObject {
     var devices: [DeviceDescriptor] { workspace?.devices ?? [] }
     var allDisplays: [DisplayDescriptor] { devices.flatMap(\.displays) }
     var isLocalController: Bool { currentControllerID == localDeviceID }
+    var hasReconnectableDevices: Bool {
+        devices.contains { $0.id != localDeviceID && !connectedDevices.contains($0.id) }
+    }
 
     var needsPermissions: Bool {
         inputMonitoringPermission != .granted || postEventsPermission != .granted
@@ -285,6 +307,40 @@ final class AppModel: ObservableObject {
         postEventsPermission = permissionService.state(for: .postEvents)
     }
 
+    func refreshConnections() {
+        let offline = devices.filter { $0.id != localDeviceID && !connectedDevices.contains($0.id) }
+        guard !offline.isEmpty else {
+            statusMessage = "All devices are connected"
+            return
+        }
+        for device in offline {
+            reconnect(to: device.id)
+        }
+        statusMessage = offline.count == 1
+            ? "Refreshing connection to \(offline[0].name)"
+            : "Refreshing \(offline.count) connections"
+    }
+
+    func reconnect(to deviceID: DeviceID) {
+        guard deviceID != localDeviceID,
+              let device = devices.first(where: { $0.id == deviceID }),
+              !connectedDevices.contains(deviceID) else { return }
+        let transportKind = connectionSnapshots[deviceID]?.transport ?? .tcp
+        connectionSnapshots[deviceID] = .init(
+            health: .reconnecting,
+            transport: transportKind,
+            detail: connectionSnapshots[deviceID]?.detail
+        )
+        statusMessage = "Refreshing connection to \(device.name)"
+        transport.reconnect(to: deviceID)
+    }
+
+    func restartNetworking() {
+        let shouldRetainControl = isLocalController
+        statusMessage = "Restarting networking"
+        Task { await startTrustedNetwork(claimControl: shouldRetainControl) }
+    }
+
     func setLaunchAtLogin(_ enabled: Bool) {
         do {
             try loginItemController.setEnabled(enabled)
@@ -439,7 +495,21 @@ final class AppModel: ObservableObject {
             controlTransferGuard.reset()
             guard let keyring = try trustStore.workspaceKeyring(for: workspace.id) else { return }
             networkTask?.cancel()
+            networkTask = nil
+            await coordinator?.stop()
+            coordinator = nil
             await transport.stop()
+            injector.releaseAll()
+            connectedDevices.removeAll()
+            connectionSnapshots = Dictionary(uniqueKeysWithValues: workspace.devices.compactMap { device in
+                guard device.id != localDeviceID else { return nil }
+                let previous = connectionSnapshots[device.id]
+                return (device.id, ConnectionSnapshot(
+                    health: .reconnecting,
+                    transport: previous?.transport ?? .tcp,
+                    detail: previous?.detail
+                ))
+            })
             let local = refreshedLocalDevice(in: workspace)
             guard let refreshedWorkspace = self.workspace else { return }
             try await transport.start(
@@ -651,10 +721,11 @@ final class AppModel: ObservableObject {
             )
         case let .disconnected(deviceID):
             connectedDevices.remove(deviceID)
-            let disconnectedTransport = connectionSnapshots[deviceID]?.transport ?? .tcp
+            let previousConnection = connectionSnapshots[deviceID]
             connectionSnapshots[deviceID] = .init(
                 health: .reconnecting,
-                transport: disconnectedTransport
+                transport: previousConnection?.transport ?? .tcp,
+                detail: previousConnection?.detail
             )
             let previousState = await coordinator?.currentState()
             await coordinator?.peerDisconnected(deviceID)

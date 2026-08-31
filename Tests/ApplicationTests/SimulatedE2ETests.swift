@@ -235,6 +235,7 @@ private final class SimulatedWireTransport: PeerTransport, @unchecked Sendable {
 
     func start(localDevice: DeviceDescriptor, workspace: WorkspaceSnapshot, key: Data) async throws {}
     func stop() async {}
+    func reconnect(to deviceID: DeviceID) {}
     func events() -> AsyncStream<PeerEvent> { stream }
 
     func send(_ envelope: ControlEnvelope, to deviceID: DeviceID) async throws {

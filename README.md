@@ -66,6 +66,11 @@ keyboard and pointer focus to the controller. A later reconnect restores device
 availability but never silently reclaims focus; move through the configured edge
 again to start a new session.
 
+UniSpace automatically retries trusted peers over Bonjour and stored Tailscale
+addresses. On **Devices**, use **Refresh Connections** to retry only offline
+devices, or **Retry Now** on one device. **Restart Networking…** is the
+disruptive fallback: it briefly disconnects every peer and ends active control.
+
 File transfers use a separate encrypted TCP content session. A content-session
 interruption pauses and resumes from receiver-verified offsets without terminating
 keyboard or pointer control.

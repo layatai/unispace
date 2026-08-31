@@ -550,6 +550,7 @@ private final class ReliableOnlyTransport: PeerTransport, @unchecked Sendable {
 
     func start(localDevice: DeviceDescriptor, workspace: WorkspaceSnapshot, key: Data) async throws {}
     func stop() async {}
+    func reconnect(to deviceID: DeviceID) {}
     func events() -> AsyncStream<PeerEvent> { stream }
     func send(_ envelope: ControlEnvelope, to deviceID: DeviceID) async throws {}
     func send(_ frame: InputFrame, to deviceID: DeviceID) async throws {
@@ -571,6 +572,7 @@ private final class CoordinatorTransportSpy: PeerTransport, @unchecked Sendable 
 
     func start(localDevice: DeviceDescriptor, workspace: WorkspaceSnapshot, key: Data) async throws {}
     func stop() async {}
+    func reconnect(to deviceID: DeviceID) {}
     func events() -> AsyncStream<PeerEvent> { stream }
     func send(_ envelope: ControlEnvelope, to deviceID: DeviceID) async throws {
         if let controlError { throw controlError }
@@ -594,6 +596,7 @@ private final class BlockingInputTransport: PeerTransport, @unchecked Sendable {
 
     func start(localDevice: DeviceDescriptor, workspace: WorkspaceSnapshot, key: Data) async throws {}
     func stop() async {}
+    func reconnect(to deviceID: DeviceID) {}
     func events() -> AsyncStream<PeerEvent> { stream }
 
     func send(_ envelope: ControlEnvelope, to deviceID: DeviceID) async throws {

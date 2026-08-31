@@ -104,6 +104,7 @@ public enum PeerEvent: Sendable, Equatable {
 public protocol PeerTransport: Sendable {
     func start(localDevice: DeviceDescriptor, workspace: WorkspaceSnapshot, key: Data) async throws
     func stop() async
+    func reconnect(to deviceID: DeviceID)
     func events() -> AsyncStream<PeerEvent>
     func send(_ envelope: ControlEnvelope, to deviceID: DeviceID) async throws
     func send(_ frame: InputFrame, to deviceID: DeviceID) async throws

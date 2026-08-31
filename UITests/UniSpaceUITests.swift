@@ -149,6 +149,27 @@ final class UniSpaceUITests: XCTestCase {
     }
 
     @MainActor
+    func testDevicesExposeRefreshRetryAndConfirmedNetworkRestart() {
+        let app = launchApp(mode: "--ui-testing-connections")
+
+        app.staticTexts["section-devices"].click()
+        XCTAssertTrue(app.buttons["refresh-connections"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Retry connection to Office PC"].exists)
+        XCTAssertTrue(app.staticTexts["Reconnecting"].exists)
+        XCTAssertTrue(app.staticTexts["The trusted peer is temporarily unavailable"].exists)
+
+        app.buttons["Connection actions"].click()
+        let restart = app.menuItems["Restart Networking…"]
+        XCTAssertTrue(restart.waitForExistence(timeout: 2))
+        restart.click()
+        XCTAssertTrue(app.staticTexts["Restart networking?"].waitForExistence(timeout: 2))
+        XCTAssertTrue(app.buttons["Restart Networking"].exists)
+        XCTAssertTrue(app.buttons["Cancel"].exists)
+        app.buttons["Cancel"].click()
+        app.terminate()
+    }
+
+    @MainActor
     private func launchApp(mode: String) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = [mode, "-ApplePersistenceIgnoreState", "YES"]

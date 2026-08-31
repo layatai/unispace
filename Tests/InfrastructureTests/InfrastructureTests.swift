@@ -829,6 +829,95 @@ final class InfrastructureTests: XCTestCase {
         clientEvents.cancel()
     }
 
+    func testTrustedTransportRecognizesBonjourOnlyReconnectRoute() {
+        let peer = DeviceDescriptor(id: DeviceID(), name: "Bonjour Peer")
+        let endpoint = NWEndpoint.service(
+            name: "Bonjour Peer",
+            type: NetworkPeerTransport.serviceType,
+            domain: "local.",
+            interface: nil
+        )
+
+        XCTAssertTrue(NetworkPeerTransport.hasReconnectRoute(
+            peer: peer,
+            discoveredPeer: nil,
+            tcpEndpoint: endpoint,
+            quicEndpoint: nil
+        ))
+        XCTAssertFalse(NetworkPeerTransport.hasReconnectRoute(
+            peer: peer,
+            discoveredPeer: nil,
+            tcpEndpoint: nil,
+            quicEndpoint: nil
+        ))
+    }
+
+    func testManualReconnectCancelsPendingAttemptAndRetriesImmediately() async throws {
+        let queue = DispatchQueue(label: "UniSpaceInfrastructureTests.ManualReconnect")
+        let acceptedConnections = NWConnectionRetainer()
+        let listener = try NWListener(using: NetworkPeerTransport.makeParameters(), on: .any)
+        let listenerReady = expectation(description: "unresponsive peer listening")
+        listener.stateUpdateHandler = { state in
+            if case .ready = state { listenerReady.fulfill() }
+        }
+        listener.newConnectionHandler = { connection in
+            acceptedConnections.append(connection)
+            connection.start(queue: queue)
+        }
+        listener.start(queue: queue)
+        await fulfillment(of: [listenerReady], timeout: 3)
+        let port = try XCTUnwrap(listener.port)
+
+        let workspaceID = WorkspaceID()
+        let localID = DeviceID()
+        let peerID = DeviceID()
+        let localDevice = DeviceDescriptor(id: localID, name: "Local")
+        let peerDevice = DeviceDescriptor(
+            id: peerID,
+            name: "Pending Peer",
+            peerAddresses: [try PeerAddress("127.0.0.1")]
+        )
+        let workspace = WorkspaceSnapshot(
+            id: workspaceID,
+            name: "Manual reconnect",
+            localDeviceID: localID,
+            devices: [localDevice, peerDevice]
+        )
+        let transport = NetworkPeerTransport(
+            listenPort: .any,
+            directPort: port,
+            enableBonjour: false,
+            enableQUIC: false,
+            authenticationTimeout: 5
+        )
+        let firstAttempt = expectation(description: "initial connection attempt")
+        let immediateRetry = expectation(description: "manual retry starts immediately")
+        let tracker = ConnectionExpectationTracker()
+        let events = Task {
+            for await event in transport.events() {
+                if case let .health(id, snapshot) = event,
+                   id == peerID, snapshot.health == .connecting {
+                    if tracker.recordConnection() == 1 { firstAttempt.fulfill() }
+                    else { immediateRetry.fulfill() }
+                }
+            }
+        }
+
+        try await transport.start(
+            localDevice: localDevice,
+            workspace: workspace,
+            key: PairingCryptoSession.randomData(count: 32)
+        )
+        await fulfillment(of: [firstAttempt], timeout: 2)
+        transport.reconnect(to: peerID)
+        await fulfillment(of: [immediateRetry], timeout: 1)
+
+        await transport.stop()
+        listener.cancel()
+        acceptedConnections.cancelAll()
+        events.cancel()
+    }
+
     func testTrustedTransportRetriesWhenReachablePeerNeverAuthenticates() async throws {
         let queue = DispatchQueue(label: "UniSpaceInfrastructureTests.UnresponsivePeer")
         let acceptedConnections = NWConnectionRetainer()
