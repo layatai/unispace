@@ -15,7 +15,7 @@
 | macOS controller to macOS receiver | Controller Mac |
 | macOS receiver to macOS receiver | Neither |
 | Macifier Windows to macOS controller | Macifier, targeting the accepted controller only |
-| Realtime pointer | Active controller, for the active target only |
+| Realtime pointer | Authenticated macOS peers are prewarmed; the active target is retained |
 | Clipboard and file transfer | Current continuity target or explicit transfer destination only |
 
 The last accepted controller is persisted per workspace. A workspace without a
@@ -45,10 +45,11 @@ context instead of polling `AppModel`. The workspace key is cached until the
 workspace or key revision changes. Published properties are assigned only when
 their values differ.
 
-Secondary transports keep passive listeners but dial only their desired peer.
-Realtime connects only for an activating or active control session. Clipboard
-connects only while sharing has a target. File transfer connects only to the
-selected or automatic destination.
+Secondary transports keep passive listeners and use bounded dial ownership.
+Realtime prewarms authenticated macOS control peers and independently retains
+the activating or active target; it does not retry every offline workspace
+peer. Clipboard connects only while sharing has a target. File transfer
+connects only to the selected or automatic destination.
 
 ## Regression gates
 

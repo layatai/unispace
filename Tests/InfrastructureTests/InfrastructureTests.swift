@@ -627,7 +627,7 @@ final class InfrastructureTests: XCTestCase {
         )
         let server = QUICRealtimeTransport(listenPort: .any, directPort: .any, enableBonjour: false)
         try server.start(localDevice: serverDevice, workspace: serverWorkspace, key: key)
-        server.setDesiredPeer(clientID)
+        server.setWarmPeers([clientID])
         let port = try await waitForRealtimePort(of: server)
 
         let routedServer = DeviceDescriptor(
@@ -663,7 +663,7 @@ final class InfrastructureTests: XCTestCase {
             if source == clientID, incoming == frame { received.fulfill() }
         }
         try client.start(localDevice: clientDevice, workspace: clientWorkspace, key: key)
-        client.setDesiredPeer(serverID)
+        client.setWarmPeers([serverID])
 
         var sent = false
         for _ in 0..<100 where !sent {
@@ -674,6 +674,29 @@ final class InfrastructureTests: XCTestCase {
         await fulfillment(of: [received], timeout: 3)
         client.stop()
         server.stop()
+    }
+
+    func testQUICRealtimeRetainsWarmPeersAlongsideDesiredPeer() async throws {
+        let desiredPeerID = DeviceID()
+        let warmPeerID = DeviceID()
+        let transport = QUICRealtimeTransport(
+            listenPort: .any,
+            directPort: .any,
+            enableBonjour: false
+        )
+
+        transport.setDesiredPeer(desiredPeerID)
+        transport.setWarmPeers([warmPeerID])
+        for _ in 0..<100 where transport.retainedPeerIDs != [desiredPeerID, warmPeerID] {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(transport.retainedPeerIDs, [desiredPeerID, warmPeerID])
+
+        transport.setWarmPeers([])
+        for _ in 0..<100 where transport.retainedPeerIDs != [desiredPeerID] {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(transport.retainedPeerIDs, [desiredPeerID])
     }
 
     func testTrustedTransportReconnectsToStoredDirectAddress() async throws {

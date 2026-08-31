@@ -84,6 +84,7 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
     private var retryTokens: [DeviceID: UUID] = [:]
     private var outboundPeerIDs = Set<DeviceID>()
     private var desiredRealtimePeerID: DeviceID?
+    private var realtimeFallbackReported = Set<DeviceID>()
     private var stabilityTokens: [DeviceID: UUID] = [:]
     private var deferredAnnouncements: [ObjectIdentifier: DeferredAnnouncement] = [:]
     private var supersededConnections = Set<ObjectIdentifier>()
@@ -224,6 +225,7 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
                     return desiredRealtimePeerID
                 }
                 realtime.setDesiredPeer(desiredPeer)
+                refreshRealtimeWarmPeers()
             } catch {
                 emit(.health(nil, .init(
                     health: .degraded,
@@ -341,18 +343,47 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
             let portable = PortableInputMapper.map(frame)
             if let pointerTransport = lock.withLock({ crossPlatformPointerTransport }),
                try await pointerTransport.send(portable, to: deviceID) {
+                clearRealtimeFallback(for: deviceID)
                 return true
             }
+            reportRealtimeFallback(for: deviceID)
             try await send(data: WireFrameCodec.encodePortableRealtimePointer(portable), to: deviceID)
             return false
         }
         guard let realtime = lock.withLock({ realtimeTransport }) else {
+            reportRealtimeFallback(for: deviceID)
             try await send(frame.reliableFallback, to: deviceID)
             return false
         }
-        if try await realtime.send(frame, to: deviceID) { return true }
+        if try await realtime.send(frame, to: deviceID) {
+            clearRealtimeFallback(for: deviceID)
+            return true
+        }
+        reportRealtimeFallback(for: deviceID)
         try await send(frame.reliableFallback, to: deviceID)
         return false
+    }
+
+    private func reportRealtimeFallback(for deviceID: DeviceID) {
+        let transport = lock.withLock { () -> TransportKind? in
+            guard realtimeFallbackReported.insert(deviceID).inserted else { return nil }
+            return connections[deviceID]?.transportKind ?? .tcp
+        }
+        guard let transport else { return }
+        emit(.health(deviceID, .init(
+            health: .degraded,
+            transport: transport,
+            detail: "Realtime pointer unavailable; using reliable input"
+        )))
+    }
+
+    private func clearRealtimeFallback(for deviceID: DeviceID) {
+        let transport = lock.withLock { () -> TransportKind? in
+            guard realtimeFallbackReported.remove(deviceID) != nil else { return nil }
+            return connections[deviceID]?.transportKind ?? .quic
+        }
+        guard let transport else { return }
+        emit(.health(deviceID, .init(health: .healthy, transport: transport)))
     }
 
     private func send(data: Data, to deviceID: DeviceID) async throws {
@@ -396,6 +427,7 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
             retryTokens.removeAll()
             outboundPeerIDs.removeAll()
             desiredRealtimePeerID = nil
+            realtimeFallbackReported.removeAll()
             stabilityTokens.removeAll()
             deferredAnnouncements.removeAll()
             supersededConnections.removeAll()
@@ -834,6 +866,7 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
             return
         }
         replaced?.cancel()
+        refreshRealtimeWarmPeers()
         if deferAnnouncement {
             lock.withLock {
                 deferredAnnouncements[objectID] = DeferredAnnouncement(
@@ -910,6 +943,8 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
         lock.unlock()
         guard !wasSuperseded else { return }
         if let deviceID, removedActive {
+            lock.withLock { _ = realtimeFallbackReported.remove(deviceID) }
+            refreshRealtimeWarmPeers()
             emit(.health(deviceID, .init(health: .reconnecting, transport: managed.transportKind)))
             emit(.disconnected(deviceID))
         }
@@ -929,6 +964,16 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
         guard let localID = localDevice?.id else { return false }
         let preferredOutbound = localID < peerID
         return candidate.isOutbound == preferredOutbound && existing.isOutbound != preferredOutbound
+    }
+
+    private func refreshRealtimeWarmPeers() {
+        let values = lock.withLock { () -> (QUICRealtimeTransport?, Set<DeviceID>) in
+            let peers = Set(connections.keys.filter {
+                PeerConnectionPolicy.macCanDial(knownPeers[$0])
+            })
+            return (realtimeTransport, peers)
+        }
+        values.0?.setWarmPeers(values.1)
     }
 
     private func scheduleDirectConnection(to deviceID: DeviceID, immediately: Bool) {

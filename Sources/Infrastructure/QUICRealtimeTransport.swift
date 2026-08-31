@@ -27,6 +27,7 @@ final class QUICRealtimeTransport: @unchecked Sendable {
     private var retries: [DeviceID: Int] = [:]
     private var retryTokens: [DeviceID: UUID] = [:]
     private var desiredPeerID: DeviceID?
+    private var warmPeerIDs = Set<DeviceID>()
     private var running = false
 
     init(listenPort: NWEndpoint.Port, directPort: NWEndpoint.Port, enableBonjour: Bool) {
@@ -36,6 +37,8 @@ final class QUICRealtimeTransport: @unchecked Sendable {
     }
 
     var activePort: NWEndpoint.Port? { lock.withLock { readyPort } }
+
+    var retainedPeerIDs: Set<DeviceID> { lock.withLock { retainedPeerIDsLocked } }
 
     func start(localDevice: DeviceDescriptor, workspace: WorkspaceSnapshot, key: Data) throws {
         stop()
@@ -111,26 +114,58 @@ final class QUICRealtimeTransport: @unchecked Sendable {
     func setDesiredPeer(_ deviceID: DeviceID?) {
         queue.async { [weak self] in
             guard let self else { return }
-            let cancelled = self.lock.withLock { () -> [SecurePeerConnection] in
-                self.desiredPeerID = deviceID
-                let staleRetryIDs = self.retryTokens.keys.filter { $0 != deviceID }
-                for id in staleRetryIDs {
-                    self.retryTokens.removeValue(forKey: id)
-                    self.retries.removeValue(forKey: id)
-                }
-                let stalePending = self.pending.filter {
-                    $0.value.isOutbound && $0.value.expectedDeviceID != deviceID
-                }
-                for (objectID, _) in stalePending { self.pending.removeValue(forKey: objectID) }
-                let staleActive = self.connections.filter { $0.key != deviceID }.map(\.value)
-                return stalePending.map(\.value) + staleActive
-            }
-            cancelled.forEach { $0.cancel() }
-            let shouldDial = deviceID.map { peerID in
-                self.lock.withLock { PeerConnectionPolicy.macCanDial(self.knownPeers[peerID]) }
-            } ?? false
-            if shouldDial, let deviceID { self.scheduleDirectConnection(to: deviceID, immediately: true) }
+            let peersToDial = self.updateRetainedPeers { self.desiredPeerID = deviceID }
+            peersToDial.forEach { self.scheduleDirectConnection(to: $0, immediately: true) }
         }
+    }
+
+    /// Keeps the realtime lane ready only for peers that already have an
+    /// authenticated control connection. This avoids cold-start pointer
+    /// fallback without restoring retries for every offline workspace peer.
+    func setWarmPeers(_ deviceIDs: Set<DeviceID>) {
+        queue.async { [weak self] in
+            guard let self else { return }
+            let peersToDial = self.updateRetainedPeers { self.warmPeerIDs = deviceIDs }
+            peersToDial.forEach { self.scheduleDirectConnection(to: $0, immediately: true) }
+        }
+    }
+
+    private func updateRetainedPeers(_ update: () -> Void) -> Set<DeviceID> {
+        var cancelled: [SecurePeerConnection] = []
+        let peersToDial = lock.withLock { () -> Set<DeviceID> in
+            update()
+            let retainedPeerIDs = retainedPeerIDsLocked
+            let staleRetryIDs = retryTokens.keys.filter { !retainedPeerIDs.contains($0) }
+            for id in staleRetryIDs {
+                retryTokens.removeValue(forKey: id)
+                retries.removeValue(forKey: id)
+            }
+            let stalePending = pending.filter {
+                $0.value.isOutbound && $0.value.expectedDeviceID.map {
+                    !retainedPeerIDs.contains($0)
+                } == true
+            }
+            for (objectID, _) in stalePending { pending.removeValue(forKey: objectID) }
+            let staleActive = connections.filter { !retainedPeerIDs.contains($0.key) }.map(\.value)
+            cancelled = stalePending.map(\.value) + staleActive
+            return retainedPeerIDs.filter { peerID in
+                PeerConnectionPolicy.macCanDial(knownPeers[peerID]) &&
+                    connections[peerID] == nil &&
+                    !pending.values.contains(where: { $0.expectedDeviceID == peerID })
+            }
+        }
+        cancelled.forEach { $0.cancel() }
+        return peersToDial
+    }
+
+    private var retainedPeerIDsLocked: Set<DeviceID> {
+        var result = warmPeerIDs
+        if let desiredPeerID { result.insert(desiredPeerID) }
+        return result
+    }
+
+    private func isRetainedPeerLocked(_ deviceID: DeviceID) -> Bool {
+        desiredPeerID == deviceID || warmPeerIDs.contains(deviceID)
     }
 
     func stop() {
@@ -144,6 +179,7 @@ final class QUICRealtimeTransport: @unchecked Sendable {
             retries.removeAll()
             retryTokens.removeAll()
             desiredPeerID = nil
+            warmPeerIDs.removeAll()
             knownPeers.removeAll()
             localDevice = nil
             workspaceID = nil
@@ -172,7 +208,7 @@ final class QUICRealtimeTransport: @unchecked Sendable {
                       let uuid = UUID(uuidString: idValue) else { return nil }
                 let id = DeviceID(rawValue: uuid)
                 guard id != localDevice.id,
-                      id == desiredPeerID,
+                      isRetainedPeerLocked(id),
                       connections[id] == nil,
                       !pending.values.contains(where: { $0.expectedDeviceID == id }) else { return nil }
                 return (id, result.endpoint)
@@ -250,7 +286,7 @@ final class QUICRealtimeTransport: @unchecked Sendable {
         var rejected = false
         lock.withLock {
             pending.removeValue(forKey: objectID)
-            guard desiredPeerID == deviceID else {
+            guard isRetainedPeerLocked(deviceID) else {
                 rejected = true
                 return
             }
@@ -298,7 +334,7 @@ final class QUICRealtimeTransport: @unchecked Sendable {
 
     private func scheduleDirectConnection(to deviceID: DeviceID, immediately: Bool) {
         let schedule = lock.withLock { () -> (UUID, TimeInterval)? in
-            guard running, desiredPeerID == deviceID,
+            guard running, isRetainedPeerLocked(deviceID),
                   PeerConnectionPolicy.macCanDial(knownPeers[deviceID]),
                   connections[deviceID] == nil, retryTokens[deviceID] == nil,
                   knownPeers[deviceID]?.peerAddresses.isEmpty == false else { return nil }
