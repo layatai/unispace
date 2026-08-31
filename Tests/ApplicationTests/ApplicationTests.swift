@@ -734,7 +734,7 @@ final class ApplicationTests: XCTestCase {
             absoluteX: 12,
             absoluteY: 11
         ))
-        try await Task.sleep(for: .milliseconds(25))
+        await coordinator.flushPendingInput()
         _ = await coordinator.handleCaptured(.mouseButton(button: .left, isDown: true, clickCount: 1))
         _ = await coordinator.handleCaptured(.pointerMove(
             deltaX: 5,
@@ -1041,7 +1041,7 @@ final class ApplicationTests: XCTestCase {
 
         _ = await coordinator.handleCaptured(.scroll(deltaX: 1, deltaY: 2, isContinuous: true))
         _ = await coordinator.handleCaptured(.scroll(deltaX: 3, deltaY: 4, isContinuous: true))
-        try await Task.sleep(for: .milliseconds(40))
+        await coordinator.flushPendingInput()
 
         XCTAssertEqual(transport.frames.map(\.event), [
             .scroll(deltaX: 4, deltaY: 6, isContinuous: true)
