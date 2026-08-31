@@ -6,3 +6,4 @@ dist/
 *.dSYM
 xcuserdata/
 *.xcuserstate
+/Scripts/.ship.env
