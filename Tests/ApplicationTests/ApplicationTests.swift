@@ -698,7 +698,7 @@ final class ApplicationTests: XCTestCase {
 
         _ = await coordinator.handleCaptured(.pointerMove(deltaX: 1, deltaY: 2, absoluteX: 10, absoluteY: 20))
         _ = await coordinator.handleCaptured(.pointerMove(deltaX: 3, deltaY: 4, absoluteX: 13, absoluteY: 24))
-        try await Task.sleep(for: .milliseconds(30))
+        await coordinator.flushPendingInput()
 
         XCTAssertEqual(transport.frames.count, 1)
         XCTAssertEqual(
