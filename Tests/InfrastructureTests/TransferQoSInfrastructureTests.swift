@@ -217,6 +217,128 @@ final class TransferQoSInfrastructureTests: XCTestCase {
         _ = try await store.finalizeTransfer(manifest.transferID)
     }
 
+    func testCheckpointingStorePersistsDirtySessionWhenWritesPause() async throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let clock = CheckpointTestClock()
+        let payload = Data("paused transfer".utf8)
+        let entry = TransferManifestEntry(
+            filename: "payload.txt",
+            byteCount: UInt64(payload.count),
+            sha256: Data(SHA256.hash(data: payload))
+        )
+        let manifest = makeManifest(entry: entry)
+        let store = CheckpointingTransferStore(
+            rootURL: root,
+            checkpointConfiguration: TransferCheckpointConfiguration(
+                byteInterval: 1_024 * 1_024,
+                minimumIntervalNanoseconds: 10,
+                maximumIntervalNanoseconds: 100
+            ),
+            clock: clock
+        )
+
+        try await store.prepareIncoming(manifest: manifest, limits: .default)
+        _ = try await store.write(TransferChunk(
+            transferID: manifest.transferID,
+            entryID: entry.id,
+            offset: 0,
+            data: payload
+        ), limits: .default)
+        let offsetBeforeDeadline = try await store.verifiedOffsets(for: manifest.transferID)
+        XCTAssertEqual(offsetBeforeDeadline.first?.offset, 0)
+
+        let timerScheduled = await eventually { clock.pendingSleepCount == 1 }
+        XCTAssertTrue(timerScheduled)
+        clock.advance(by: 100)
+
+        let checkpointed = await eventually {
+            await store.diagnostics().checkpointCount == 1
+        }
+        XCTAssertTrue(checkpointed)
+        let offsetAfterDeadline = try await store.verifiedOffsets(for: manifest.transferID)
+        XCTAssertEqual(offsetAfterDeadline.first?.offset, UInt64(payload.count))
+    }
+
+    func testCheckpointingStoreKeepsOneTimerAcrossRepeatedWrites() async throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let clock = CheckpointTestClock()
+        let byteCount = 500
+        let entry = TransferManifestEntry(
+            filename: "payload.bin",
+            byteCount: UInt64(byteCount),
+            sha256: Data(repeating: 1, count: 32)
+        )
+        let manifest = makeManifest(entry: entry)
+        let store = CheckpointingTransferStore(
+            rootURL: root,
+            checkpointConfiguration: TransferCheckpointConfiguration(
+                byteInterval: 1_024,
+                minimumIntervalNanoseconds: 10,
+                maximumIntervalNanoseconds: 100
+            ),
+            clock: clock
+        )
+
+        try await store.prepareIncoming(manifest: manifest, limits: .default)
+        for offset in 0..<byteCount {
+            _ = try await store.write(TransferChunk(
+                transferID: manifest.transferID,
+                entryID: entry.id,
+                offset: UInt64(offset),
+                data: Data([1])
+            ), limits: .default)
+        }
+
+        let diagnostics = await store.diagnostics()
+        XCTAssertEqual(diagnostics.checkpointTimerCreationCount, 1)
+        XCTAssertEqual(clock.pendingSleepCount, 1)
+    }
+
+    func testCheckpointingStoreRetriesTransientSynchronizationFailure() async throws {
+        let fixture = try await makeCheckpointFailureFixture(
+            failures: [.synchronize: [CheckpointTestError.transient]]
+        )
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+
+        fixture.clock.advance(by: 100)
+        let retryScheduled = await eventually {
+            await fixture.store.diagnostics().checkpointTimerCreationCount == 2
+        }
+        XCTAssertTrue(retryScheduled)
+        fixture.clock.advance(by: 10)
+
+        let checkpointed = await eventually {
+            await fixture.store.diagnostics().checkpointCount == 1
+        }
+        XCTAssertTrue(checkpointed)
+        let offsets = try await fixture.store.verifiedOffsets(for: fixture.manifest.transferID)
+        XCTAssertEqual(offsets.first?.offset, UInt64(fixture.payload.count))
+    }
+
+    func testCheckpointingStoreSurfacesPermanentMetadataFailureWithoutMoreWrites() async throws {
+        let fixture = try await makeCheckpointFailureFixture(
+            failures: [.metadataPersistence: [TransferStoreError.insufficientStorage]]
+        )
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+
+        fixture.clock.advance(by: 100)
+        let failed = await eventually {
+            fixture.hook.attemptCount(for: .metadataPersistence) == 1
+        }
+        XCTAssertTrue(failed)
+
+        do {
+            _ = try await fixture.store.verifiedOffsets(for: fixture.manifest.transferID)
+            XCTFail("Expected the scheduled checkpoint failure")
+        } catch let error as TransferStoreError {
+            XCTAssertEqual(error, .insufficientStorage)
+        }
+        let diagnostics = await fixture.store.diagnostics()
+        XCTAssertEqual(diagnostics.checkpointTimerCreationCount, 1)
+    }
+
     func testStreamingSourceUsesOneHandleForSequentialReads() async throws {
         let metadataRoot = temporaryDirectory()
         let sourceRoot = temporaryDirectory()
@@ -293,6 +415,48 @@ final class TransferQoSInfrastructureTests: XCTestCase {
         return url
     }
 
+    private func makeCheckpointFailureFixture(
+        failures: [TransferCheckpointOperation: [any Error]]
+    ) async throws -> CheckpointFailureFixture {
+        let root = temporaryDirectory()
+        let clock = CheckpointTestClock()
+        let hook = CheckpointFailureHook(failures: failures)
+        let payload = Data("checkpoint failure".utf8)
+        let entry = TransferManifestEntry(
+            filename: "payload.txt",
+            byteCount: UInt64(payload.count),
+            sha256: Data(SHA256.hash(data: payload))
+        )
+        let manifest = makeManifest(entry: entry)
+        let store = CheckpointingTransferStore(
+            rootURL: root,
+            checkpointConfiguration: TransferCheckpointConfiguration(
+                byteInterval: 1_024,
+                minimumIntervalNanoseconds: 10,
+                maximumIntervalNanoseconds: 100
+            ),
+            clock: clock,
+            checkpointHook: hook.call
+        )
+        try await store.prepareIncoming(manifest: manifest, limits: .default)
+        _ = try await store.write(TransferChunk(
+            transferID: manifest.transferID,
+            entryID: entry.id,
+            offset: 0,
+            data: payload
+        ), limits: .default)
+        let timerScheduled = await eventually { clock.pendingSleepCount == 1 }
+        XCTAssertTrue(timerScheduled)
+        return CheckpointFailureFixture(
+            root: root,
+            clock: clock,
+            hook: hook,
+            store: store,
+            manifest: manifest,
+            payload: payload
+        )
+    }
+
     private func eventually(
         timeout: Duration = .seconds(2),
         condition: @escaping @Sendable () async -> Bool
@@ -304,6 +468,101 @@ final class TransferQoSInfrastructureTests: XCTestCase {
             try? await Task.sleep(for: .milliseconds(10))
         }
         return await condition()
+    }
+}
+
+private struct CheckpointFailureFixture {
+    let root: URL
+    let clock: CheckpointTestClock
+    let hook: CheckpointFailureHook
+    let store: CheckpointingTransferStore
+    let manifest: TransferManifest
+    let payload: Data
+}
+
+private enum CheckpointTestError: Error {
+    case transient
+}
+
+private final class CheckpointFailureHook: @unchecked Sendable {
+    private let lock = NSLock()
+    private var failures: [TransferCheckpointOperation: [any Error]]
+    private var attempts: [TransferCheckpointOperation: Int] = [:]
+
+    init(failures: [TransferCheckpointOperation: [any Error]]) {
+        self.failures = failures
+    }
+
+    func call(
+        transferID: TransferID,
+        entryID: TransferEntryID,
+        operation: TransferCheckpointOperation
+    ) throws {
+        let error = lock.qosTestWithLock { () -> (any Error)? in
+            attempts[operation, default: 0] += 1
+            guard var queued = failures[operation], !queued.isEmpty else { return nil }
+            let error = queued.removeFirst()
+            failures[operation] = queued
+            return error
+        }
+        if let error { throw error }
+    }
+
+    func attemptCount(for operation: TransferCheckpointOperation) -> Int {
+        lock.qosTestWithLock { attempts[operation, default: 0] }
+    }
+}
+
+private final class CheckpointTestClock: MonotonicClock, @unchecked Sendable {
+    private struct Waiter {
+        let deadline: UInt64
+        let continuation: CheckedContinuation<Void, Error>
+    }
+
+    private let lock = NSLock()
+    private var value: UInt64 = 0
+    private var waiters: [UUID: Waiter] = [:]
+
+    var pendingSleepCount: Int { lock.qosTestWithLock { waiters.count } }
+
+    func nowNanoseconds() -> UInt64 { lock.qosTestWithLock { value } }
+
+    func sleep(for duration: Duration) async throws {
+        let id = UUID()
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                let cancelled = lock.qosTestWithLock { () -> Bool in
+                    guard !Task.isCancelled else { return true }
+                    waiters[id] = Waiter(
+                        deadline: value &+ Self.nanoseconds(duration),
+                        continuation: continuation
+                    )
+                    return false
+                }
+                if cancelled { continuation.resume(throwing: CancellationError()) }
+            }
+        } onCancel: {
+            let continuation = self.lock.qosTestWithLock {
+                self.waiters.removeValue(forKey: id)?.continuation
+            }
+            continuation?.resume(throwing: CancellationError())
+        }
+    }
+
+    func advance(by nanoseconds: UInt64) {
+        let due = lock.qosTestWithLock { () -> [CheckedContinuation<Void, Error>] in
+            value &+= nanoseconds
+            let ids = waiters.compactMap { $0.value.deadline <= value ? $0.key : nil }
+            return ids.compactMap { waiters.removeValue(forKey: $0)?.continuation }
+        }
+        due.forEach { $0.resume() }
+    }
+
+    private static func nanoseconds(_ duration: Duration) -> UInt64 {
+        let components = duration.components
+        let seconds = UInt64(max(components.seconds, 0))
+        let attoseconds = UInt64(max(components.attoseconds, 0))
+        return seconds &* 1_000_000_000 &+ attoseconds / 1_000_000_000
     }
 }
 

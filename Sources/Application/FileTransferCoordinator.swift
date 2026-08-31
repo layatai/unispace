@@ -272,7 +272,7 @@ public actor FileTransferCoordinator {
             await sourceProvider.removeOutgoingTransfer(transferID)
         }
         records.removeValue(forKey: transferID)
-        continuation.yield(.removed(transferID))
+        yield(.removed(transferID))
     }
 
     public func clearCompleted() async {
@@ -905,7 +905,12 @@ public actor FileTransferCoordinator {
 
     private func emit(_ transferID: TransferID) {
         guard let snapshot = records[transferID]?.snapshot else { return }
-        continuation.yield(.snapshot(snapshot))
+        yield(.snapshot(snapshot))
+    }
+
+    private func yield(_ event: FileTransferCoordinatorEvent) {
+        guard case .dropped = continuation.yield(event) else { return }
+        continuation.yield(.resync(snapshots()))
     }
 
     private func cancelTransferTask(_ transferID: TransferID) {

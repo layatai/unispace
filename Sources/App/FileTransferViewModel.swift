@@ -324,6 +324,8 @@ final class FileTransferViewModel: ObservableObject {
 
     private func receiveImmediately(_ event: FileTransferCoordinatorEvent) {
         switch event {
+        case let .resync(snapshots):
+            records = Dictionary(uniqueKeysWithValues: snapshots.map { ($0.id, $0) })
         case let .snapshot(snapshot):
             records[snapshot.id] = snapshot
         case let .removed(transferID):
@@ -444,6 +446,12 @@ private actor FileTransferEventPump {
         generation activeGeneration: UInt64
     ) async {
         switch event {
+        case .resync:
+            latestSnapshots.removeAll(keepingCapacity: true)
+            pendingSnapshots.removeAll(keepingCapacity: true)
+            flushTasks.values.forEach { $0.cancel() }
+            flushTasks.removeAll(keepingCapacity: true)
+            await sink(event)
         case let .removed(transferID):
             latestSnapshots.removeValue(forKey: transferID)
             pendingSnapshots.removeValue(forKey: transferID)

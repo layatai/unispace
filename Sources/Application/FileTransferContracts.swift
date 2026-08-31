@@ -170,6 +170,7 @@ public struct FileTransferSnapshot: Identifiable, Sendable, Equatable {
 public enum FileTransferCoordinatorEvent: Sendable, Equatable {
     case snapshot(FileTransferSnapshot)
     case removed(TransferID)
+    case resync([FileTransferSnapshot])
 }
 
 public enum FileTransferCoordinatorError: Error, LocalizedError, Equatable, Sendable {

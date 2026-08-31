@@ -4,6 +4,42 @@ import XCTest
 import UniSpaceDomain
 
 final class FileTransferCoordinatorTests: XCTestCase {
+    @MainActor
+    func testCoordinatorEmitsBoundedResyncAfterEventOverflow() async throws {
+        let fixture = FileTransferFixture()
+        let recovered = (0..<130).map { index in
+            RecoveredIncomingTransfer(
+                manifest: fixture.makeManifest(
+                    source: fixture.remote.id,
+                    destination: fixture.local.id,
+                    filename: "file-\(index).txt"
+                ),
+                offsets: []
+            )
+        }
+        await fixture.store.setRecovered(recovered)
+        let events = await fixture.coordinator.events()
+
+        try await fixture.coordinator.start(
+            localDevice: fixture.local,
+            workspace: fixture.workspace,
+            key: Data(repeating: 9, count: 32)
+        )
+
+        var iterator = events.makeAsyncIterator()
+        var resyncedSnapshots: [FileTransferSnapshot]?
+        for _ in 0..<128 {
+            guard let event = await iterator.next() else {
+                return XCTFail("Expected a full bounded event buffer")
+            }
+            if case let .resync(snapshots) = event {
+                resyncedSnapshots = snapshots
+            }
+        }
+        XCTAssertEqual(resyncedSnapshots?.count, 130)
+        XCTAssertTrue(resyncedSnapshots?.allSatisfy { $0.state == .paused } == true)
+    }
+
     func testFileTransferContractsExposeProgressRecoveryAndActionableErrors() {
         let transferID = TransferID()
         let peer = DeviceID()

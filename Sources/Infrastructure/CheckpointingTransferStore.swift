@@ -29,18 +29,26 @@ public struct CheckpointingTransferStoreDiagnostics: Sendable, Equatable {
     public let handleOpenCount: UInt64
     public let checkpointCount: UInt64
     public let metadataWriteCount: UInt64
+    public let checkpointTimerCreationCount: UInt64
 
     public init(
         openHandleCount: Int,
         handleOpenCount: UInt64,
         checkpointCount: UInt64,
-        metadataWriteCount: UInt64
+        metadataWriteCount: UInt64,
+        checkpointTimerCreationCount: UInt64
     ) {
         self.openHandleCount = openHandleCount
         self.handleOpenCount = handleOpenCount
         self.checkpointCount = checkpointCount
         self.metadataWriteCount = metadataWriteCount
+        self.checkpointTimerCreationCount = checkpointTimerCreationCount
     }
+}
+
+public enum TransferCheckpointOperation: Sendable, Hashable {
+    case synchronize
+    case metadataPersistence
 }
 
 /// Incoming staging store optimized for interactive continuity sessions.
@@ -68,6 +76,7 @@ public actor CheckpointingTransferStore: TransferStore {
         var durableOffset: UInt64
         var bytesSinceCheckpoint: UInt64
         var lastCheckpointNanoseconds: UInt64
+        var checkpointFailureCount: Int
 
         init(
             transferID: TransferID,
@@ -83,7 +92,14 @@ public actor CheckpointingTransferStore: TransferStore {
             durableOffset = offset
             bytesSinceCheckpoint = 0
             lastCheckpointNanoseconds = nowNanoseconds
+            checkpointFailureCount = 0
         }
+    }
+
+    private struct ScheduledCheckpoint {
+        let deadlineNanoseconds: UInt64
+        let id: UUID
+        let task: Task<Void, Never>
     }
 
     private struct SessionKey: Hashable {
@@ -95,22 +111,36 @@ public actor CheckpointingTransferStore: TransferStore {
     private let fileManager: FileManager
     private let checkpointConfiguration: TransferCheckpointConfiguration
     private let clock: any MonotonicClock
+    private let checkpointHook: @Sendable (
+        TransferID,
+        TransferEntryID,
+        TransferCheckpointOperation
+    ) throws -> Void
 
     private var cache: [TransferID: StoredTransfer] = [:]
     private var sessions: [SessionKey: WriteSession] = [:]
+    private var scheduledCheckpoints: [SessionKey: ScheduledCheckpoint] = [:]
+    private var pendingCheckpointErrors: [SessionKey: any Error] = [:]
     private var handleOpenCount: UInt64 = 0
     private var checkpointCount: UInt64 = 0
     private var metadataWriteCount: UInt64 = 0
+    private var checkpointTimerCreationCount: UInt64 = 0
 
     public init(
         rootURL: URL? = nil,
         fileManager: FileManager = .default,
         checkpointConfiguration: TransferCheckpointConfiguration = .default,
-        clock: any MonotonicClock = SystemMonotonicClock()
+        clock: any MonotonicClock = SystemMonotonicClock(),
+        checkpointHook: @escaping @Sendable (
+            TransferID,
+            TransferEntryID,
+            TransferCheckpointOperation
+        ) throws -> Void = { _, _, _ in }
     ) {
         self.fileManager = fileManager
         self.checkpointConfiguration = checkpointConfiguration
         self.clock = clock
+        self.checkpointHook = checkpointHook
         if let rootURL {
             self.rootURL = rootURL
         } else {
@@ -124,6 +154,7 @@ public actor CheckpointingTransferStore: TransferStore {
     }
 
     deinit {
+        scheduledCheckpoints.values.forEach { $0.task.cancel() }
         sessions.values.forEach { try? $0.handle.close() }
     }
 
@@ -132,7 +163,8 @@ public actor CheckpointingTransferStore: TransferStore {
             openHandleCount: sessions.count,
             handleOpenCount: handleOpenCount,
             checkpointCount: checkpointCount,
-            metadataWriteCount: metadataWriteCount
+            metadataWriteCount: metadataWriteCount,
+            checkpointTimerCreationCount: checkpointTimerCreationCount
         )
     }
 
@@ -194,6 +226,7 @@ public actor CheckpointingTransferStore: TransferStore {
         if stored.finalizedEntryIDs.contains(chunk.entryID) { return entry.byteCount }
 
         let key = SessionKey(transferID: chunk.transferID, entryID: chunk.entryID)
+        try throwPendingCheckpointError(for: key)
         let session = try openSessionIfNeeded(key: key, stored: stored)
         let (chunkEnd, overflow) = chunk.offset.addingReportingOverflow(UInt64(chunk.data.count))
         guard !overflow else {
@@ -224,11 +257,15 @@ public actor CheckpointingTransferStore: TransferStore {
         if shouldCheckpoint(session, nowNanoseconds: now) {
             stored = try checkpoint(session, stored: stored, nowNanoseconds: now)
             cache[chunk.transferID] = stored
+            cancelScheduledCheckpoint(key)
+        } else {
+            scheduleCheckpoint(for: key, session: session, nowNanoseconds: now)
         }
         return session.writtenOffset
     }
 
     public func verifiedOffsets(for transferID: TransferID) async throws -> [TransferEntryOffset] {
+        try throwPendingCheckpointError(for: transferID)
         let stored = try load(transferID)
         return stored.manifest.entries.map { entry in
             let offset = stored.offsets.first(where: { $0.entryID == entry.id })?.offset ?? 0
@@ -240,6 +277,7 @@ public actor CheckpointingTransferStore: TransferStore {
         transferID: TransferID,
         entryID: TransferEntryID
     ) async throws -> URL {
+        try throwPendingCheckpointError(for: SessionKey(transferID: transferID, entryID: entryID))
         var stored = try load(transferID)
         let manifestEntry = try entry(entryID, in: stored.manifest)
         let destination = completedURL(transferID: transferID, filename: manifestEntry.filename)
@@ -317,6 +355,7 @@ public actor CheckpointingTransferStore: TransferStore {
         limits: FileTransferLimits
     ) async throws -> [RecoveredIncomingTransfer] {
         await suspendAll()
+        pendingCheckpointErrors.removeAll(keepingCapacity: true)
         try ensureRootExists()
         cache.removeAll(keepingCapacity: true)
         let directories = try fileManager.contentsOfDirectory(
@@ -414,6 +453,7 @@ public actor CheckpointingTransferStore: TransferStore {
 
     public func cancel(_ transferID: TransferID) async {
         closeSessions(for: transferID)
+        pendingCheckpointErrors = pendingCheckpointErrors.filter { $0.key.transferID != transferID }
         cache.removeValue(forKey: transferID)
         try? fileManager.removeItem(at: transferDirectory(transferID))
     }
@@ -483,6 +523,111 @@ public actor CheckpointingTransferStore: TransferStore {
             || elapsed >= checkpointConfiguration.maximumIntervalNanoseconds
     }
 
+    private func scheduleCheckpoint(
+        for key: SessionKey,
+        session: WriteSession,
+        nowNanoseconds: UInt64
+    ) {
+        let requiredInterval = session.bytesSinceCheckpoint >= checkpointConfiguration.byteInterval
+            ? checkpointConfiguration.minimumIntervalNanoseconds
+            : checkpointConfiguration.maximumIntervalNanoseconds
+        let deadline = session.lastCheckpointNanoseconds.addingReportingOverflow(requiredInterval)
+        let deadlineNanoseconds = deadline.overflow ? UInt64.max : deadline.partialValue
+        scheduleCheckpoint(for: key, deadlineNanoseconds: deadlineNanoseconds, nowNanoseconds: nowNanoseconds)
+    }
+
+    private func scheduleCheckpoint(
+        for key: SessionKey,
+        deadlineNanoseconds: UInt64,
+        nowNanoseconds: UInt64
+    ) {
+        if let scheduled = scheduledCheckpoints[key],
+           scheduled.deadlineNanoseconds <= deadlineNanoseconds {
+            return
+        }
+        scheduledCheckpoints.removeValue(forKey: key)?.task.cancel()
+        let delay = deadlineNanoseconds > nowNanoseconds ? deadlineNanoseconds - nowNanoseconds : 0
+        let clock = self.clock
+        let taskID = UUID()
+        let task = Task { [weak self] in
+            do {
+                try await clock.sleep(for: .nanoseconds(Int64(clamping: delay)))
+            } catch {
+                return
+            }
+            await self?.performScheduledCheckpoint(for: key, taskID: taskID)
+        }
+        scheduledCheckpoints[key] = ScheduledCheckpoint(
+            deadlineNanoseconds: deadlineNanoseconds,
+            id: taskID,
+            task: task
+        )
+        checkpointTimerCreationCount &+= 1
+    }
+
+    private func performScheduledCheckpoint(for key: SessionKey, taskID: UUID) {
+        guard scheduledCheckpoints[key]?.id == taskID else { return }
+        scheduledCheckpoints.removeValue(forKey: key)
+        guard let session = sessions[key] else { return }
+        let now = clock.nowNanoseconds()
+        guard shouldCheckpoint(session, nowNanoseconds: now) else {
+            scheduleCheckpoint(for: key, session: session, nowNanoseconds: now)
+            return
+        }
+        do {
+            let stored = try load(key.transferID)
+            let checkpointed = try checkpoint(
+                session,
+                stored: stored,
+                nowNanoseconds: now
+            )
+            cache[key.transferID] = checkpointed
+            pendingCheckpointErrors.removeValue(forKey: key)
+        } catch {
+            handleCheckpointFailure(error, for: key, session: session, nowNanoseconds: now)
+        }
+    }
+
+    private func handleCheckpointFailure(
+        _ error: any Error,
+        for key: SessionKey,
+        session: WriteSession,
+        nowNanoseconds: UInt64
+    ) {
+        session.checkpointFailureCount += 1
+        if isPermanentCheckpointFailure(error) || session.checkpointFailureCount >= 3 {
+            pendingCheckpointErrors[key] = error
+            return
+        }
+        let multiplier = UInt64(1 << (session.checkpointFailureCount - 1))
+        let retryDelay = min(
+            checkpointConfiguration.minimumIntervalNanoseconds &* multiplier,
+            checkpointConfiguration.maximumIntervalNanoseconds
+        )
+        let deadline = nowNanoseconds.addingReportingOverflow(retryDelay)
+        scheduleCheckpoint(
+            for: key,
+            deadlineNanoseconds: deadline.overflow ? UInt64.max : deadline.partialValue,
+            nowNanoseconds: nowNanoseconds
+        )
+    }
+
+    private func isPermanentCheckpointFailure(_ error: any Error) -> Bool {
+        if let error = error as? TransferStoreError, error == .insufficientStorage { return true }
+        if let error = error as? CocoaError, error.code == .fileWriteOutOfSpace { return true }
+        return false
+    }
+
+    private func throwPendingCheckpointError(for key: SessionKey) throws {
+        if let error = pendingCheckpointErrors[key] { throw error }
+    }
+
+    private func throwPendingCheckpointError(for transferID: TransferID) throws {
+        if let error = pendingCheckpointErrors.first(where: { $0.key.transferID == transferID })?.value {
+            throw error
+        }
+    }
+
     @discardableResult
     private func checkpoint(
         _ session: WriteSession,
@@ -492,6 +637,7 @@ public actor CheckpointingTransferStore: TransferStore {
     ) throws -> StoredTransfer {
         guard force || session.writtenOffset != session.durableOffset else { return input }
         if session.writtenOffset == session.durableOffset { return input }
+        try checkpointHook(session.transferID, session.entryID, .synchronize)
         try session.handle.synchronize()
         var stored = input
         let index = try offsetIndex(session.entryID, in: stored)
@@ -500,10 +646,12 @@ public actor CheckpointingTransferStore: TransferStore {
             offset: session.writtenOffset
         )
         stored.updatedAt = Date()
+        try checkpointHook(session.transferID, session.entryID, .metadataPersistence)
         try persist(stored)
         session.durableOffset = session.writtenOffset
         session.bytesSinceCheckpoint = 0
         session.lastCheckpointNanoseconds = nowNanoseconds
+        session.checkpointFailureCount = 0
         checkpointCount &+= 1
         return stored
     }
@@ -514,8 +662,13 @@ public actor CheckpointingTransferStore: TransferStore {
     }
 
     private func closeSession(_ key: SessionKey) {
+        cancelScheduledCheckpoint(key)
         guard let session = sessions.removeValue(forKey: key) else { return }
         try? session.handle.close()
+    }
+
+    private func cancelScheduledCheckpoint(_ key: SessionKey) {
+        scheduledCheckpoints.removeValue(forKey: key)?.task.cancel()
     }
 
     private func ensureRootExists() throws {
