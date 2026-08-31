@@ -24,6 +24,13 @@ both Macs showed 9–16% CPU in pointer encryption, TCP receive/decode, event-ta
 suppression, and injection. TCP head-of-line blocking is the direct cause of
 the visible pointer lag.
 
+Build 19 removed that QUIC dependency by moving modern Mac pointer traffic to
+authenticated UDP. A follow-up live session exposed a separate failover defect:
+UDP delivery stopped while TCP heartbeat remained healthy, leaving the remote
+session active and the controller cursor suppressed. See
+[`remote-pointer-stall-handover.md`](remote-pointer-stall-handover.md) for the
+evidence, code review, and required regression coverage.
+
 ## Connection ownership
 
 | Connection | Proactive dial owner |
