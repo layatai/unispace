@@ -207,12 +207,14 @@ final class UniSpaceUITests: XCTestCase {
         }
     }
 
+    @MainActor
     private func assertTrailingEdge(
         of element: XCUIElement,
         equals expected: CGFloat,
         file: StaticString = #filePath,
         line: UInt = #line
     ) {
-        XCTAssertEqual(element.frame.maxX, expected, accuracy: 1, file: file, line: line)
+        let actual = element.frame.maxX
+        XCTAssertEqual(actual, expected, accuracy: 1, file: file, line: line)
     }
 }
