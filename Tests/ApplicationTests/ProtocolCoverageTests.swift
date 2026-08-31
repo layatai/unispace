@@ -43,6 +43,7 @@ final class ProtocolCoverageTests: XCTestCase {
             .activationResult(sessionID: sessionID, accepted: true),
             .deactivate(sessionID),
             .heartbeat(sessionID: sessionID, timestampNanos: 123),
+            .realtimePointerProgress(.init(sessionID: sessionID, generation: 4, sequence: 9)),
             .boundaryCrossed(
                 sessionID: sessionID,
                 displayID: displayID,
@@ -160,6 +161,7 @@ final class ProtocolCoverageTests: XCTestCase {
             .activationResult(sessionID: sessionID, accepted: false),
             .deactivate(sessionID),
             .heartbeat(sessionID: sessionID, timestampNanos: 123),
+            .realtimePointerProgress(.init(sessionID: sessionID, generation: 4, sequence: 9)),
             .boundaryCrossed(
                 sessionID: sessionID,
                 displayID: displayID,

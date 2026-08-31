@@ -173,6 +173,18 @@ public struct RealtimePointerFrame: Codable, Equatable, Sendable {
     }
 }
 
+public struct RealtimePointerProgress: Codable, Equatable, Sendable {
+    public let sessionID: SessionID
+    public let generation: UInt64
+    public let sequence: UInt64
+
+    public init(sessionID: SessionID, generation: UInt64, sequence: UInt64) {
+        self.sessionID = sessionID
+        self.generation = generation
+        self.sequence = sequence
+    }
+}
+
 public struct InputActivation: Codable, Equatable, Sendable {
     public let sessionID: SessionID
     public let epoch: ControllerEpoch
@@ -203,6 +215,7 @@ public enum ControlMessage: Codable, Equatable, Sendable {
     case activationResult(sessionID: SessionID, accepted: Bool)
     case deactivate(SessionID)
     case heartbeat(sessionID: SessionID, timestampNanos: UInt64)
+    case realtimePointerProgress(RealtimePointerProgress)
     case boundaryCrossed(sessionID: SessionID, displayID: DisplayID, edge: DisplayEdge, normalizedPosition: Double)
     case releaseAll(SessionID)
     case rotateWorkspaceKey(Data)

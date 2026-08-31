@@ -162,7 +162,7 @@ final class CoordinatorStateCoverageTests: XCTestCase {
         XCTAssertTrue(hysteresis.allows(transition))
     }
 
-    func testPeerTransportDefaultRealtimeLaneUsesReliableFallback() async throws {
+    func testPeerTransportDefaultRealtimeLaneReportsUnavailableWithoutSending() async throws {
         let transport = ReliableOnlyTransport()
         let controllerID = DeviceID()
         let targetID = DeviceID()
@@ -185,8 +185,8 @@ final class CoordinatorStateCoverageTests: XCTestCase {
         let usedRealtime = try await transport.sendRealtime(frame, to: targetID)
 
         XCTAssertFalse(usedRealtime)
-        XCTAssertEqual(transport.frames, [frame.reliableFallback])
-        XCTAssertEqual(transport.targets, [targetID])
+        XCTAssertTrue(transport.frames.isEmpty)
+        XCTAssertTrue(transport.targets.isEmpty)
     }
 
     func testHeartbeatLoopAndReceiverWatchdogUseInjectedClock() async throws {

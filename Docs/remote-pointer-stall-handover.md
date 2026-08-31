@@ -9,8 +9,8 @@ endpoint exits the session automatically.
 
 This document records the live evidence and review of commit `a30752b` (`fix:
 restore low-latency Mac pointer transport`) on
-`origin/perf/continuity-transfer-qos`. It is a diagnostic handover; it does not
-include a source fix.
+`origin/perf/continuity-transfer-qos`. PR #41 now includes the source fix and
+regression coverage described below.
 
 ## Live evidence
 
@@ -101,16 +101,35 @@ do not cover:
 Reliable fallback should be selected by observed lane health, not only by the
 presence of an authenticated connection object.
 
+## Implemented remediation
+
+- New Macs advertise `realtime-pointer-progress-v1`. The receiver reports the
+  latest accepted UDP generation and sequence over the authenticated reliable
+  control channel.
+- Progress-capable sessions use a 250 ms heartbeat interval and require fresh
+  pointer acknowledgements. Initial probing and stale lanes keep real pointer
+  movement on reliable input while sending zero-delta UDP probes.
+- Acknowledgements older than 750 ms invalidate and reconnect the UDP lane.
+  Reliable pointer delivery remains active until a new probe is acknowledged.
+- UDP sends no longer await Network.framework's local `contentProcessed`
+  callback, so a missing datagram completion cannot suspend pointer forwarding.
+- Reliable pointer delivery has a bounded drain. A send error or timeout ends
+  the session and releases local input suppression.
+- Older macOS peers without progress acknowledgements use reliable pointer
+  delivery. Windows keeps the existing Macifier-compatible UDP behavior.
+- The unrelated Swift explicit-`self` CI failure in `AppModel` is fixed without
+  changing pairing behavior.
+
 ## Required regression coverage
 
-- Authenticate UDP, stop the receiver, and verify subsequent pointer movement
-  falls back without waiting indefinitely.
-- Authenticate UDP, drop acknowledgements while TCP heartbeat remains healthy,
-  and verify the lane becomes degraded.
-- Withhold a Network.framework send completion and verify the bounded deadline.
-- Restore UDP after fallback and verify one clean transition back to realtime.
-- Verify controller suppression is released if neither realtime nor reliable
-  delivery can progress.
+- Authenticate UDP, stop progress acknowledgements, and verify subsequent
+  pointer movement falls back and reconnects without waiting indefinitely.
+- Drop acknowledgements while TCP heartbeat remains healthy and verify reliable
+  delivery stays active.
+- Withhold reliable send completion and verify the bounded fail-open deadline.
+- Restore progress after fallback and verify one clean transition to realtime.
+- Verify controller suppression is released if reliable delivery cannot
+  progress.
 - Run the same transition tests across a routed Tailscale endpoint; localhost
   success alone is not an adequate gate.
 

@@ -142,6 +142,7 @@ final class AppModel: ObservableObject {
                 .quicStreamV2,
                 .udpPointerV2,
                 .activationAcknowledgementV1,
+                .realtimePointerProgressV1,
                 .fileTransferV1,
                 .clipboardTextV1,
                 .clipboardURLV1,
@@ -479,14 +480,14 @@ final class AppModel: ObservableObject {
                 guard let self else { return }
                 switch status {
                 case .ready:
-                    statusMessage = setupState == .hostingPairing
-                        ? "Visible to nearby devices as \(localDevice.name)"
+                    self.statusMessage = self.setupState == .hostingPairing
+                        ? "Visible to nearby devices as \(self.localDevice.name)"
                         : "Searching the local network"
                 case let .waiting(message):
-                    statusMessage = "Waiting for local network access: \(message)"
+                    self.statusMessage = "Waiting for local network access: \(message)"
                 case let .failed(message):
-                    lastError = "Local network discovery failed: \(message)"
-                    setupState = workspace == nil ? .needsWorkspace : .ready
+                    self.lastError = "Local network discovery failed: \(message)"
+                    self.setupState = self.workspace == nil ? .needsWorkspace : .ready
                 }
             }
         }
@@ -725,6 +726,7 @@ final class AppModel: ObservableObject {
                 entryEdge: transition.entryEdge,
                 normalizedPosition: transition.normalizedPosition,
                 targetCapabilities: capabilities(of: transition.targetDeviceID),
+                targetPlatform: platform(of: transition.targetDeviceID),
                 requiresActivationConfirmation: true,
                 initialEvent: pending.initialEvent,
                 pendingEvents: pending.stream
@@ -931,6 +933,16 @@ final class AppModel: ObservableObject {
             )
         case let .heartbeat(sessionID, timestampNanos):
             if await coordinator?.receiveHeartbeat(sessionID: sessionID, from: source) == true {
+                if capabilities(of: source).contains(.realtimePointerProgressV1),
+                   let progress = await coordinator?.realtimePointerProgress(
+                       sessionID: sessionID,
+                       from: source
+                   ) {
+                    try? await transport.send(
+                        ControlEnvelope(message: .realtimePointerProgress(progress)),
+                        to: source
+                    )
+                }
                 try? await transport.send(
                     ControlEnvelope(message: .heartbeat(
                         sessionID: sessionID,
@@ -955,6 +967,8 @@ final class AppModel: ObservableObject {
                     statusMessage = "Slow \(transportKind.rawValue.uppercased()) connection to \(deviceName(source))"
                 }
             }
+        case let .realtimePointerProgress(progress):
+            _ = await coordinator?.receiveRealtimePointerProgress(progress, from: source)
         case let .rotateWorkspaceKey(newKey):
             guard let workspace else { return }
             do {
@@ -1006,6 +1020,7 @@ final class AppModel: ObservableObject {
                 entryEdge: destination.edge,
                 normalizedPosition: normalizedPosition,
                 targetCapabilities: capabilities(of: targetDisplay.deviceID),
+                targetPlatform: platform(of: targetDisplay.deviceID),
                 requiresActivationConfirmation: true,
                 pendingEvents: pair.stream
             )
@@ -1057,6 +1072,10 @@ final class AppModel: ObservableObject {
 
     private func capabilities(of id: DeviceID) -> Set<DeviceCapability> {
         workspace?.devices.first(where: { $0.id == id })?.capabilities ?? []
+    }
+
+    private func platform(of id: DeviceID) -> DevicePlatform {
+        workspace?.devices.first(where: { $0.id == id })?.platform ?? .unknown
     }
 
     private var routableDeviceIDs: Set<DeviceID> {

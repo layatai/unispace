@@ -323,6 +323,10 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
         }
     }
 
+    public func reconnectRealtime(to deviceID: DeviceID) {
+        lock.withLock { authenticatedPointerTransport }?.reconnect(to: deviceID)
+    }
+
     public func send(_ envelope: ControlEnvelope, to deviceID: DeviceID) async throws {
         let data = try isWindowsPeer(deviceID)
             ? WireFrameCodec.encodePortableControl(envelope)
@@ -350,16 +354,12 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
             return true
         }
         if isWindowsPeer(deviceID) {
-            let portable = PortableInputMapper.map(frame)
-            try await send(data: WireFrameCodec.encodePortableRealtimePointer(portable), to: deviceID)
             return false
         }
         guard let realtime = lock.withLock({ realtimeTransport }) else {
-            try await send(frame.reliableFallback, to: deviceID)
             return false
         }
         if try await realtime.send(frame, to: deviceID) { return true }
-        try await send(frame.reliableFallback, to: deviceID)
         return false
     }
 

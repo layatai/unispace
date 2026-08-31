@@ -127,8 +127,29 @@ final class AuthenticatedPointerTransport: @unchecked Sendable {
 
     func send(_ frame: PortableRealtimePointerFrame, to deviceID: DeviceID) async throws -> Bool {
         guard let connection = lock.withLock({ connections[deviceID] }) else { return false }
-        try await connection.send(WireFrameCodec.encodePortableRealtimePointer(frame))
+        let payload = try WireFrameCodec.encodePortableRealtimePointer(frame)
+        connection.send(payload) { [weak connection] error in
+            if error != nil { connection?.cancel() }
+        }
         return true
+    }
+
+    func reconnect(to deviceID: DeviceID) {
+        queue.async { [weak self] in
+            guard let self else { return }
+            let cancelled = self.lock.withLock { () -> [SecurePeerConnection] in
+                guard self.running, self.desiredPeerID == deviceID,
+                      self.shouldDialDesiredPeer else { return [] }
+                self.retryTokens.removeValue(forKey: deviceID)
+                self.retries[deviceID] = 0
+                let pending = self.pending.filter { $0.value.expectedDeviceID == deviceID }
+                for (objectID, _) in pending { self.pending.removeValue(forKey: objectID) }
+                let active = self.connections.removeValue(forKey: deviceID)
+                return pending.map(\.value) + [active].compactMap { $0 }
+            }
+            cancelled.forEach { $0.cancel() }
+            self.scheduleDirectConnection(to: deviceID, immediately: true)
+        }
     }
 
     private func accept(_ connection: NWConnection) {
