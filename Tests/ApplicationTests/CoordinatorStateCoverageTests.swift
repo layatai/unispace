@@ -183,6 +183,7 @@ final class CoordinatorStateCoverageTests: XCTestCase {
         )
 
         let usedRealtime = try await transport.sendRealtime(frame, to: targetID)
+        transport.reconnectRealtime(to: targetID)
 
         XCTAssertFalse(usedRealtime)
         XCTAssertTrue(transport.frames.isEmpty)

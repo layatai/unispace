@@ -791,6 +791,117 @@ final class ApplicationTests: XCTestCase {
         await coordinator.stop()
     }
 
+    func testLegacyRealtimeFailureFallsBackToReliablePointer() async throws {
+        let local = DeviceID()
+        let remote = DeviceID()
+        let transport = TransportSpy(
+            useRealtime: true,
+            realtimeSendError: SpyError.failure
+        )
+        let coordinator = ControlSessionCoordinator(
+            localDeviceID: local,
+            workspaceID: WorkspaceID(),
+            capture: CaptureSpy(),
+            injector: InjectorSpy(),
+            transport: transport
+        )
+        _ = await coordinator.makeLocalController()
+        try await coordinator.activate(
+            target: remote,
+            displayID: DisplayID(),
+            entryEdge: .left,
+            normalizedPosition: 0.5,
+            targetPlatform: .windows
+        )
+
+        _ = await coordinator.handleCaptured(.pointerMove(
+            deltaX: 2,
+            deltaY: 1,
+            absoluteX: 12,
+            absoluteY: 11
+        ))
+        await coordinator.flushPendingInput()
+
+        XCTAssertEqual(transport.frames.map(\.event), [
+            .pointerMove(deltaX: 2, deltaY: 1, absoluteX: 12, absoluteY: 11)
+        ])
+        XCTAssertTrue(transport.realtimeReconnects.isEmpty)
+        guard case .controlling = await coordinator.currentState() else {
+            return XCTFail("Reliable fallback must keep the legacy session active")
+        }
+        await coordinator.stop()
+    }
+
+    func testProgressLaneSendFailuresKeepReliableDeliveryAndReconnect() async throws {
+        let local = DeviceID()
+        let remote = DeviceID()
+        let transport = TransportSpy(
+            useRealtime: true,
+            realtimeSendError: SpyError.failure
+        )
+        let coordinator = ControlSessionCoordinator(
+            localDeviceID: local,
+            workspaceID: WorkspaceID(),
+            capture: CaptureSpy(),
+            injector: InjectorSpy(),
+            transport: transport
+        )
+        _ = await coordinator.makeLocalController()
+        try await coordinator.activate(
+            target: remote,
+            displayID: DisplayID(),
+            entryEdge: .left,
+            normalizedPosition: 0.5,
+            targetCapabilities: [.realtimePointerProgressV1],
+            targetPlatform: .macOS
+        )
+
+        _ = await coordinator.handleCaptured(.pointerMove(
+            deltaX: 1,
+            deltaY: 0,
+            absoluteX: 11,
+            absoluteY: 10
+        ))
+        await coordinator.flushPendingInput()
+        XCTAssertEqual(transport.frames.count, 1)
+        XCTAssertTrue(transport.realtimeFrames.isEmpty)
+
+        transport.setRealtimeSendError(nil)
+        _ = await coordinator.handleCaptured(.pointerMove(
+            deltaX: 2,
+            deltaY: 0,
+            absoluteX: 13,
+            absoluteY: 10
+        ))
+        await coordinator.flushPendingInput()
+        let probe = try XCTUnwrap(transport.realtimeFrames.last)
+        let acknowledged = await coordinator.receiveRealtimePointerProgress(
+            .init(
+                sessionID: probe.sessionID,
+                generation: probe.generation,
+                sequence: probe.sequence
+            ),
+            from: remote
+        )
+        XCTAssertTrue(acknowledged)
+
+        transport.setRealtimeSendError(SpyError.failure)
+        _ = await coordinator.handleCaptured(.pointerMove(
+            deltaX: 3,
+            deltaY: 0,
+            absoluteX: 16,
+            absoluteY: 10
+        ))
+        await coordinator.flushPendingInput()
+
+        XCTAssertEqual(transport.frames.count, 3)
+        XCTAssertEqual(transport.realtimeReconnects, [remote])
+        guard case .controlling = await coordinator.currentState() else {
+            return XCTFail("Reliable fallback must keep the progress session active")
+        }
+        await coordinator.stop()
+    }
+
     func testAcknowledgedPointerLaneFallsBackAndReconnectsWhenProgressStops() async throws {
         let local = DeviceID()
         let remote = DeviceID()
@@ -1709,6 +1820,7 @@ private final class TransportSpy: PeerTransport, @unchecked Sendable {
     private let lock = NSLock()
     private let frameSendError: Error?
     private var realtimeEnabled: Bool
+    private var realtimeSendError: Error?
     private let frameSendClock: ManualMonotonicClock?
     private var storedFrames: [InputFrame] = []
     private var storedRealtimeFrames: [RealtimePointerFrame] = []
@@ -1725,10 +1837,12 @@ private final class TransportSpy: PeerTransport, @unchecked Sendable {
     init(
         frameSendError: Error? = nil,
         useRealtime: Bool = false,
+        realtimeSendError: Error? = nil,
         frameSendClock: ManualMonotonicClock? = nil
     ) {
         self.frameSendError = frameSendError
         self.realtimeEnabled = useRealtime
+        self.realtimeSendError = realtimeSendError
         self.frameSendClock = frameSendClock
     }
     func start(localDevice: DeviceDescriptor, workspace: WorkspaceSnapshot, key: Data) async throws {}
@@ -1746,6 +1860,9 @@ private final class TransportSpy: PeerTransport, @unchecked Sendable {
     func setRealtimeEnabled(_ enabled: Bool) {
         lock.withLock { realtimeEnabled = enabled }
     }
+    func setRealtimeSendError(_ error: Error?) {
+        lock.withLock { realtimeSendError = error }
+    }
     func events() -> AsyncStream<PeerEvent> { stream }
     func send(_ envelope: ControlEnvelope, to deviceID: DeviceID) async throws {
         lock.withLock { storedControlMessages.append(envelope.message) }
@@ -1756,6 +1873,7 @@ private final class TransportSpy: PeerTransport, @unchecked Sendable {
         lock.withLock { storedFrames.append(frame) }
     }
     func sendRealtime(_ frame: RealtimePointerFrame, to deviceID: DeviceID) async throws -> Bool {
+        if let error = lock.withLock({ realtimeSendError }) { throw error }
         if lock.withLock({ realtimeEnabled }) {
             lock.withLock { storedRealtimeFrames.append(frame) }
             return true
