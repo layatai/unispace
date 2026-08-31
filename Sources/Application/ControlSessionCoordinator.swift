@@ -491,7 +491,7 @@ public actor ControlSessionCoordinator {
 
     /// Waits until input already accepted by the coordinator has reached the
     /// transport. This is primarily useful at explicit session boundaries.
-    func flushPendingInput() async {
+    public func flushPendingInput() async {
         await flushPendingMotion()
         await inputSender.drain()
     }
