@@ -1,0 +1,55 @@
+name: Finder File Continuity
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+
+permissions:
+  contents: read
+
+jobs:
+  unit-tests:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate project
+        run: ./Scripts/bootstrap.sh
+
+      - name: Upload generated Xcode project
+        uses: actions/upload-artifact@v4
+        with:
+          name: generated-xcode-project
+          path: UniSpace.xcodeproj/project.pbxproj
+          if-no-files-found: error
+
+      - name: Verify generated project is checked in
+        run: git diff --exit-code -- UniSpace.xcodeproj/project.pbxproj
+
+      - name: Run unit and Finder continuity tests
+        run: |
+          set -o pipefail
+          rm -rf .build/test-results/FinderFileContinuity.xcresult
+          xcodebuild test \
+            -project UniSpace.xcodeproj \
+            -scheme UniSpace \
+            -destination 'platform=macOS' \
+            -skip-testing:UniSpaceUITests \
+            -enableCodeCoverage YES \
+            -resultBundlePath .build/test-results/FinderFileContinuity.xcresult \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Upload result bundle
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: finder-file-continuity-xcresult
+          path: .build/test-results/FinderFileContinuity.xcresult
+          if-no-files-found: ignore
