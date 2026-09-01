@@ -1640,6 +1640,16 @@ final class ApplicationTests: XCTestCase {
             )
         }
         let sessionID = try await activationSessionID(in: transport)
+        for _ in 0..<500 where !transport.controlMessages.contains(where: {
+            guard case let .heartbeat(heartbeatSessionID, _) = $0 else { return false }
+            return heartbeatSessionID == sessionID
+        }) {
+            await Task.yield()
+        }
+        XCTAssertTrue(transport.controlMessages.contains(where: {
+            guard case let .heartbeat(heartbeatSessionID, _) = $0 else { return false }
+            return heartbeatSessionID == sessionID
+        }), "Acknowledged activation must start heartbeat liveness before confirmation")
 
         pending.continuation.yield(.key(code: 12, isDown: true, isRepeat: false))
         pending.continuation.finish()

@@ -232,10 +232,8 @@ public actor ControlSessionCoordinator {
                 }
             }
             if let activationResults {
-                if !supportsExplicitAcknowledgement {
-                    await sendHeartbeat(target: target, sessionID: sessionID)
-                    startHeartbeat(target: target, sessionID: sessionID)
-                }
+                await sendHeartbeat(target: target, sessionID: sessionID)
+                startHeartbeat(target: target, sessionID: sessionID)
                 switch await firstActivationOutcome(from: activationResults) {
                 case .accepted:
                     break
@@ -243,9 +241,6 @@ public actor ControlSessionCoordinator {
                     throw ActivationError.rejected
                 case .timedOut:
                     throw ActivationError.timedOut
-                }
-                if supportsExplicitAcknowledgement {
-                    startHeartbeat(target: target, sessionID: sessionID)
                 }
             } else {
                 startHeartbeat(target: target, sessionID: sessionID)
