@@ -153,7 +153,7 @@ actor SimulationNodeRuntime {
                 if case let .realtimeInput(_, frame) = event {
                     metrics.recordWire(timestampNanos: frame.timestampNanos, isPointer: true)
                 }
-                _ = await RemoteInputEventRouter.route(event, to: coordinator)
+                _ = RemoteInputEventRouter.routeRealtime(event, to: coordinator)
             }
         }
         try await transport.start(localDevice: local, workspace: workspace, key: key)

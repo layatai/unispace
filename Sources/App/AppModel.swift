@@ -614,7 +614,7 @@ final class AppModel: ObservableObject {
             ) { [coordinator, transport] in
                 for await event in transport.realtimeInputEvents() {
                     if Task.isCancelled { break }
-                    _ = await RemoteInputEventRouter.route(event, to: coordinator)
+                    _ = RemoteInputEventRouter.routeRealtime(event, to: coordinator)
                 }
             }
             sessionTask = Task { [weak self, coordinator] in

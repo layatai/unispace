@@ -635,7 +635,7 @@ final class ApplicationTests: XCTestCase {
             .input(remote, reliable),
             to: coordinator
         )
-        let routedRealtime = await RemoteInputEventRouter.route(
+        let routedRealtime = RemoteInputEventRouter.routeRealtime(
             .realtimeInput(remote, realtime),
             to: coordinator
         )
