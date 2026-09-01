@@ -15,6 +15,6 @@ xcodebuild build \
   CODE_SIGNING_ALLOWED=NO >/dev/null
 
 if [[ $# -eq 0 ]]; then
-  set -- run-two --json
+  set -- run-two
 fi
 exec "$build_root/Build/Products/$configuration/UniSpaceSimulation" "$@"

@@ -117,6 +117,24 @@ presence of an authenticated connection object.
   the session and releases local input suppression.
 - Older macOS peers without progress acknowledgements use reliable pointer
   delivery. Windows keeps the existing Macifier-compatible UDP behavior.
+- Motion batching is deadline-aware: a late 16 ms flush task is bypassed by the
+  next captured event, which immediately sends the latest coalesced position.
+  This removes the sender-side 75 ms stalls observed under concurrent load
+  without increasing the batching budget or weakening the latency gate.
+- Realtime pointer input has its own transport stream and is routed on a
+  dedicated user-interactive task directly to the control coordinator. It no
+  longer passes through `AppModel` or waits on the Main Actor behind heartbeat,
+  Continuity, and file-transfer UI updates.
+- A lock-protected realtime receiver now performs session validation, replay
+  rejection, cumulative-delta recovery, and injection synchronously. There is
+  no actor yield between wire receipt and visible pointer injection.
+- Once activation and pointer progress are confirmed, a lock-protected sender
+  enqueues authenticated UDP motion directly from the capture callback. It
+  disables itself for dragging, stale acknowledgements, send failure, fallback,
+  and session reset; those cases retain the reliable coordinator path.
+- Active control sessions hold a scoped latency-critical `ProcessInfo`
+  activity, released at idle, to reduce process and timer throttling while
+  remote control is in use.
 - The unrelated Swift explicit-`self` CI failure in `AppModel` is fixed without
   changing pairing behavior.
 

@@ -57,7 +57,7 @@ enum UniSpaceSimulationMain {
 
     private static let usage = """
     Usage:
-      UniSpaceSimulation run-two [--samples 500] [--json] [--keep-artifacts <directory>]
+      UniSpaceSimulation run-two [--samples 500] [--keep-artifacts <directory>]
       UniSpaceSimulation shell [--keep-artifacts <directory>]
     """
 }

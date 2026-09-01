@@ -2,7 +2,6 @@ import Foundation
 
 struct SimulationPorts: Codable, Sendable {
     let control: UInt16
-    let quic: UInt16
     let realtime: UInt16
     let files: UInt16
     let clipboard: UInt16

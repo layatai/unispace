@@ -12,11 +12,8 @@ final class SimulationProcessClient: @unchecked Sendable {
     private var stderrData = Data()
 
     let name: String
-    let configurationURL: URL
-
     init(name: String, executableURL: URL, configurationURL: URL) {
         self.name = name
-        self.configurationURL = configurationURL
         process.executableURL = executableURL
         process.arguments = ["node", "--config", configurationURL.path]
         process.standardInput = input
@@ -25,8 +22,6 @@ final class SimulationProcessClient: @unchecked Sendable {
     }
 
     var processIdentifier: Int32 { process.processIdentifier }
-    var isRunning: Bool { process.isRunning }
-
     func start() throws {
         output.fileHandleForReading.readabilityHandler = { [weak self] handle in
             self?.receive(handle.availableData)
@@ -145,14 +140,6 @@ final class SimulationProcessClient: @unchecked Sendable {
             String(data: stderrData, encoding: .utf8) ?? ""
         }
         return SimulationFailure("\(prefix ?? "\(name) exited unexpectedly"). \(stderr)")
-    }
-
-    private func closePipes() {
-        output.fileHandleForReading.readabilityHandler = nil
-        error.fileHandleForReading.readabilityHandler = nil
-        try? input.fileHandleForWriting.close()
-        try? output.fileHandleForReading.close()
-        try? error.fileHandleForReading.close()
     }
 
     private func waitForExit(timeout: TimeInterval) {
@@ -602,7 +589,6 @@ final class SimulationOrchestrator {
         }
         return try SimulationPorts(
             control: next(socketType: SOCK_STREAM),
-            quic: next(socketType: SOCK_DGRAM),
             realtime: next(socketType: SOCK_DGRAM),
             files: next(socketType: SOCK_STREAM),
             clipboard: next(socketType: SOCK_STREAM)
@@ -610,7 +596,7 @@ final class SimulationOrchestrator {
     }
 
     private static func portValues(_ ports: SimulationPorts) -> [UInt16] {
-        [ports.control, ports.quic, ports.realtime, ports.files, ports.clipboard]
+        [ports.control, ports.realtime, ports.files, ports.clipboard]
     }
 
     private static func availablePort(socketType: Int32) throws -> UInt16 {

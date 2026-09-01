@@ -46,8 +46,10 @@ final class AppModel: ObservableObject {
     private let pairing = PairingNetworkService()
     private let capture = CGEventInputCapture()
     private let injector = CGEventInputInjector()
+    private let controlLatencyActivity = ControlLatencyActivity()
     private var coordinator: ControlSessionCoordinator?
     private var networkTask: Task<Void, Never>?
+    private var realtimeInputTask: Task<Void, Never>?
     private var sessionTask: Task<Void, Never>?
     private var networkRestartTask: Task<Void, Never>?
     private var screenChangeSubscription: AnyCancellable?
@@ -125,6 +127,7 @@ final class AppModel: ObservableObject {
 
     deinit {
         networkTask?.cancel()
+        realtimeInputTask?.cancel()
         sessionTask?.cancel()
         networkRestartTask?.cancel()
     }
@@ -268,6 +271,9 @@ final class AppModel: ObservableObject {
         candidates = []
         networkTask?.cancel()
         networkTask = nil
+        realtimeInputTask?.cancel()
+        realtimeInputTask = nil
+        controlLatencyActivity.stop()
         sessionTask?.cancel()
         sessionTask = nil
         finishPendingActivationInput()
@@ -556,6 +562,9 @@ final class AppModel: ObservableObject {
             guard let keyring = try trustStore.workspaceKeyring(for: workspace.id) else { return }
             networkTask?.cancel()
             networkTask = nil
+            realtimeInputTask?.cancel()
+            realtimeInputTask = nil
+            controlLatencyActivity.stop()
             sessionTask?.cancel()
             sessionTask = nil
             await coordinator?.stop()
@@ -593,11 +602,21 @@ final class AppModel: ObservableObject {
             self.coordinator = coordinator
             applyPeerConnectionPolicy()
             startCaptureIfPossible()
-            networkTask = Task { [weak self] in
+            networkTask = Task { [weak self, transport] in
                 guard let self else { return }
                 for await event in transport.events() {
                     if Task.isCancelled { break }
                     await self.handlePeerEvent(event)
+                }
+            }
+            realtimeInputTask = Task.detached(
+                priority: realtimeInputTaskPriority
+            ) { [coordinator, transport] in
+                for await event in transport.realtimeInputEvents() {
+                    if Task.isCancelled { break }
+                    if case let .realtimeInput(source, frame) = event {
+                        coordinator.handleIncomingRealtime(frame, from: source)
+                    }
                 }
             }
             sessionTask = Task { [weak self, coordinator] in
@@ -606,6 +625,11 @@ final class AppModel: ObservableObject {
                     if self.controlSessionSnapshot != snapshot {
                         let previous = self.controlSessionSnapshot
                         self.controlSessionSnapshot = snapshot
+                        if snapshot.phase == .idle {
+                            self.controlLatencyActivity.stop()
+                        } else {
+                            self.controlLatencyActivity.start()
+                        }
                         if snapshot.phase == .idle, previous.phase != .idle {
                             self.finishPendingActivationInput()
                             if previous.phase == .receiving {
@@ -650,7 +674,9 @@ final class AppModel: ObservableObject {
         do {
             try capture.start { [weak self] event in
                 guard Thread.isMainThread else {
-                    Task { @MainActor [weak self] in self?.captureSynchronously(event) }
+                    Task(priority: realtimeInputTaskPriority) { @MainActor [weak self] in
+                        self?.captureSynchronously(event)
+                    }
                     return false
                 }
                 return MainActor.assumeIsolated {
@@ -698,14 +724,23 @@ final class AppModel: ObservableObject {
                     continuation: pair.continuation
                 )
                 capture.setSuppressionEnabled(true)
-                Task { @MainActor [weak self] in
+                Task(priority: realtimeInputTaskPriority) { @MainActor [weak self] in
                     await self?.completeActivation(transition, attempt: attempt)
                 }
                 return true
             }
         }
         guard controlTransferGuard.forwardsCapturedInput else { return false }
-        Task { @MainActor [weak self] in await self?.forwardCaptured(event) }
+        if case .pointerMove = event,
+           coordinator?.sendCapturedPointerImmediately(event) == true {
+            return false
+        }
+        if case .mouseButton = event {
+            coordinator?.suspendCapturedPointerFastPath()
+        }
+        Task(priority: realtimeInputTaskPriority) { @MainActor [weak self] in
+            await self?.forwardCaptured(event)
+        }
         return false
     }
 
@@ -748,6 +783,7 @@ final class AppModel: ObservableObject {
                 capture.setSuppressionEnabled(false)
                 return
             }
+            finishPendingActivationInput()
             statusMessage = "Controlling \(deviceName(transition.targetDeviceID))"
         } catch {
             controlTransferGuard.activationFailed(attempt)
@@ -843,8 +879,8 @@ final class AppModel: ObservableObject {
             await handleControl(envelope.message, from: source)
         case let .input(source, frame):
             await coordinator?.handleIncoming(frame, from: source)
-        case let .realtimeInput(source, frame):
-            await coordinator?.handleIncomingRealtime(frame, from: source)
+        case .realtimeInput:
+            break
         case let .health(deviceID, snapshot):
             if let deviceID { connectionSnapshots[deviceID] = snapshot }
             guard let deviceID, snapshot.health == .degraded,

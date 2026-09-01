@@ -19,7 +19,9 @@ actor SimulationNodeRuntime {
     private let metrics: SimulationMetricsRecorder
     private let injector: SimulationInputInjector
     private let emitter: SimulationLineEmitter
+    private let controlLatencyActivity = ControlLatencyActivity()
     private var peerEventsTask: Task<Void, Never>?
+    private var realtimeInputTask: Task<Void, Never>?
     private var clipboardChurnTask: Task<Void, Never>?
     private var controlConnected = false
     private var stopping = false
@@ -34,8 +36,6 @@ actor SimulationNodeRuntime {
 
         guard let controlPort = NWEndpoint.Port(rawValue: configuration.ports.control),
               let directControlPort = NWEndpoint.Port(rawValue: configuration.peerPorts.control),
-              let quicPort = NWEndpoint.Port(rawValue: configuration.ports.quic),
-              let directQUICPort = NWEndpoint.Port(rawValue: configuration.peerPorts.quic),
               let realtimePort = NWEndpoint.Port(rawValue: configuration.ports.realtime),
               let directRealtimePort = NWEndpoint.Port(rawValue: configuration.peerPorts.realtime),
               let filePort = NWEndpoint.Port(rawValue: configuration.ports.files),
@@ -48,8 +48,6 @@ actor SimulationNodeRuntime {
         transport = NetworkPeerTransport(
             listenPort: controlPort,
             directPort: directControlPort,
-            quicListenPort: quicPort,
-            directQUICPort: directQUICPort,
             realtimeListenPort: realtimePort,
             directRealtimePort: directRealtimePort,
             pointerListenPort: realtimePort,
@@ -133,11 +131,25 @@ actor SimulationNodeRuntime {
         }
         let workspace = makeWorkspace()
         let local = try localDevice()
+        controlLatencyActivity.start()
 
         peerEventsTask = Task(priority: .high) { [weak self, transport] in
             for await event in transport.events() {
                 guard !Task.isCancelled else { return }
                 await self?.handlePeerEvent(event)
+            }
+        }
+        let coordinator = self.coordinator
+        let metrics = self.metrics
+        realtimeInputTask = Task.detached(
+            priority: realtimeInputTaskPriority
+        ) { [transport, coordinator, metrics] in
+            for await event in transport.realtimeInputEvents() {
+                guard !Task.isCancelled else { return }
+                if case let .realtimeInput(source, frame) = event {
+                    metrics.recordWire(timestampNanos: frame.timestampNanos, isPointer: true)
+                    coordinator.handleIncomingRealtime(frame, from: source)
+                }
             }
         }
         try await transport.start(localDevice: local, workspace: workspace, key: key)
@@ -231,12 +243,15 @@ actor SimulationNodeRuntime {
             emitter.send(.event("moveBatchStarted", values: ["count": String(count)]))
             for index in 0..<count {
                 let capturedAt = DispatchTime.now().uptimeNanoseconds
-                _ = await coordinator.handleCaptured(.pointerMove(
+                let event = InputEvent.pointerMove(
                     deltaX: 1,
                     deltaY: index.isMultiple(of: 2) ? 1 : -1,
                     absoluteX: Double(index),
                     absoluteY: Double(capturedAt)
-                ))
+                )
+                if !coordinator.sendCapturedPointerImmediately(event) {
+                    _ = await coordinator.handleCaptured(event)
+                }
                 if index > 0, index.isMultiple(of: 100) {
                     emitter.send(.event("moveBatchProgress", values: ["captured": String(index)]))
                 }
@@ -321,12 +336,11 @@ actor SimulationNodeRuntime {
         case let .input(source, frame):
             metrics.recordWire(
                 timestampNanos: frame.timestampNanos,
-                isPointer: isPointer(frame.event)
+                isPointer: Self.isPointer(frame.event)
             )
             await coordinator.handleIncoming(frame, from: source)
-        case let .realtimeInput(source, frame):
-            metrics.recordWire(timestampNanos: frame.timestampNanos, isPointer: true)
-            await coordinator.handleIncomingRealtime(frame, from: source)
+        case .realtimeInput:
+            break
         case .discovered, .lost, .workspaceUpgradeRequired, .health, .failure:
             break
         }
@@ -407,11 +421,13 @@ actor SimulationNodeRuntime {
         stopping = true
         clipboardChurnTask?.cancel()
         peerEventsTask?.cancel()
+        realtimeInputTask?.cancel()
         await clipboardCoordinator.stop()
         await fileCoordinator.stop()
         await coordinator.stop()
         await transport.stop()
         await pasteboard.release()
+        controlLatencyActivity.stop()
     }
 
     private func waitForListeners() async throws {
@@ -476,7 +492,7 @@ actor SimulationNodeRuntime {
         )
     }
 
-    private func isPointer(_ event: InputEvent) -> Bool {
+    private nonisolated static func isPointer(_ event: InputEvent) -> Bool {
         if case .pointerMove = event { return true }
         return false
     }
@@ -521,7 +537,7 @@ func runSimulationNode(configurationURL: URL) async throws {
         guard let data = line.data(using: .utf8) else { continue }
         do {
             let command = try SimulationJSON.decoder.decode(SimulationCommand.self, from: data)
-            let shouldContinue = await Task.detached(priority: .high) {
+            let shouldContinue = await Task.detached(priority: realtimeInputTaskPriority) {
                 await runtime.handle(command)
             }.value
             if !shouldContinue { break }

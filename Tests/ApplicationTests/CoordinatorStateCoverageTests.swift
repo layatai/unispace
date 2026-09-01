@@ -533,6 +533,10 @@ final class ManualMonotonicClock: MonotonicClock, @unchecked Sendable {
         due.forEach { $0.resume() }
     }
 
+    func advanceWithoutWakingSleepers(by nanoseconds: UInt64) {
+        lock.withLock { value &+= nanoseconds }
+    }
+
     private static func nanoseconds(_ duration: Duration) -> UInt64 {
         let components = duration.components
         let seconds = UInt64(max(components.seconds, 0))
