@@ -117,6 +117,10 @@ presence of an authenticated connection object.
   the session and releases local input suppression.
 - Older macOS peers without progress acknowledgements use reliable pointer
   delivery. Windows keeps the existing Macifier-compatible UDP behavior.
+- Motion batching is deadline-aware: a late 16 ms flush task is bypassed by the
+  next captured event, which immediately sends the latest coalesced position.
+  This removes the sender-side 75 ms stalls observed under concurrent load
+  without increasing the batching budget or weakening the latency gate.
 - The unrelated Swift explicit-`self` CI failure in `AppModel` is fixed without
   changing pairing behavior.
 

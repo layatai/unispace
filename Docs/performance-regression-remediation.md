@@ -67,6 +67,14 @@ Activation input uses a bounded stream. The activation envelope is written
 before buffered input is drained, so confirmation does not create per-event
 main-actor tasks or allow input to overtake activation.
 
+Pointer motion keeps the 16 ms coalescing budget, but the budget is no longer
+enforced only by a sleeping task. Every captured motion event also checks the
+monotonic deadline and flushes accumulated motion immediately when the
+scheduled task is late. The scheduled task runs at high priority and no longer
+cancels itself before sending. This preserves backpressure while preventing
+continuity or process scheduling load from stretching one frame into a visible
+multi-frame stall.
+
 ## Event-driven continuity
 
 Clipboard and file-transfer view models subscribe to immutable application
@@ -105,6 +113,8 @@ Send Files action; it does not gate target selection or channel bootstrap.
 - Identical context produces no Keychain read, QoS update, or UI publication.
 - Delayed activation preserves activation-before-input ordering with bounded
   buffering, no heartbeat loss, and no pointer stall above 50 ms.
+- A delayed pointer-flush task cannot extend the 16 ms batching deadline; the
+  next captured event must flush the latest coalesced position immediately.
 - Existing unit, coverage, UI, native-input, and Windows CI gates remain intact.
 - The 500-sample two-process latency scenario runs as a standalone,
   non-instrumented performance gate after coverage tests; profiler overhead is

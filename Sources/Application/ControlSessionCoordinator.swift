@@ -66,6 +66,7 @@ public actor ControlSessionCoordinator {
     public static let realtimeProbeIntervalNanos: UInt64 = 250_000_000
     public static let realtimeHeartbeatInterval: Duration = .milliseconds(250)
     public static let reliablePointerTimeout: Duration = .milliseconds(750)
+    public static let pointerFlushIntervalNanos: UInt64 = 16_000_000
 
     private let localDeviceID: DeviceID
     private let workspaceID: WorkspaceID
@@ -99,6 +100,7 @@ public actor ControlSessionCoordinator {
     private var pendingPointerEvent: InputEvent?
     private var pendingScrollEvent: InputEvent?
     private var pointerFlushTask: Task<Void, Never>?
+    private var lastMotionFlushNanos: UInt64?
     private var heartbeatTask: Task<Void, Never>?
     private var watchdogTask: Task<Void, Never>?
     private var lastHeartbeatNanos: UInt64 = 0
@@ -208,6 +210,7 @@ public actor ControlSessionCoordinator {
                 to: target
             )
             setState(.controlling(epoch: epoch, target: target, session: sessionID))
+            lastMotionFlushNanos = clock.nowNanoseconds()
             if let initialEvent {
                 _ = await handleCaptured(initialEvent)
             }
@@ -322,7 +325,7 @@ public actor ControlSessionCoordinator {
             } else {
                 pendingPointerEvent = event
             }
-            schedulePointerFlush()
+            await flushPendingMotionIfDue()
             return .forwarded
         }
         if case let .scroll(deltaX, deltaY, isContinuous) = event {
@@ -337,7 +340,7 @@ public actor ControlSessionCoordinator {
                 await flushPendingMotion()
                 pendingScrollEvent = event
             }
-            schedulePointerFlush()
+            await flushPendingMotionIfDue()
             return .forwarded
         }
         await flushPendingMotion()
@@ -509,6 +512,7 @@ public actor ControlSessionCoordinator {
         activationInputTask = nil
         pointerFlushTask?.cancel()
         pointerFlushTask = nil
+        lastMotionFlushNanos = nil
         pendingPointerEvent = nil
         pendingScrollEvent = nil
         heartbeatTask?.cancel()
@@ -638,22 +642,44 @@ public actor ControlSessionCoordinator {
         return (flags & emergencyFlags) == emergencyFlags
     }
 
-    private func schedulePointerFlush() {
+    private func flushPendingMotionIfDue() async {
+        let now = clock.nowNanoseconds()
+        guard let lastMotionFlushNanos,
+              now >= lastMotionFlushNanos,
+              now - lastMotionFlushNanos < Self.pointerFlushIntervalNanos else {
+            await flushPendingMotion()
+            return
+        }
+        schedulePointerFlush(after: Self.pointerFlushIntervalNanos - (now - lastMotionFlushNanos))
+    }
+
+    private func schedulePointerFlush(after delayNanoseconds: UInt64) {
         guard pointerFlushTask == nil else { return }
-        pointerFlushTask = Task { [weak self, clock] in
-            try? await clock.sleep(for: .milliseconds(16))
+        pointerFlushTask = Task(priority: .high) { [weak self, clock] in
+            try? await clock.sleep(for: .nanoseconds(Int64(delayNanoseconds)))
             guard !Task.isCancelled else { return }
-            await self?.flushPendingMotion()
+            await self?.scheduledPointerFlushFired()
         }
     }
 
     private func flushPendingMotion() async {
         pointerFlushTask?.cancel()
         pointerFlushTask = nil
+        await sendPendingMotion()
+    }
+
+    private func scheduledPointerFlushFired() async {
+        pointerFlushTask = nil
+        await sendPendingMotion()
+    }
+
+    private func sendPendingMotion() async {
         let pointer = pendingPointerEvent
         let scroll = pendingScrollEvent
         pendingPointerEvent = nil
         pendingScrollEvent = nil
+        guard pointer != nil || scroll != nil else { return }
+        lastMotionFlushNanos = clock.nowNanoseconds()
         if let pointer { await sendPointer(pointer) }
         if let scroll { await sendInput(scroll) }
     }

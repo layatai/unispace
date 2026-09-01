@@ -680,13 +680,15 @@ final class ApplicationTests: XCTestCase {
     func testCoordinatorCoalescesPointerMovesWithoutDroppingFinalPosition() async throws {
         let local = DeviceID()
         let remote = DeviceID()
+        let clock = ManualMonotonicClock()
         let transport = TransportSpy()
         let coordinator = ControlSessionCoordinator(
             localDeviceID: local,
             workspaceID: WorkspaceID(),
             capture: CaptureSpy(),
             injector: InjectorSpy(),
-            transport: transport
+            transport: transport,
+            clock: clock
         )
         _ = await coordinator.makeLocalController()
         try await coordinator.activate(
@@ -705,6 +707,52 @@ final class ApplicationTests: XCTestCase {
             transport.frames.first?.event,
             .pointerMove(deltaX: 4, deltaY: 6, absoluteX: 13, absoluteY: 24)
         )
+        await coordinator.stop()
+    }
+
+    func testCoordinatorFlushesMotionWhenScheduledFlushMissesItsDeadline() async throws {
+        let local = DeviceID()
+        let remote = DeviceID()
+        let clock = ManualMonotonicClock()
+        let transport = TransportSpy()
+        let coordinator = ControlSessionCoordinator(
+            localDeviceID: local,
+            workspaceID: WorkspaceID(),
+            capture: CaptureSpy(),
+            injector: InjectorSpy(),
+            transport: transport,
+            clock: clock
+        )
+        _ = await coordinator.makeLocalController()
+        try await coordinator.activate(
+            target: remote,
+            displayID: DisplayID(),
+            entryEdge: .left,
+            normalizedPosition: 0.5
+        )
+
+        _ = await coordinator.handleCaptured(.pointerMove(
+            deltaX: 1,
+            deltaY: 2,
+            absoluteX: 10,
+            absoluteY: 20
+        ))
+        XCTAssertTrue(transport.frames.isEmpty)
+
+        clock.advanceWithoutWakingSleepers(
+            by: ControlSessionCoordinator.pointerFlushIntervalNanos + 1
+        )
+        _ = await coordinator.handleCaptured(.pointerMove(
+            deltaX: 3,
+            deltaY: 4,
+            absoluteX: 13,
+            absoluteY: 24
+        ))
+        await coordinator.flushPendingInput()
+
+        XCTAssertEqual(transport.frames.map(\.event), [
+            .pointerMove(deltaX: 4, deltaY: 6, absoluteX: 13, absoluteY: 24)
+        ])
         await coordinator.stop()
     }
 
