@@ -1453,13 +1453,15 @@ final class ApplicationTests: XCTestCase {
         let capture = CaptureSpy()
         let clock = ManualMonotonicClock()
         let transport = TransportSpy(useRealtime: true, frameSendClock: clock)
+        let diagnostics = CallRecorder()
         let coordinator = ControlSessionCoordinator(
             localDeviceID: local,
             workspaceID: WorkspaceID(),
             capture: capture,
             injector: InjectorSpy(),
             transport: transport,
-            clock: clock
+            clock: clock,
+            diagnostic: diagnostics.append
         )
         _ = await coordinator.makeLocalController()
         try await coordinator.activate(
@@ -1511,6 +1513,11 @@ final class ApplicationTests: XCTestCase {
         XCTAssertEqual(transport.realtimeFrames.last?.deltaX, 3)
         XCTAssertEqual(transport.realtimeFrames.last?.deltaY, 1)
         await coordinator.stop()
+        XCTAssertTrue(diagnostics.values.contains { $0.contains("Activating session") })
+        XCTAssertTrue(diagnostics.values.contains { $0.contains("Realtime progress established") })
+        XCTAssertTrue(diagnostics.values.contains { $0.contains("Reliable pointer timed out") })
+        XCTAssertTrue(diagnostics.values.contains { $0.contains("Keeping session") })
+        XCTAssertTrue(diagnostics.values.contains { $0.contains("Ending session") })
     }
 
     func testActivationDoesNotDisablePrearmedInputSuppression() async throws {

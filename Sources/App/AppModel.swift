@@ -34,6 +34,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var inputMonitoringPermission: PermissionState = .unknown
     @Published private(set) var postEventsPermission: PermissionState = .unknown
     @Published private(set) var launchAtLogin = false
+    @Published private(set) var diagnosticLoggingEnabled = false
 
     private let workspaceStore = FileWorkspaceStore()
     private let trustStore = KeychainTrustStore()
@@ -42,6 +43,7 @@ final class AppModel: ObservableObject {
     private let displayCatalog = SystemDisplayCatalog()
     private let tailnetAddressProvider = SystemTailnetAddressProvider()
     private let loginItemController = SystemLoginItemController()
+    private let diagnosticLog = DiagnosticLog()
     private let transport = NetworkPeerTransport()
     private let pairing = PairingNetworkService()
     private let capture = CGEventInputCapture()
@@ -68,6 +70,7 @@ final class AppModel: ObservableObject {
         }
         refreshPermissions()
         launchAtLogin = loginItemController.isEnabled
+        diagnosticLoggingEnabled = diagnosticLog.isEnabled
         screenChangeSubscription = NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.refreshLocalDisplays() }
@@ -406,6 +409,13 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func setDiagnosticLogging(_ enabled: Bool) {
+        diagnosticLog.setEnabled(enabled)
+        diagnosticLoggingEnabled = diagnosticLog.isEnabled
+    }
+
+    var diagnosticLogURL: URL { diagnosticLog.fileURL }
+
     func connect(_ first: DisplayEndpoint, to second: DisplayEndpoint) {
         guard var workspace else { return }
         workspace.topology.connect(first, to: second)
@@ -597,7 +607,8 @@ final class AppModel: ObservableObject {
                 election: ControllerStateMachine(
                     currentEpoch: currentEpoch,
                     nextGeneration: workspace.generation + 1
-                )
+                ),
+                diagnostic: { [diagnosticLog] message in diagnosticLog.record(message) }
             )
             self.coordinator = coordinator
             applyPeerConnectionPolicy()
@@ -1031,6 +1042,9 @@ final class AppModel: ObservableObject {
         edge: DisplayEdge,
         normalizedPosition: Double
     ) async {
+        diagnosticLog.record(
+            "Boundary crossed from peer \(source); session=\(sessionID), display=\(displayID), edge=\(edge.rawValue)"
+        )
         guard isLocalController, let coordinator,
               case let .controlling(_, activeTarget, activeSession) = await coordinator.currentState(),
               activeTarget == source, activeSession == sessionID,

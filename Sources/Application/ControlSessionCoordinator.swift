@@ -75,6 +75,7 @@ public actor ControlSessionCoordinator {
     private let transport: PeerTransport
     private let inputSender: OrderedInputSender
     private let clock: MonotonicClock
+    private let diagnostic: @Sendable (String) -> Void
     private nonisolated let realtimeInputReceiver: RealtimeInputReceiver
     private nonisolated let realtimePointerCaptureSender: RealtimePointerCaptureSender
     private let activationTimeout: Duration
@@ -116,7 +117,8 @@ public actor ControlSessionCoordinator {
         transport: PeerTransport,
         clock: MonotonicClock = SystemMonotonicClock(),
         activationTimeout: Duration = .seconds(2),
-        election: ControllerStateMachine = .init()
+        election: ControllerStateMachine = .init(),
+        diagnostic: @escaping @Sendable (String) -> Void = { _ in }
     ) {
         precondition(activationTimeout > .zero)
         self.localDeviceID = localDeviceID
@@ -126,6 +128,7 @@ public actor ControlSessionCoordinator {
         self.transport = transport
         self.inputSender = OrderedInputSender(transport: transport, clock: clock)
         self.clock = clock
+        self.diagnostic = diagnostic
         self.realtimeInputReceiver = RealtimeInputReceiver(
             workspaceID: workspaceID,
             injector: injector
@@ -182,6 +185,7 @@ public actor ControlSessionCoordinator {
             await endCurrentSession(notifyPeer: true)
         }
         let sessionID = SessionID()
+        diagnostic("Activating session \(sessionID) for peer \(target); platform=\(targetPlatform.rawValue)")
         resetRealtimeSender(incrementGeneration: true)
         setState(.activating(epoch: epoch, target: target, session: sessionID))
         activeControlRoute = ActiveControlRoute(
@@ -216,6 +220,7 @@ public actor ControlSessionCoordinator {
                 to: target
             )
             setState(.controlling(epoch: epoch, target: target, session: sessionID))
+            diagnostic("Session \(sessionID) is controlling peer \(target); mode=\(realtimeDeliveryMode)")
             lastMotionFlushNanos = clock.nowNanoseconds()
             if let initialEvent {
                 _ = await handleCaptured(initialEvent)
@@ -255,6 +260,7 @@ public actor ControlSessionCoordinator {
                 )
             }
         } catch {
+            diagnostic("Activation failed for session \(sessionID): \(error.localizedDescription)")
             await endCurrentSession(notifyPeer: false)
             throw error
         }
@@ -266,11 +272,13 @@ public actor ControlSessionCoordinator {
         from source: DeviceID,
         accepted: Bool
     ) -> Bool {
-        finishPendingActivation(
+        let handled = finishPendingActivation(
             target: source,
             sessionID: sessionID,
             outcome: accepted ? .accepted : .rejected
         )
+        diagnostic("Activation result for session \(sessionID); accepted=\(accepted), handled=\(handled)")
+        return handled
     }
 
     public func receiveActivation(
@@ -401,6 +409,7 @@ public actor ControlSessionCoordinator {
             sample: now - sentAtNanos
         )
         publishSessionSnapshotIfChanged()
+        diagnostic("Heartbeat echo for session \(sessionID); latency=\(Int((smoothedRoundTripNanos ?? 0) / 1_000_000))ms")
         return Int((smoothedRoundTripNanos ?? 0) / 1_000_000)
     }
 
@@ -458,17 +467,25 @@ public actor ControlSessionCoordinator {
         _ progress: RealtimePointerProgress,
         from source: DeviceID
     ) -> Bool {
-        if realtimePointerCaptureSender.acknowledge(progress, from: source) { return true }
-        guard realtimeDeliveryMode != .healthy else { return false }
+        if realtimePointerCaptureSender.acknowledge(progress, from: source) {
+            diagnostic("Realtime progress accepted for session \(progress.sessionID); generation=\(progress.generation), sequence=\(progress.sequence)")
+            return true
+        }
+        guard realtimeDeliveryMode != .healthy else {
+            diagnostic("Realtime progress ignored for healthy session \(progress.sessionID); generation=\(progress.generation), sequence=\(progress.sequence)")
+            return false
+        }
         guard case let .controlling(epoch, target, sessionID) = state,
               source == target, progress.sessionID == sessionID,
               progress.generation == realtimeGeneration,
               let lastRealtimeSentSequence,
               progress.sequence <= lastRealtimeSentSequence else {
+            diagnostic("Realtime progress rejected for session \(progress.sessionID); generation=\(progress.generation), sequence=\(progress.sequence), expectedGeneration=\(realtimeGeneration)")
             return false
         }
         let acknowledgedAtNanos = clock.nowNanoseconds()
         realtimeDeliveryMode = .healthy
+        diagnostic("Realtime progress established for session \(progress.sessionID); generation=\(progress.generation), sequence=\(progress.sequence)")
         realtimePointerCaptureSender.enable(
             epoch: epoch,
             target: source,
@@ -515,6 +532,7 @@ public actor ControlSessionCoordinator {
 
     private func endCurrentSession(notifyPeer: Bool) async {
         let previous = state
+        diagnostic("Ending session; state=\(previous), notifyPeer=\(notifyPeer)")
         cancelPendingActivation()
         setState(.idle)
         activationInputTask?.cancel()
@@ -805,10 +823,14 @@ public actor ControlSessionCoordinator {
         await sendInput(event)
         let delivered = await inputSender.drainOrCancel(after: Self.reliablePointerTimeout)
         guard !delivered else { return }
+        diagnostic("Reliable pointer timed out for session \(sessionID); mode=\(realtimeDeliveryMode)")
         guard case let .controlling(_, currentTarget, currentSessionID) = state,
               currentTarget == target, currentSessionID == sessionID else { return }
         if realtimeDeliveryMode == .healthy,
-           realtimePointerCaptureSender.hasFreshAcknowledgement() { return }
+           realtimePointerCaptureSender.hasFreshAcknowledgement() {
+            diagnostic("Keeping session \(sessionID); realtime progress is fresh")
+            return
+        }
         await endCurrentSession(notifyPeer: false)
     }
 
@@ -819,6 +841,7 @@ public actor ControlSessionCoordinator {
         lastRealtimeSentSequence = nil
         lastRealtimeProbeNanos = nil
         realtimeDeliveryMode = .fallback
+        diagnostic("Realtime pointer entered fallback for peer \(target); generation=\(realtimeGeneration)")
         transport.reconnectRealtime(to: target)
     }
 
@@ -846,6 +869,7 @@ public actor ControlSessionCoordinator {
         let interval = activeControlRoute?.targetCapabilities.contains(.realtimePointerProgressV1) == true
             ? Self.realtimeHeartbeatInterval
             : .seconds(1)
+        diagnostic("Heartbeat started for session \(sessionID); interval=\(interval)")
         heartbeatTask = Task { [weak self, clock] in
             while !Task.isCancelled {
                 try? await clock.sleep(for: interval)
@@ -858,10 +882,14 @@ public actor ControlSessionCoordinator {
     private func sendHeartbeat(target: DeviceID, sessionID: SessionID) async {
         guard case let .controlling(_, expectedTarget, expectedSession) = state,
               target == expectedTarget, sessionID == expectedSession else { return }
-        try? await transport.send(
-            ControlEnvelope(message: .heartbeat(sessionID: sessionID, timestampNanos: clock.nowNanoseconds())),
-            to: target
-        )
+        do {
+            try await transport.send(
+                ControlEnvelope(message: .heartbeat(sessionID: sessionID, timestampNanos: clock.nowNanoseconds())),
+                to: target
+            )
+        } catch {
+            diagnostic("Heartbeat send failed for session \(sessionID): \(error.localizedDescription)")
+        }
     }
 
     private func startWatchdog(source: DeviceID, sessionID: SessionID) {
