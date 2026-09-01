@@ -46,6 +46,7 @@ final class AppModel: ObservableObject {
     private let pairing = PairingNetworkService()
     private let capture = CGEventInputCapture()
     private let injector = CGEventInputInjector()
+    private let controlLatencyActivity = ControlLatencyActivity()
     private var coordinator: ControlSessionCoordinator?
     private var networkTask: Task<Void, Never>?
     private var realtimeInputTask: Task<Void, Never>?
@@ -272,6 +273,7 @@ final class AppModel: ObservableObject {
         networkTask = nil
         realtimeInputTask?.cancel()
         realtimeInputTask = nil
+        controlLatencyActivity.stop()
         sessionTask?.cancel()
         sessionTask = nil
         finishPendingActivationInput()
@@ -562,6 +564,7 @@ final class AppModel: ObservableObject {
             networkTask = nil
             realtimeInputTask?.cancel()
             realtimeInputTask = nil
+            controlLatencyActivity.stop()
             sessionTask?.cancel()
             sessionTask = nil
             await coordinator?.stop()
@@ -620,6 +623,11 @@ final class AppModel: ObservableObject {
                     if self.controlSessionSnapshot != snapshot {
                         let previous = self.controlSessionSnapshot
                         self.controlSessionSnapshot = snapshot
+                        if snapshot.phase == .idle {
+                            self.controlLatencyActivity.stop()
+                        } else {
+                            self.controlLatencyActivity.start()
+                        }
                         if snapshot.phase == .idle, previous.phase != .idle {
                             self.finishPendingActivationInput()
                             if previous.phase == .receiving {

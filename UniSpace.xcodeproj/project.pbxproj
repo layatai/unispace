@@ -101,6 +101,7 @@
 		BB523A42FF9175B3778EBA47 /* UniSpaceSimulationMain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5768E62FE58993F35076DFA6 /* UniSpaceSimulationMain.swift */; };
 		BC04C884F04BC52D4BF3B9CB /* SimulationNode.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0AEF73B525A88842DE7C9086 /* SimulationNode.swift */; };
 		BF04F103BA0FD0FF02B87871 /* UniSpaceDomain.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D0CF733F292C646448A74827 /* UniSpaceDomain.framework */; };
+		BFF155EAE41364C2C215E0E6 /* ControlLatencyActivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = B8F8E166390F8A4DEF9FB54B /* ControlLatencyActivity.swift */; };
 		C068575E8069A5EFCEFF9B1D /* DevicesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1884A9135A3257510B0A8F0 /* DevicesView.swift */; };
 		C37C9B32207B502AF2957684 /* UniSpaceDomain.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D0CF733F292C646448A74827 /* UniSpaceDomain.framework */; };
 		C3FE6236D3044AB4482A4914 /* UniSpaceApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 904734B26F5ED02D2FFA4505 /* UniSpaceApp.swift */; };
@@ -391,6 +392,7 @@
 		B5E239C50434E115697BAFB7 /* DisplaysView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplaysView.swift; sourceTree = "<group>"; };
 		B7AAA75CF0B5E940401B90DB /* ConnectionRecoveryPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionRecoveryPolicyTests.swift; sourceTree = "<group>"; };
 		B8E5A6E1D4BB67A7DC9361AD /* EdgeRouter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EdgeRouter.swift; sourceTree = "<group>"; };
+		B8F8E166390F8A4DEF9FB54B /* ControlLatencyActivity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlLatencyActivity.swift; sourceTree = "<group>"; };
 		BAE6F2A5F3EBA813F7D0C9A5 /* CheckpointingTransferStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CheckpointingTransferStore.swift; sourceTree = "<group>"; };
 		BE82F53A1249F27E6522D98E /* QUICIdentityProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QUICIdentityProvider.swift; sourceTree = "<group>"; };
 		BF70CBE8D8890E0B9C31122B /* CoordinatorStateCoverageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoordinatorStateCoverageTests.swift; sourceTree = "<group>"; };
@@ -683,6 +685,7 @@
 				05F047B5B71179922FCBE2DD /* ConnectionPolicy.swift */,
 				ACED02FBB2EE977618DDECC0 /* ContinuityDestinationResolver.swift */,
 				A5EF85F3792D7B832147692C /* Contracts.swift */,
+				B8F8E166390F8A4DEF9FB54B /* ControlLatencyActivity.swift */,
 				A22156FBFA8C341F3E0E3494 /* ControlRoutingPolicy.swift */,
 				895B8982AB6DAE8ACF98E4F0 /* ControlSessionCoordinator.swift */,
 				B8E5A6E1D4BB67A7DC9361AD /* EdgeRouter.swift */,
@@ -1065,6 +1068,7 @@
 				3685E4EB870AE8B0A1C532FF /* ConnectionPolicy.swift in Sources */,
 				9AF61C5B35E5F987D428155A /* ContinuityDestinationResolver.swift in Sources */,
 				24B33FD1749F833343D4F583 /* Contracts.swift in Sources */,
+				BFF155EAE41364C2C215E0E6 /* ControlLatencyActivity.swift in Sources */,
 				18FE967A9F32A884A7AB69CC /* ControlRoutingPolicy.swift in Sources */,
 				F74B32ADBD01F401851A3406 /* ControlSessionCoordinator.swift in Sources */,
 				29CE3E95448FF99F748E7C04 /* EdgeRouter.swift in Sources */,

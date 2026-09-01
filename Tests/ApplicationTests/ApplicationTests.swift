@@ -3,6 +3,18 @@ import XCTest
 import UniSpaceDomain
 
 final class ApplicationTests: XCTestCase {
+    func testControlLatencyActivityIsIdempotentAndRecoverable() {
+        let activity = ControlLatencyActivity()
+
+        XCTAssertFalse(activity.isActive)
+        activity.start()
+        activity.start()
+        XCTAssertTrue(activity.isActive)
+        activity.stop()
+        activity.stop()
+        XCTAssertFalse(activity.isActive)
+    }
+
     func testControlRoutingKeepsConnectedLegacyAndAcknowledgedPeersAvailable() {
         let legacy = DeviceDescriptor(id: DeviceID(), name: "Legacy")
         let acknowledged = DeviceDescriptor(

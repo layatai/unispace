@@ -83,6 +83,12 @@ application events still cross to `AppModel` on the Main Actor. Realtime
 pointer injection therefore no longer waits behind SwiftUI publication,
 clipboard state, heartbeat handling, or file-transfer UI work.
 
+While a control session is active, UniSpace holds a scoped
+`ProcessInfo` user-initiated, latency-critical activity. The activity ends when
+the session returns to idle or the network is stopped. This prevents macOS
+timer and process throttling from inserting the repeatable 75 ms scheduling
+pause seen under load without keeping the process latency-critical at idle.
+
 ## Event-driven continuity
 
 Clipboard and file-transfer view models subscribe to immutable application
@@ -126,6 +132,8 @@ Send Files action; it does not gate target selection or channel bootstrap.
 - Clipboard, file-transfer, heartbeat, and UI activity cannot enter the
   realtime-input dispatch path or require a Main Actor hop before pointer
   injection.
+- The latency-critical process activity exists only for an active controlling
+  or receiving session and is released on every idle/stop path.
 - Existing unit, coverage, UI, native-input, and Windows CI gates remain intact.
 - The 500-sample two-process latency scenario runs as a standalone,
   non-instrumented performance gate after coverage tests; profiler overhead is

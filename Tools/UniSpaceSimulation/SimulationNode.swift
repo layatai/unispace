@@ -19,6 +19,7 @@ actor SimulationNodeRuntime {
     private let metrics: SimulationMetricsRecorder
     private let injector: SimulationInputInjector
     private let emitter: SimulationLineEmitter
+    private let controlLatencyActivity = ControlLatencyActivity()
     private var peerEventsTask: Task<Void, Never>?
     private var realtimeInputTask: Task<Void, Never>?
     private var clipboardChurnTask: Task<Void, Never>?
@@ -134,6 +135,7 @@ actor SimulationNodeRuntime {
         }
         let workspace = makeWorkspace()
         let local = try localDevice()
+        controlLatencyActivity.start()
 
         peerEventsTask = Task(priority: .high) { [weak self, transport] in
             for await event in transport.events() {
@@ -426,6 +428,7 @@ actor SimulationNodeRuntime {
         await coordinator.stop()
         await transport.stop()
         await pasteboard.release()
+        controlLatencyActivity.stop()
     }
 
     private func waitForListeners() async throws {
