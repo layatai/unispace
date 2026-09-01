@@ -90,6 +90,8 @@ impl DeviceDescriptor {
             capabilities: [
                 "portable-trackpad-gestures-v1",
                 "cross-platform-input-v2",
+                "udp-pointer-v2",
+                "realtime-pointer-progress-v1",
                 "activation-ack-v1",
                 "file-transfer-v1",
                 "clipboard-text-v1",

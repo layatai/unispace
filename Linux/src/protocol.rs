@@ -216,6 +216,31 @@ pub fn boundary_crossed_frame(
     frame(WireKind::ControlJsonV2, &payload)
 }
 
+pub fn heartbeat_frame(session: Uuid, timestamp_nanos: u64) -> Result<Vec<u8>> {
+    let payload = serde_json::to_vec(&json!({
+        "version":2,"type":"heartbeat","payload":{
+            "sessionID":Identifier{raw_value:session},
+            "timestampNanos":timestamp_nanos
+        }
+    }))?;
+    frame(WireKind::ControlJsonV2, &payload)
+}
+
+pub fn realtime_pointer_progress_frame(
+    session: Uuid,
+    generation: u64,
+    sequence: u64,
+) -> Result<Vec<u8>> {
+    let payload = serde_json::to_vec(&json!({
+        "version":2,"type":"realtimePointerProgress","payload":{
+            "sessionID":Identifier{raw_value:session},
+            "generation":generation,
+            "sequence":sequence
+        }
+    }))?;
+    frame(WireKind::ControlJsonV2, &payload)
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Epoch {
     pub generation: u64,
@@ -385,11 +410,97 @@ pub fn decode_input(payload: &[u8], realtime: bool) -> Result<PortableInputFrame
     })
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RealtimePointerFrame {
+    pub workspace_id: Uuid,
+    pub session_id: Uuid,
+    pub controller_id: Uuid,
+    pub epoch: Epoch,
+    pub generation: u64,
+    pub sequence: u64,
+    pub dx: f64,
+    pub dy: f64,
+    pub cumulative_x: f64,
+    pub cumulative_y: f64,
+    pub absolute_x: f64,
+    pub absolute_y: f64,
+    pub timestamp_nanos: u64,
+}
+
+/// Decodes a sealed realtime pointer payload (the plaintext after the secure
+/// sequence prefix), mirroring `WireFrameCodec`'s portable realtime layout.
+pub fn decode_realtime_pointer(payload: &[u8]) -> Result<(WireKind, RealtimePointerFrame)> {
+    let (kind, body) = decode_frame(payload)?;
+    let mut r = Reader(Cursor::new(body.to_vec()));
+    ensure!(r.u16()? == 2, "unsupported input version");
+    let workspace_id = r.uuid()?;
+    let session_id = r.uuid()?;
+    let controller_id = r.uuid()?;
+    let epoch = Epoch {
+        generation: r.u64()?,
+        controller_id: r.uuid()?,
+    };
+    let generation = r.u64()?;
+    let sequence = r.u64()?;
+    let dx = r.f64()?;
+    let dy = r.f64()?;
+    let cumulative_x = r.f64()?;
+    let cumulative_y = r.f64()?;
+    let absolute_x = r.f64()?;
+    let absolute_y = r.f64()?;
+    let timestamp_nanos = r.u64()?;
+    r.end()?;
+    Ok((
+        kind,
+        RealtimePointerFrame {
+            workspace_id,
+            session_id,
+            controller_id,
+            epoch,
+            generation,
+            sequence,
+            dx,
+            dy,
+            cumulative_x,
+            cumulative_y,
+            absolute_x,
+            absolute_y,
+            timestamp_nanos,
+        },
+    ))
+}
+
+/// Encodes the realtime pointer wire frame used by the Mac controller.
+pub fn encode_realtime_pointer(value: &RealtimePointerFrame) -> Result<Vec<u8>> {
+    let mut out = Vec::with_capacity(128);
+    out.extend_from_slice(&2u16.to_be_bytes());
+    out.extend_from_slice(value.workspace_id.as_bytes());
+    out.extend_from_slice(value.session_id.as_bytes());
+    out.extend_from_slice(value.controller_id.as_bytes());
+    out.extend_from_slice(&value.epoch.generation.to_be_bytes());
+    out.extend_from_slice(value.epoch.controller_id.as_bytes());
+    out.extend_from_slice(&value.generation.to_be_bytes());
+    out.extend_from_slice(&value.sequence.to_be_bytes());
+    for field in [
+        value.dx,
+        value.dy,
+        value.cumulative_x,
+        value.cumulative_y,
+        value.absolute_x,
+        value.absolute_y,
+    ] {
+        out.extend_from_slice(&field.to_bits().to_be_bytes());
+    }
+    out.extend_from_slice(&value.timestamp_nanos.to_be_bytes());
+    frame(WireKind::RealtimePointerBinaryV2, &out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
-    fn decodes_shared_key_vector() {
+    fn decodes_shared_key_vector() -> Result<()> {
         let bytes=hex::decode("0002000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f0000000000000004303132333435363738393a3b3c3d3e3f000000000000000500000000000000060400040100").unwrap();
         let value = decode_input(&bytes, false).unwrap();
         assert_eq!(value.sequence, 5);
@@ -401,5 +512,57 @@ mod tests {
                 repeat: false
             }
         );
+        Ok(())
+    }
+
+    #[test]
+    fn realtime_pointer_round_trips() -> Result<()> {
+        let value = RealtimePointerFrame {
+            workspace_id: Uuid::new_v4(),
+            session_id: Uuid::new_v4(),
+            controller_id: Uuid::new_v4(),
+            epoch: Epoch {
+                generation: 9,
+                controller_id: Uuid::new_v4(),
+            },
+            generation: 3,
+            sequence: 41,
+            dx: 1.5,
+            dy: -2.5,
+            cumulative_x: 100.25,
+            cumulative_y: 50.125,
+            absolute_x: 800.0,
+            absolute_y: 300.0,
+            timestamp_nanos: 123_456,
+        };
+        let (kind, decoded) = decode_realtime_pointer(&encode_realtime_pointer(&value)?).unwrap();
+        assert_eq!(kind, WireKind::RealtimePointerBinaryV2);
+        assert_eq!(decoded, value);
+        Ok(())
+    }
+
+    #[test]
+    fn control_frames_use_mac_field_names() -> Result<()> {
+        let session = Uuid::new_v4();
+        let progress_frame = realtime_pointer_progress_frame(session, 7, 3)?;
+        let (_, progress_payload) = decode_frame(&progress_frame)?;
+        let progress = decode_control(progress_payload)?;
+        match progress {
+            ControlMessage::Other(message) => {
+                assert_eq!(message, "realtimePointerProgress")
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+        let heartbeat_frame = heartbeat_frame(session, 99)?;
+        let (_, heartbeat_payload) = decode_frame(&heartbeat_frame)?;
+        let heartbeat = decode_control(heartbeat_payload)?;
+        assert_eq!(
+            heartbeat,
+            ControlMessage::Heartbeat {
+                session_id: session,
+                timestamp_nanos: 99
+            }
+        );
+        Ok(())
     }
 }

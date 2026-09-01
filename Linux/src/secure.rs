@@ -10,9 +10,10 @@ use hmac::{Hmac, Mac};
 use rand::{RngCore, rngs::OsRng};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
+use std::sync::{Arc, atomic::{AtomicU64, Ordering}};
 use subtle::ConstantTimeEq;
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
+
     net::TcpStream,
 };
 use uuid::Uuid;
@@ -22,10 +23,11 @@ const HELLO: u8 = 10;
 const SEALED: u8 = 11;
 
 #[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 struct SecureHello {
     version: u16,
+    #[serde(rename = "workspaceID")]
     workspace_id: Uuid,
+    #[serde(rename = "deviceID")]
     device_id: Uuid,
     #[serde(with = "base64_bytes")]
     nonce: Vec<u8>,
@@ -210,6 +212,86 @@ impl SecureStream {
             return Ok(plaintext[8..].to_vec());
         }
     }
+
+    /// Splits the stream into a reader and writer that share the session key.
+    /// Both halves maintain independent per-direction sequence counters, which
+    /// matches the Mac's per-direction replay windows.
+    pub fn split(self) -> (SecureReader, SecureWriter) {
+        let (read_half, write_half) = self.stream.into_split();
+        (
+            SecureReader {
+                read_half,
+                key: self.key,
+                inbound_sequence: self.inbound_sequence,
+            },
+            SecureWriter {
+                write_half: Arc::new(tokio::sync::Mutex::new(write_half)),
+                key: self.key,
+                outbound_sequence: Arc::new(AtomicU64::new(self.outbound_sequence)),
+            },
+        )
+    }
+}
+
+pub struct SecureReader {
+    read_half: tokio::net::tcp::OwnedReadHalf,
+    key: [u8; 32],
+    inbound_sequence: Option<u64>,
+}
+
+pub struct SecureWriter {
+    write_half: Arc<tokio::sync::Mutex<tokio::net::tcp::OwnedWriteHalf>>,
+    key: [u8; 32],
+    outbound_sequence: Arc<AtomicU64>,
+}
+
+impl SecureReader {
+    pub async fn receive(&mut self) -> Result<Vec<u8>> {
+        loop {
+            let (kind, payload) = read_outer(&mut self.read_half).await?;
+            if kind == HELLO {
+                continue;
+            }
+            ensure!(
+                kind == SEALED && payload.len() >= 28,
+                "invalid secure packet"
+            );
+            let cipher = ChaCha20Poly1305::new_from_slice(&self.key)?;
+            let plaintext = cipher
+                .decrypt(Nonce::from_slice(&payload[..12]), &payload[12..])
+                .map_err(|_| anyhow::anyhow!("authentication failed"))?;
+            ensure!(plaintext.len() >= 8, "truncated secure packet");
+            let sequence = u64::from_be_bytes(plaintext[..8].try_into()?);
+            ensure!(
+                self.inbound_sequence.is_none_or(|last| sequence > last),
+                "replayed secure packet"
+            );
+            self.inbound_sequence = Some(sequence);
+            return Ok(plaintext[8..].to_vec());
+        }
+    }
+}
+
+impl SecureWriter {
+    pub async fn send(&self, data: &[u8]) -> Result<()> {
+        let sequence = self
+            .outbound_sequence
+            .fetch_add(1, Ordering::Relaxed);
+        let mut plaintext = Vec::with_capacity(data.len() + 8);
+        plaintext.extend_from_slice(&sequence.to_be_bytes());
+        plaintext.extend_from_slice(data);
+        let mut nonce_bytes = [0u8; 12];
+        OsRng.fill_bytes(&mut nonce_bytes);
+        let cipher = ChaCha20Poly1305::new_from_slice(&self.key)?;
+        let ciphertext = cipher
+            .encrypt(Nonce::from_slice(&nonce_bytes), plaintext.as_ref())
+            .map_err(|_| anyhow::anyhow!("encryption failed"))?;
+        let mut combined = Vec::with_capacity(12 + ciphertext.len());
+        combined.extend_from_slice(&nonce_bytes);
+        combined.extend_from_slice(&ciphertext);
+        let mut write_half = self.write_half.lock().await;
+        write_outer(&mut *write_half, SEALED, &combined).await
+    }
 }
 
 fn hello_proof(
@@ -229,7 +311,10 @@ fn hello_proof(
     Ok(mac.finalize().into_bytes().to_vec())
 }
 
-async fn write_outer(stream: &mut TcpStream, kind: u8, payload: &[u8]) -> Result<()> {
+async fn write_outer<T>(stream: &mut T, kind: u8, payload: &[u8]) -> Result<()>
+where
+    T: tokio::io::AsyncWriteExt + Unpin,
+{
     ensure!(
         payload.len() <= crate::protocol::MAX_WIRE_PAYLOAD + 64,
         "outer packet too large"
@@ -241,7 +326,10 @@ async fn write_outer(stream: &mut TcpStream, kind: u8, payload: &[u8]) -> Result
     stream.write_all(payload).await?;
     Ok(())
 }
-async fn read_outer(stream: &mut TcpStream) -> Result<(u8, Vec<u8>)> {
+async fn read_outer<T>(stream: &mut T) -> Result<(u8, Vec<u8>)>
+where
+    T: tokio::io::AsyncReadExt + Unpin,
+{
     let length = stream.read_u32().await? as usize;
     ensure!(
         length <= crate::protocol::MAX_WIRE_PAYLOAD + 64,

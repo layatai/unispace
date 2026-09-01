@@ -2,17 +2,25 @@
 
 The Linux receiver lets a paired Mac control a GNOME or KDE desktop on X11 or
 Wayland. It uses the same portable, authenticated UniSpace protocols as the
-Windows receiver. Linux remains receiver-only in this release.
+Windows receiver, including the authenticated UDP realtime pointer lane. Linux
+remains receiver-only in this release.
 
 ## Supported systems
 
 - Ubuntu 24.04 LTS and newer, and the current two Fedora releases
 - x86_64 and arm64
 - GNOME and KDE Plasma on Wayland or X11
+- A 5-second controller-heartbeat watchdog releases injected input if the
+  controller stalls
 
-Other freedesktop desktops can use basic keyboard and pointer injection, but
-clipboard integration, status presentation, and gesture shortcuts are best
-effort.
+Pointer motion rides the authenticated UDP lane (`udp-pointer-v2`) with
+generation/sequence progress acknowledgements (`realtime-pointer-progress-v1`),
+falling back to the reliable TCP channel automatically. Other freedesktop
+desktops can use basic keyboard and pointer injection, but clipboard
+integration, status presentation, and gesture shortcuts are best effort.
+Display geometry currently comes from `xrandr` on X11 (fallback 1920x1080);
+Wayland enumeration and hotplug are planned (see
+`Docs/linux-production-app-plan.md`).
 
 ## Install and pair
 

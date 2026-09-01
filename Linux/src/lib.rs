@@ -4,6 +4,7 @@ pub mod files;
 pub mod input;
 pub mod model;
 pub mod pairing;
+pub mod pointer;
 pub mod protocol;
 pub mod receiver;
 pub mod secure;
