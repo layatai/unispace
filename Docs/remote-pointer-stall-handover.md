@@ -125,9 +125,12 @@ presence of an authenticated connection object.
   dedicated user-interactive task directly to the control coordinator. It no
   longer passes through `AppModel` or waits on the Main Actor behind heartbeat,
   Continuity, and file-transfer UI updates.
+- A lock-protected realtime receiver now performs session validation, replay
+  rejection, cumulative-delta recovery, and injection synchronously. There is
+  no actor yield between wire receipt and visible pointer injection.
 - Active control sessions hold a scoped latency-critical `ProcessInfo`
-  activity, released at idle, so macOS cannot coalesce interactive work into
-  the 75 ms scheduling pauses reproduced by the CI runner.
+  activity, released at idle, to reduce process and timer throttling while
+  remote control is in use.
 - The unrelated Swift explicit-`self` CI failure in `AppModel` is fixed without
   changing pairing behavior.
 

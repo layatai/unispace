@@ -1588,7 +1588,9 @@ final class ApplicationTests: XCTestCase {
 
         pending.continuation.yield(.key(code: 12, isDown: true, isRepeat: false))
         pending.continuation.finish()
-        for _ in 0..<100 where transport.frames.count < 2 { await Task.yield() }
+        for _ in 0..<500 where transport.frames.count < 2 {
+            try await Task.sleep(for: .milliseconds(2))
+        }
         await coordinator.flushPendingInput()
 
         XCTAssertEqual(transport.frames.map(\.event), [

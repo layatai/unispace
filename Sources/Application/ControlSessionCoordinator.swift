@@ -75,6 +75,7 @@ public actor ControlSessionCoordinator {
     private let transport: PeerTransport
     private let inputSender: OrderedInputSender
     private let clock: MonotonicClock
+    private nonisolated let realtimeInputReceiver: RealtimeInputReceiver
     private let activationTimeout: Duration
     private let sessionStream: AsyncStream<ControlSessionSnapshot>
     private let sessionContinuation: AsyncStream<ControlSessionSnapshot>.Continuation
@@ -86,10 +87,6 @@ public actor ControlSessionCoordinator {
     private var realtimeSequence: UInt64 = 0
     private var cumulativePointerX: Double = 0
     private var cumulativePointerY: Double = 0
-    private var receivedRealtimeGeneration: UInt64?
-    private var receivedRealtimeSequence: UInt64?
-    private var receivedCumulativePointerX: Double = 0
-    private var receivedCumulativePointerY: Double = 0
     private var realtimeDeliveryMode: RealtimeDeliveryMode = .legacy
     private var lastRealtimeAcknowledgementNanos: UInt64?
     private var lastRealtimeAcknowledgedSequence: UInt64?
@@ -130,6 +127,10 @@ public actor ControlSessionCoordinator {
         self.transport = transport
         self.inputSender = OrderedInputSender(transport: transport, clock: clock)
         self.clock = clock
+        self.realtimeInputReceiver = RealtimeInputReceiver(
+            workspaceID: workspaceID,
+            injector: injector
+        )
         self.activationTimeout = activationTimeout
         self.election = election
         let pair = AsyncStream<ControlSessionSnapshot>.makeStream(bufferingPolicy: .bufferingNewest(1))
@@ -280,6 +281,11 @@ public actor ControlSessionCoordinator {
             enteringFrom: activation.entryEdge,
             normalizedPosition: activation.normalizedPosition
         )
+        realtimeInputReceiver.begin(
+            epoch: epoch,
+            source: source,
+            sessionID: activation.sessionID
+        )
         setState(.receiving(epoch: epoch, source: source, session: activation.sessionID))
         transport.setRealtimePeer(source, role: .listener)
         lastHeartbeatNanos = clock.nowNanoseconds()
@@ -410,34 +416,11 @@ public actor ControlSessionCoordinator {
         injector.inject(frame.event)
     }
 
-    public func handleIncomingRealtime(_ frame: RealtimePointerFrame, from source: DeviceID) {
-        guard frame.workspaceID == workspaceID,
-              election.currentEpoch == frame.epoch,
-              frame.controllerID == source,
-              case let .receiving(epoch, expectedSource, sessionID) = state,
-              epoch == frame.epoch,
-              expectedSource == source,
-              sessionID == frame.sessionID else { return }
-
-        if let receivedRealtimeGeneration, frame.generation < receivedRealtimeGeneration { return }
-        if receivedRealtimeGeneration != frame.generation {
-            receivedRealtimeGeneration = frame.generation
-            receivedRealtimeSequence = nil
-            receivedCumulativePointerX = 0
-            receivedCumulativePointerY = 0
-        }
-        guard receivedRealtimeSequence.map({ frame.sequence > $0 }) ?? true else { return }
-        let deltaX = frame.cumulativeDeltaX - receivedCumulativePointerX
-        let deltaY = frame.cumulativeDeltaY - receivedCumulativePointerY
-        receivedRealtimeSequence = frame.sequence
-        receivedCumulativePointerX = frame.cumulativeDeltaX
-        receivedCumulativePointerY = frame.cumulativeDeltaY
-        injector.inject(.pointerMove(
-            deltaX: deltaX,
-            deltaY: deltaY,
-            absoluteX: frame.absoluteX,
-            absoluteY: frame.absoluteY
-        ))
+    public nonisolated func handleIncomingRealtime(
+        _ frame: RealtimePointerFrame,
+        from source: DeviceID
+    ) {
+        realtimeInputReceiver.receive(frame, from: source)
     }
 
     public func realtimePointerProgress(
@@ -445,14 +428,8 @@ public actor ControlSessionCoordinator {
         from source: DeviceID
     ) -> RealtimePointerProgress? {
         guard case let .receiving(_, expectedSource, expectedSession) = state,
-              source == expectedSource, sessionID == expectedSession,
-              let generation = receivedRealtimeGeneration,
-              let sequence = receivedRealtimeSequence else { return nil }
-        return RealtimePointerProgress(
-            sessionID: sessionID,
-            generation: generation,
-            sequence: sequence
-        )
+              source == expectedSource, sessionID == expectedSession else { return nil }
+        return realtimeInputReceiver.progress(sessionID: sessionID, source: source)
     }
 
     @discardableResult
@@ -821,10 +798,7 @@ public actor ControlSessionCoordinator {
     }
 
     private func resetRealtimeReceiver() {
-        receivedRealtimeGeneration = nil
-        receivedRealtimeSequence = nil
-        receivedCumulativePointerX = 0
-        receivedCumulativePointerY = 0
+        realtimeInputReceiver.reset()
     }
 
     private func resetRealtimeDelivery() {
