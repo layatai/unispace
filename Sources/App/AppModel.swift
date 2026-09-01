@@ -48,6 +48,7 @@ final class AppModel: ObservableObject {
     private let injector = CGEventInputInjector()
     private var coordinator: ControlSessionCoordinator?
     private var networkTask: Task<Void, Never>?
+    private var realtimeInputTask: Task<Void, Never>?
     private var sessionTask: Task<Void, Never>?
     private var networkRestartTask: Task<Void, Never>?
     private var screenChangeSubscription: AnyCancellable?
@@ -125,6 +126,7 @@ final class AppModel: ObservableObject {
 
     deinit {
         networkTask?.cancel()
+        realtimeInputTask?.cancel()
         sessionTask?.cancel()
         networkRestartTask?.cancel()
     }
@@ -268,6 +270,8 @@ final class AppModel: ObservableObject {
         candidates = []
         networkTask?.cancel()
         networkTask = nil
+        realtimeInputTask?.cancel()
+        realtimeInputTask = nil
         sessionTask?.cancel()
         sessionTask = nil
         finishPendingActivationInput()
@@ -556,6 +560,8 @@ final class AppModel: ObservableObject {
             guard let keyring = try trustStore.workspaceKeyring(for: workspace.id) else { return }
             networkTask?.cancel()
             networkTask = nil
+            realtimeInputTask?.cancel()
+            realtimeInputTask = nil
             sessionTask?.cancel()
             sessionTask = nil
             await coordinator?.stop()
@@ -593,11 +599,19 @@ final class AppModel: ObservableObject {
             self.coordinator = coordinator
             applyPeerConnectionPolicy()
             startCaptureIfPossible()
-            networkTask = Task { [weak self] in
+            networkTask = Task { [weak self, transport] in
                 guard let self else { return }
                 for await event in transport.events() {
                     if Task.isCancelled { break }
                     await self.handlePeerEvent(event)
+                }
+            }
+            realtimeInputTask = Task.detached(
+                priority: ControlTaskPriority.realtimeInput
+            ) { [coordinator, transport] in
+                for await event in transport.realtimeInputEvents() {
+                    if Task.isCancelled { break }
+                    _ = await RemoteInputEventRouter.route(event, to: coordinator)
                 }
             }
             sessionTask = Task { [weak self, coordinator] in
@@ -841,10 +855,11 @@ final class AppModel: ObservableObject {
             }
         case let .control(source, envelope):
             await handleControl(envelope.message, from: source)
-        case let .input(source, frame):
-            await coordinator?.handleIncoming(frame, from: source)
-        case let .realtimeInput(source, frame):
-            await coordinator?.handleIncomingRealtime(frame, from: source)
+        case .input:
+            guard let coordinator else { break }
+            _ = await RemoteInputEventRouter.route(event, to: coordinator)
+        case .realtimeInput:
+            break
         case let .health(deviceID, snapshot):
             if let deviceID { connectionSnapshots[deviceID] = snapshot }
             guard let deviceID, snapshot.health == .degraded,

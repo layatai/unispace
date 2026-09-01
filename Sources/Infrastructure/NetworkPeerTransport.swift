@@ -65,6 +65,8 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
     private let authenticationTimeout: TimeInterval
     private let stream: AsyncStream<PeerEvent>
     private let continuation: AsyncStream<PeerEvent>.Continuation
+    private let realtimeInputStream: AsyncStream<PeerEvent>
+    private let realtimeInputContinuation: AsyncStream<PeerEvent>.Continuation
     private var localDevice: DeviceDescriptor?
     private var workspaceID: WorkspaceID?
     private var key: Data?
@@ -122,11 +124,18 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
         var captured: AsyncStream<PeerEvent>.Continuation?
         self.stream = AsyncStream { captured = $0 }
         self.continuation = captured!
+        var capturedRealtimeInput: AsyncStream<PeerEvent>.Continuation?
+        self.realtimeInputStream = AsyncStream { capturedRealtimeInput = $0 }
+        self.realtimeInputContinuation = capturedRealtimeInput!
     }
 
-    deinit { continuation.finish() }
+    deinit {
+        continuation.finish()
+        realtimeInputContinuation.finish()
+    }
 
     public func events() -> AsyncStream<PeerEvent> { stream }
+    public func realtimeInputEvents() -> AsyncStream<PeerEvent> { realtimeInputStream }
 
     public var activeControlPort: NWEndpoint.Port? { lock.withLock { readyControlPort } }
     public var activeQUICPort: NWEndpoint.Port? { lock.withLock { readyQUICPort } }
@@ -1072,7 +1081,12 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
         connect(to: endpoint, expectedDevice: peer, isOutbound: true, transport: .tcp)
     }
 
-    private func emit(_ event: PeerEvent) { continuation.yield(event) }
+    private func emit(_ event: PeerEvent) {
+        continuation.yield(event)
+        if case .realtimeInput = event {
+            realtimeInputContinuation.yield(event)
+        }
+    }
 
     static func makeParameters() -> NWParameters {
         let tcp = NWProtocolTCP.Options()

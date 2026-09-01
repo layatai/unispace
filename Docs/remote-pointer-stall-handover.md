@@ -121,6 +121,10 @@ presence of an authenticated connection object.
   next captured event, which immediately sends the latest coalesced position.
   This removes the sender-side 75 ms stalls observed under concurrent load
   without increasing the batching budget or weakening the latency gate.
+- Realtime pointer input has its own transport stream and is routed on a
+  dedicated user-interactive task directly to the control coordinator. It no
+  longer passes through `AppModel` or waits on the Main Actor behind heartbeat,
+  Continuity, and file-transfer UI updates.
 - The unrelated Swift explicit-`self` CI failure in `AppModel` is fixed without
   changing pairing behavior.
 

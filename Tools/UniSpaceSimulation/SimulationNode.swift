@@ -20,6 +20,7 @@ actor SimulationNodeRuntime {
     private let injector: SimulationInputInjector
     private let emitter: SimulationLineEmitter
     private var peerEventsTask: Task<Void, Never>?
+    private var realtimeInputTask: Task<Void, Never>?
     private var clipboardChurnTask: Task<Void, Never>?
     private var controlConnected = false
     private var stopping = false
@@ -138,6 +139,19 @@ actor SimulationNodeRuntime {
             for await event in transport.events() {
                 guard !Task.isCancelled else { return }
                 await self?.handlePeerEvent(event)
+            }
+        }
+        let coordinator = self.coordinator
+        let metrics = self.metrics
+        realtimeInputTask = Task.detached(
+            priority: ControlTaskPriority.realtimeInput
+        ) { [transport, coordinator, metrics] in
+            for await event in transport.realtimeInputEvents() {
+                guard !Task.isCancelled else { return }
+                if case let .realtimeInput(_, frame) = event {
+                    metrics.recordWire(timestampNanos: frame.timestampNanos, isPointer: true)
+                }
+                _ = await RemoteInputEventRouter.route(event, to: coordinator)
             }
         }
         try await transport.start(localDevice: local, workspace: workspace, key: key)
@@ -318,15 +332,14 @@ actor SimulationNodeRuntime {
             emitter.send(.event("controlDisconnected", values: ["peer": deviceID.description]))
         case let .control(source, envelope):
             await handleControl(envelope.message, from: source)
-        case let .input(source, frame):
+        case let .input(_, frame):
             metrics.recordWire(
                 timestampNanos: frame.timestampNanos,
-                isPointer: isPointer(frame.event)
+                isPointer: Self.isPointer(frame.event)
             )
-            await coordinator.handleIncoming(frame, from: source)
-        case let .realtimeInput(source, frame):
-            metrics.recordWire(timestampNanos: frame.timestampNanos, isPointer: true)
-            await coordinator.handleIncomingRealtime(frame, from: source)
+            _ = await RemoteInputEventRouter.route(event, to: coordinator)
+        case .realtimeInput:
+            break
         case .discovered, .lost, .workspaceUpgradeRequired, .health, .failure:
             break
         }
@@ -407,6 +420,7 @@ actor SimulationNodeRuntime {
         stopping = true
         clipboardChurnTask?.cancel()
         peerEventsTask?.cancel()
+        realtimeInputTask?.cancel()
         await clipboardCoordinator.stop()
         await fileCoordinator.stop()
         await coordinator.stop()
@@ -476,7 +490,7 @@ actor SimulationNodeRuntime {
         )
     }
 
-    private func isPointer(_ event: InputEvent) -> Bool {
+    private nonisolated static func isPointer(_ event: InputEvent) -> Bool {
         if case .pointerMove = event { return true }
         return false
     }

@@ -562,6 +562,85 @@ final class ApplicationTests: XCTestCase {
         await coordinator.stop()
     }
 
+    func testRemoteInputRouterBypassesApplicationEvents() async throws {
+        let local = DeviceID()
+        let remote = DeviceID()
+        let workspace = WorkspaceID()
+        let epoch = ControllerEpoch(generation: 1, controllerID: remote)
+        let sessionID = SessionID()
+        let injector = InjectorSpy()
+        let coordinator = ControlSessionCoordinator(
+            localDeviceID: local,
+            workspaceID: workspace,
+            capture: CaptureSpy(),
+            injector: injector,
+            transport: TransportSpy()
+        )
+        await coordinator.observeControllerClaim(epoch)
+        let targetDisplay = display(
+            device: local,
+            frame: .init(x: 0, y: 0, width: 100, height: 100)
+        )
+        let accepted = await coordinator.receiveActivation(
+            .init(
+                sessionID: sessionID,
+                epoch: epoch,
+                targetDisplayID: targetDisplay.id,
+                entryEdge: .left,
+                normalizedPosition: 0.5
+            ),
+            from: remote,
+            targetDisplay: targetDisplay
+        )
+        XCTAssertTrue(accepted)
+
+        let reliable = InputFrame(
+            workspaceID: workspace,
+            sessionID: sessionID,
+            controllerID: remote,
+            epoch: epoch,
+            sequence: 0,
+            timestampNanos: 1,
+            event: .key(code: 3, isDown: true, isRepeat: false)
+        )
+        let realtime = RealtimePointerFrame(
+            workspaceID: workspace,
+            sessionID: sessionID,
+            controllerID: remote,
+            epoch: epoch,
+            generation: 1,
+            sequence: 0,
+            deltaX: 2,
+            deltaY: 1,
+            cumulativeDeltaX: 2,
+            cumulativeDeltaY: 1,
+            absoluteX: 20,
+            absoluteY: 10,
+            timestampNanos: 2
+        )
+
+        let routedReliable = await RemoteInputEventRouter.route(
+            .input(remote, reliable),
+            to: coordinator
+        )
+        let routedRealtime = await RemoteInputEventRouter.route(
+            .realtimeInput(remote, realtime),
+            to: coordinator
+        )
+        let routedApplicationEvent = await RemoteInputEventRouter.route(
+            .discovered(.init(id: DeviceID(), name: "Peer")),
+            to: coordinator
+        )
+        XCTAssertTrue(routedReliable)
+        XCTAssertTrue(routedRealtime)
+        XCTAssertFalse(routedApplicationEvent)
+        XCTAssertEqual(injector.events, [
+            .key(code: 3, isDown: true, isRepeat: false),
+            .pointerMove(deltaX: 2, deltaY: 1, absoluteX: 20, absoluteY: 10)
+        ])
+        await coordinator.stop()
+    }
+
     func testReceiverDoesNotAbandonSessionAfterFourSecondSlowLinkDelay() async throws {
         let local = DeviceID()
         let remote = DeviceID()

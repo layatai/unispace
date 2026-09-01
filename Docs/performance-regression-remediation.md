@@ -75,6 +75,14 @@ cancels itself before sending. This preserves backpressure while preventing
 continuity or process scheduling load from stretching one frame into a visible
 multi-frame stall.
 
+Incoming realtime pointer input has its own transport stream and is dispatched
+by a dedicated user-interactive task directly to `ControlSessionCoordinator`.
+Reliable ordered input stays on the control stream for legacy activation
+ordering. Discovery, connection status, workspace changes, and other
+application events still cross to `AppModel` on the Main Actor. Realtime
+pointer injection therefore no longer waits behind SwiftUI publication,
+clipboard state, heartbeat handling, or file-transfer UI work.
+
 ## Event-driven continuity
 
 Clipboard and file-transfer view models subscribe to immutable application
@@ -115,6 +123,9 @@ Send Files action; it does not gate target selection or channel bootstrap.
   buffering, no heartbeat loss, and no pointer stall above 50 ms.
 - A delayed pointer-flush task cannot extend the 16 ms batching deadline; the
   next captured event must flush the latest coalesced position immediately.
+- Clipboard, file-transfer, heartbeat, and UI activity cannot enter the
+  realtime-input dispatch path or require a Main Actor hop before pointer
+  injection.
 - Existing unit, coverage, UI, native-input, and Windows CI gates remain intact.
 - The 500-sample two-process latency scenario runs as a standalone,
   non-instrumented performance gate after coverage tests; profiler overhead is

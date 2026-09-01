@@ -83,6 +83,7 @@
 		9AF61C5B35E5F987D428155A /* ContinuityDestinationResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACED02FBB2EE977618DDECC0 /* ContinuityDestinationResolver.swift */; };
 		9B0F95C15B4BECBD8BBED6DE /* TransferCenterView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 448153996FA9A3A4DC5A90F0 /* TransferCenterView.swift */; };
 		9C4AE39AE934CEDF88992640 /* UniSpaceApplication.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = CD69866EFD7AE9229BB70567 /* UniSpaceApplication.framework */; };
+		9E91AEFDFB42CEAF80364B3D /* RemoteInputEventRouter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E725BDD4F645E9E192403B2 /* RemoteInputEventRouter.swift */; };
 		A3D52A32EFB3044F88769084 /* UniSpaceDomain.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D0CF733F292C646448A74827 /* UniSpaceDomain.framework */; };
 		A7CC7FCBD0D99C860D6EADCB /* FileTransferDestinationResolverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C44ED25FAE5662CD7BA713E /* FileTransferDestinationResolverTests.swift */; };
 		A8ED0D748DC7DE1DAE25AEE2 /* UniSpaceDomain.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D0CF733F292C646448A74827 /* UniSpaceDomain.framework */; };
@@ -324,6 +325,7 @@
 		184432B7A6AD87798C281699 /* WorkspaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceView.swift; sourceTree = "<group>"; };
 		1929DAE384C26724BCAB42A8 /* SimulationOrchestrator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimulationOrchestrator.swift; sourceTree = "<group>"; };
 		1E124D2AC0DF1143B1DFE882 /* TwoProcessSimulationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TwoProcessSimulationTests.swift; sourceTree = "<group>"; };
+		1E725BDD4F645E9E192403B2 /* RemoteInputEventRouter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteInputEventRouter.swift; sourceTree = "<group>"; };
 		1EFF200775381B9BA7CE0515 /* InfrastructureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InfrastructureTests.swift; sourceTree = "<group>"; };
 		256563740902D273A25CC9B0 /* SimulatedE2ETests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimulatedE2ETests.swift; sourceTree = "<group>"; };
 		25E8100835AABC1FFE4EC018 /* UniSpaceUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = UniSpaceUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -690,6 +692,7 @@
 				7839FF3F393FF040EED7F696 /* FileTransferFrameCodec.swift */,
 				01A1425648D0C5F8712AC268 /* FrameCodec.swift */,
 				478444AE3F889D2F9D43B479 /* PortableInputMapper.swift */,
+				1E725BDD4F645E9E192403B2 /* RemoteInputEventRouter.swift */,
 				2CF070D689C1AA7C27334F7E /* WorkspaceLifecycle.swift */,
 				955E18CB8A8476625C1772C6 /* WorkspaceReplicaMerger.swift */,
 			);
@@ -1071,6 +1074,7 @@
 				66F7A7064DB2BF2D55F0B435 /* FileTransferFrameCodec.swift in Sources */,
 				8E6BA003D246813AC1906B0B /* FrameCodec.swift in Sources */,
 				7AC9BE31D5C8E171DA184B8F /* PortableInputMapper.swift in Sources */,
+				9E91AEFDFB42CEAF80364B3D /* RemoteInputEventRouter.swift in Sources */,
 				3BD92A406A4851CD54C8BD66 /* WorkspaceLifecycle.swift in Sources */,
 				1717E7750DAD1E6D14EF4CD1 /* WorkspaceReplicaMerger.swift in Sources */,
 			);
