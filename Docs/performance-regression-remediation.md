@@ -52,6 +52,11 @@ Each peer has at most one connection attempt in flight. Retry delays are 1, 2,
 Backoff resets only after ten seconds of stable connectivity. Network recovery,
 a changed route, a controller change, and an explicit refresh may wake a retry.
 
+Connection status follows actual ownership. An offline peer is `Reconnecting`
+only while this Mac owns and schedules its outbound retry. Passive Macs and
+inbound-only Windows peers remain `Offline`, and the UI does not offer a retry
+action that policy would reject.
+
 ## Controller isolation
 
 `ControlSessionCoordinator` publishes a typed, read-only session snapshot.
@@ -78,6 +83,13 @@ peer that does not advertise UDP pointer v2. Clipboard connects only while
 sharing has a target. File transfer connects only to the selected or automatic
 destination.
 
+Secondary targets are resolved from the authenticated control plane before
+their dedicated channels exist: remote controller, active control-session
+peer, then a sole connected compatible peer. Clipboard uses that target to
+establish TCP 61342; file transfer uses it to establish TCP 61340. Dedicated
+connectivity controls readiness such as the `Waiting`/`Encrypted` badge and the
+Send Files action; it does not gate target selection or channel bootstrap.
+
 ## Regression gates
 
 - Four-node topology with one unavailable node: only the dial owner retries.
@@ -85,6 +97,11 @@ destination.
 - At most one attempt per unavailable peer per minute after the circuit opens.
 - Controller transfer cancels retries owned by the former controller.
 - Macifier reconnects only to its persisted controller.
+- Passive and inbound-only peers show `Offline` and expose no manual retry.
+- Clipboard selects one control-connected target before TCP 61342 is connected;
+  an idle multi-peer workspace selects none and never dials every peer.
+- File transfer selects one control-connected target before TCP 61340 is
+  connected, then enables Send Files only after authentication.
 - Identical context produces no Keychain read, QoS update, or UI publication.
 - Delayed activation preserves activation-before-input ordering with bounded
   buffering, no heartbeat loss, and no pointer stall above 50 ms.

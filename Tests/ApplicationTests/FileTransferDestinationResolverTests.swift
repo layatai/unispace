@@ -60,4 +60,24 @@ final class FileTransferDestinationResolverTests: XCTestCase {
             connectedDeviceIDs: []
         ))
     }
+
+    func testControlPlaneDestinationCanBootstrapBeforeContentConnectionIsReady() {
+        let target = DeviceDescriptor(id: DeviceID(), name: "Fox")
+
+        let desired = FileTransferDestinationResolver.resolve(
+            selectedDeviceID: target.id,
+            continuityTargetID: target.id,
+            candidates: [target],
+            connectedDeviceIDs: [target.id]
+        )
+        let ready = FileTransferDestinationResolver.resolve(
+            selectedDeviceID: target.id,
+            continuityTargetID: target.id,
+            candidates: [target],
+            connectedDeviceIDs: []
+        )
+
+        XCTAssertEqual(desired, target.id)
+        XCTAssertNil(ready)
+    }
 }

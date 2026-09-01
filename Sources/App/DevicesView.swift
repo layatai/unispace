@@ -175,7 +175,7 @@ struct DevicesView: View {
             }
 
             if !isLocal {
-                if !isOnline {
+                if !isOnline, model.canReconnect(to: device.id) {
                     Button {
                         model.reconnect(to: device.id)
                     } label: {

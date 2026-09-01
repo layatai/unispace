@@ -88,7 +88,7 @@ final class AppModel: ObservableObject {
                 devices: [local, remote]
             )
             connectionSnapshots[remoteID] = .init(
-                health: .reconnecting,
+                health: .disconnected,
                 transport: .tcp,
                 detail: "The trusted peer is temporarily unavailable"
             )
@@ -165,7 +165,13 @@ final class AppModel: ObservableObject {
         )
     }
     var hasReconnectableDevices: Bool {
-        !peerConnectionPolicy.outboundPeerIDs.subtracting(connectedDevices).isEmpty
+        devices.contains { canReconnect(to: $0.id) }
+    }
+
+    func canReconnect(to deviceID: DeviceID) -> Bool {
+        deviceID != localDeviceID &&
+            peerConnectionPolicy.ownsReconnect(to: deviceID) &&
+            !connectedDevices.contains(deviceID)
     }
 
     var needsPermissions: Bool {
@@ -308,7 +314,7 @@ final class AppModel: ObservableObject {
             if let workspace {
                 controllerIdentityStore.setControllerID(localDeviceID, for: workspace.id)
             }
-            transport.updateConnectionPolicy(peerConnectionPolicy)
+            applyPeerConnectionPolicy()
             if var workspace, epoch.generation > workspace.generation {
                 workspace.generation = epoch.generation
                 persistAndBroadcastLocally(workspace)
@@ -360,10 +366,9 @@ final class AppModel: ObservableObject {
     }
 
     func reconnect(to deviceID: DeviceID) {
-        guard deviceID != localDeviceID,
-              peerConnectionPolicy.outboundPeerIDs.contains(deviceID),
+        guard canReconnect(to: deviceID),
               let device = devices.first(where: { $0.id == deviceID }),
-              !connectedDevices.contains(deviceID) else { return }
+              device.id != localDeviceID else { return }
         let transportKind = connectionSnapshots[deviceID]?.transport ?? .tcp
         connectionSnapshots[deviceID] = .init(
             health: .reconnecting,
@@ -562,7 +567,7 @@ final class AppModel: ObservableObject {
                 guard device.id != localDeviceID else { return nil }
                 let previous = connectionSnapshots[device.id]
                 return (device.id, ConnectionSnapshot(
-                    health: .reconnecting,
+                    health: .disconnected,
                     transport: previous?.transport ?? .tcp,
                     detail: previous?.detail
                 ))
@@ -586,7 +591,7 @@ final class AppModel: ObservableObject {
                 )
             )
             self.coordinator = coordinator
-            transport.updateConnectionPolicy(peerConnectionPolicy)
+            applyPeerConnectionPolicy()
             startCaptureIfPossible()
             networkTask = Task { [weak self] in
                 guard let self else { return }
@@ -819,7 +824,9 @@ final class AppModel: ObservableObject {
             connectedDevices.remove(deviceID)
             let previousConnection = connectionSnapshots[deviceID]
             connectionSnapshots[deviceID] = .init(
-                health: .reconnecting,
+                health: previousConnection?.health == .reconnecting
+                    ? .reconnecting
+                    : .disconnected,
                 transport: previousConnection?.transport ?? .tcp,
                 detail: previousConnection?.detail
             )
@@ -871,7 +878,7 @@ final class AppModel: ObservableObject {
             if let workspace, let currentControllerID {
                 controllerIdentityStore.setControllerID(currentControllerID, for: workspace.id)
             }
-            transport.updateConnectionPolicy(peerConnectionPolicy)
+            applyPeerConnectionPolicy()
             if var workspace, epoch.generation > workspace.generation {
                 workspace.generation = epoch.generation
                 persistAndBroadcastLocally(workspace)
@@ -1068,6 +1075,20 @@ final class AppModel: ObservableObject {
 
     private func deviceName(_ id: DeviceID) -> String {
         workspace?.devices.first(where: { $0.id == id })?.name ?? "Mac"
+    }
+
+    private func applyPeerConnectionPolicy() {
+        let policy = peerConnectionPolicy
+        transport.updateConnectionPolicy(policy)
+        for device in devices where device.id != localDeviceID && !connectedDevices.contains(device.id) {
+            guard !policy.ownsReconnect(to: device.id) else { continue }
+            let previous = connectionSnapshots[device.id]
+            connectionSnapshots[device.id] = .init(
+                health: .disconnected,
+                transport: previous?.transport ?? .tcp,
+                detail: previous?.detail
+            )
+        }
     }
 
     private func capabilities(of id: DeviceID) -> Set<DeviceCapability> {

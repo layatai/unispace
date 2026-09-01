@@ -14,14 +14,14 @@ final class ConnectionPolicyTests: XCTestCase {
             devices: [controller, receiver, windows]
         )
 
-        XCTAssertEqual(
-            ControlConnectionRoutingPolicy.policy(
-                localDeviceID: controller.id,
-                workspace: workspace,
-                controllerID: controller.id
-            ).outboundPeerIDs,
-            [receiver.id]
+        let controllerPolicy = ControlConnectionRoutingPolicy.policy(
+            localDeviceID: controller.id,
+            workspace: workspace,
+            controllerID: controller.id
         )
+        XCTAssertEqual(controllerPolicy.outboundPeerIDs, [receiver.id])
+        XCTAssertTrue(controllerPolicy.ownsReconnect(to: receiver.id))
+        XCTAssertFalse(controllerPolicy.ownsReconnect(to: windows.id))
         XCTAssertEqual(
             ControlConnectionRoutingPolicy.policy(
                 localDeviceID: receiver.id,

@@ -85,7 +85,7 @@ public final class SystemClipboardService: ClipboardService {
     private func startMonitoringIfNeeded() {
         guard monitorTask == nil else { return }
         lastObservedChangeCount = pasteboard.changeCount
-        monitorTask = Task { [weak self] in
+        monitorTask = Task(priority: .high) { [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
                 try? await Task.sleep(for: self.pollingInterval)

@@ -261,7 +261,11 @@ final class FileTransferViewModel: ObservableObject {
     ) async {
         let devices = context.workspace?.devices ?? []
         let candidates = devices
-            .filter { $0.id != localDevice.id && context.connectedDeviceIDs.contains($0.id) }
+            .filter {
+                $0.id != localDevice.id &&
+                    context.connectedDeviceIDs.contains($0.id) &&
+                    $0.capabilities.contains(.fileTransferV1)
+            }
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         controlConnectedDeviceIDs = context.connectedDeviceIDs
         if knownDevices != devices { knownDevices = devices }
@@ -269,13 +273,12 @@ final class FileTransferViewModel: ObservableObject {
         await updateTransferQoS(from: context)
 
         if let selectedDestinationID,
-           !knownDevices.contains(where: { $0.id == selectedDestinationID }) {
+           !candidates.contains(where: { $0.id == selectedDestinationID }) {
             self.selectedDestinationID = nil
         }
         let continuityTarget = continuityTargetID(
             context: context,
-            localDeviceID: localDevice.id,
-            candidates: candidates
+            localDeviceID: localDevice.id
         )
         if selectedDestinationID == nil, let inferred = continuityTarget {
             selectedDestinationID = inferred
@@ -328,7 +331,7 @@ final class FileTransferViewModel: ObservableObject {
                 selectedDeviceID: selectedDestinationID,
                 continuityTargetID: continuityTarget,
                 candidates: candidateDevices,
-                connectedDeviceIDs: connectedDeviceIDs.intersection(context.connectedDeviceIDs)
+                connectedDeviceIDs: context.connectedDeviceIDs
             )
             await coordinator.setAutomaticDestination(destination)
         } catch {
@@ -357,19 +360,16 @@ final class FileTransferViewModel: ObservableObject {
 
     private func continuityTargetID(
         context: ContinuityContextSnapshot,
-        localDeviceID: DeviceID,
-        candidates: [DeviceDescriptor]
+        localDeviceID: DeviceID
     ) -> DeviceID? {
-        if let controllerID = context.controllerID,
-           controllerID != localDeviceID,
-           context.connectedDeviceIDs.contains(controllerID) {
-            return controllerID
-        }
-        if let peerID = context.controlSession.peerID,
-           context.connectedDeviceIDs.contains(peerID) {
-            return peerID
-        }
-        return candidates.count == 1 ? candidates[0].id : nil
+        ContinuityDestinationResolver.resolve(
+            localDeviceID: localDeviceID,
+            controllerID: context.controllerID,
+            controlSession: context.controlSession,
+            devices: context.workspace?.devices ?? [],
+            connectedDeviceIDs: context.connectedDeviceIDs,
+            requiredCapabilities: [.fileTransferV1]
+        )
     }
 
     private func receiveImmediately(_ event: FileTransferCoordinatorEvent) {

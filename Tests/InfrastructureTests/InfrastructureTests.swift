@@ -478,6 +478,8 @@ final class InfrastructureTests: XCTestCase {
         let clientConnected = expectation(description: "client connected directly")
         let capabilitiesReceived = expectation(description: "peer capabilities received")
         let controlReceived = expectation(description: "control transferred")
+        let serverDisconnected = expectation(description: "passive server reports client offline")
+        let serverHealth = ConnectionHealthRecorder()
         let serverEvents = Task {
             for await event in server.events() {
                 switch event {
@@ -492,6 +494,9 @@ final class InfrastructureTests: XCTestCase {
                     default:
                         break
                     }
+                case .health(let id, let snapshot) where id == clientID:
+                    serverHealth.append(snapshot.health)
+                    if snapshot.health == .disconnected { serverDisconnected.fulfill() }
                 default:
                     break
                 }
@@ -511,6 +516,9 @@ final class InfrastructureTests: XCTestCase {
         )
         await fulfillment(of: [controlReceived], timeout: 3)
         await client.stop()
+        await fulfillment(of: [serverDisconnected], timeout: 3)
+        XCTAssertTrue(serverHealth.values.contains(.disconnected))
+        XCTAssertFalse(serverHealth.values.contains(.reconnecting))
         await server.stop()
         serverEvents.cancel()
         clientEvents.cancel()
@@ -1022,11 +1030,16 @@ final class InfrastructureTests: XCTestCase {
         let retried = expectation(description: "connection retried after authentication timeout")
         retried.expectedFulfillmentCount = 2
         retried.assertForOverFulfill = false
+        let reconnecting = expectation(description: "owned route reports reconnecting")
+        reconnecting.assertForOverFulfill = false
         let events = Task {
             for await event in transport.events() {
                 if case let .health(id, snapshot) = event,
                    id == peerID, snapshot.health == .connecting {
                     retried.fulfill()
+                } else if case let .health(id, snapshot) = event,
+                          id == peerID, snapshot.health == .reconnecting {
+                    reconnecting.fulfill()
                 }
             }
         }
@@ -1037,7 +1050,7 @@ final class InfrastructureTests: XCTestCase {
             key: PairingCryptoSession.randomData(count: 32)
         )
         transport.updateConnectionPolicy(.init(outboundPeerIDs: [peerID]))
-        await fulfillment(of: [retried], timeout: 3)
+        await fulfillment(of: [retried, reconnecting], timeout: 3)
 
         await transport.stop()
         listener.cancel()
@@ -1818,6 +1831,17 @@ private final class StringRecorder: @unchecked Sendable {
     var values: [String] { lock.withLock { storedValues } }
 
     func append(_ value: String) {
+        lock.withLock { storedValues.append(value) }
+    }
+}
+
+private final class ConnectionHealthRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storedValues: [ConnectionHealth] = []
+
+    var values: [ConnectionHealth] { lock.withLock { storedValues } }
+
+    func append(_ value: ConnectionHealth) {
         lock.withLock { storedValues.append(value) }
     }
 }
