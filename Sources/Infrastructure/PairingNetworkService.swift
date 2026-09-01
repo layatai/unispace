@@ -251,17 +251,28 @@ public final class PairingNetworkService: @unchecked Sendable {
         acceptedPeerAddress = sendsOffer ? Self.peerAddress(from: connection.endpoint) : nil
         lock.unlock()
         channel.messageHandler = { [weak self] message in self?.handle(message) }
-        channel.stateHandler = { [weak self] state in
+        channel.stateHandler = { [weak self, weak channel] state in
             switch state {
             case .ready where sendsOffer:
-                channel.send(.offer(device: localDevice, offer: crypto.offer))
+                channel?.send(.offer(device: localDevice, offer: crypto.offer))
+            case .cancelled:
+                // A stray or dropped connection (port probes included) must not
+                // wedge the host: the next joiner needs the empty-channel slot.
+                self?.clearChannel(channel)
             case let .failed(error):
+                self?.clearChannel(channel)
                 self?.fail(error.localizedDescription)
             default:
                 break
             }
         }
         connection.start(queue: queue)
+    }
+
+    private func clearChannel(_ channel: PairingChannel?) {
+        lock.lock()
+        if channel === self.channel || channel == nil { self.channel = nil }
+        lock.unlock()
     }
 
     private func handleCandidates(_ results: Set<NWBrowser.Result>) {
