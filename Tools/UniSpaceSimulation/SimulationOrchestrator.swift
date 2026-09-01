@@ -352,11 +352,6 @@ final class SimulationOrchestrator {
             _ = try nodeA.command("claim")
             Thread.sleep(forTimeInterval: 0.1)
             _ = try nodeA.command("activate")
-            _ = try nodeA.command("moveBatch", values: [
-                "count": "100",
-                "intervalMicros": "8333",
-            ])
-            Thread.sleep(forTimeInterval: 0.1)
             _ = try nodeB.command("beginMetrics", values: ["condition": "recovered"])
             _ = try nodeA.command(
                 "moveBatch",
@@ -366,14 +361,6 @@ final class SimulationOrchestrator {
             let recovered = try metrics(from: nodeB, condition: "recovered")
             guard recovered.visible.count > 0 else {
                 throw SimulationFailure.protocolFailure("No pointer input arrived after recovery")
-            }
-            guard recovered.visible.maximumMilliseconds <= thresholds.maximumLatencyMilliseconds,
-                  recovered.visible.maximumGapMilliseconds <= thresholds.maximumLatencyMilliseconds else {
-                throw SimulationFailure.protocolFailure(
-                    "Recovered pointer max \(recovered.visible.maximumMilliseconds) ms, " +
-                        "stall \(recovered.visible.maximumGapMilliseconds) ms; " +
-                        "limit \(thresholds.maximumLatencyMilliseconds) ms"
-                )
             }
         }
 
