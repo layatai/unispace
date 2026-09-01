@@ -67,6 +67,7 @@ public actor ControlSessionCoordinator {
     public static let realtimeHeartbeatInterval: Duration = .milliseconds(250)
     public static let reliablePointerTimeout: Duration = .milliseconds(750)
     public static let pointerFlushIntervalNanos: UInt64 = 16_000_000
+    public static let windowsActivationTimeout: Duration = .seconds(5)
 
     private let localDeviceID: DeviceID
     private let workspaceID: WorkspaceID
@@ -101,6 +102,7 @@ public actor ControlSessionCoordinator {
     private var heartbeatTask: Task<Void, Never>?
     private var watchdogTask: Task<Void, Never>?
     private var lastHeartbeatNanos: UInt64 = 0
+    private var lastHeartbeatEchoNanos: UInt64?
     private var smoothedHeartbeatIntervalNanos: UInt64?
     private var smoothedRoundTripNanos: UInt64?
     private var activeControlRoute: ActiveControlRoute?
@@ -155,7 +157,7 @@ public actor ControlSessionCoordinator {
     @discardableResult
     public func makeLocalController() async -> ControllerEpoch {
         let epoch = election.claim(for: localDeviceID)
-        await endCurrentSession(notifyPeer: true)
+        await endCurrentSession(notifyPeer: true, reason: "local controller claimed")
         setState(.idle)
         return epoch
     }
@@ -163,7 +165,7 @@ public actor ControlSessionCoordinator {
     public func observeControllerClaim(_ epoch: ControllerEpoch) async {
         guard election.observe(epoch) else { return }
         if epoch.controllerID != localDeviceID {
-            await endCurrentSession(notifyPeer: false)
+            await endCurrentSession(notifyPeer: false, reason: "remote controller claimed")
         }
     }
 
@@ -182,7 +184,7 @@ public actor ControlSessionCoordinator {
         if case .idle = state {
             // Input capture may already be synchronously pre-armed by the edge event tap.
         } else {
-            await endCurrentSession(notifyPeer: true)
+            await endCurrentSession(notifyPeer: true, reason: "session replaced")
         }
         let sessionID = SessionID()
         diagnostic("Activating session \(sessionID) for peer \(target); platform=\(targetPlatform.rawValue)")
@@ -205,8 +207,11 @@ public actor ControlSessionCoordinator {
         capture.setSuppressionEnabled(true)
         transport.setRealtimePeer(target, role: .dialer)
         let supportsExplicitAcknowledgement = targetCapabilities.contains(.activationAcknowledgementV1)
+        let confirmationTimeout = targetPlatform == .windows
+            ? max(activationTimeout, Self.windowsActivationTimeout)
+            : activationTimeout
         let activationResults = (requiresActivationConfirmation || supportsExplicitAcknowledgement)
-            ? beginActivationWait(target: target, sessionID: sessionID)
+            ? beginActivationWait(target: target, sessionID: sessionID, timeout: confirmationTimeout)
             : nil
         do {
             try await transport.send(
@@ -261,7 +266,7 @@ public actor ControlSessionCoordinator {
             }
         } catch {
             diagnostic("Activation failed for session \(sessionID): \(error.localizedDescription)")
-            await endCurrentSession(notifyPeer: false)
+            await endCurrentSession(notifyPeer: false, reason: "activation failed")
             throw error
         }
     }
@@ -294,7 +299,7 @@ public actor ControlSessionCoordinator {
               let targetDisplay,
               targetDisplay.id == activation.targetDisplayID,
               targetDisplay.deviceID == localDeviceID else { return false }
-        await endCurrentSession(notifyPeer: false)
+        await endCurrentSession(notifyPeer: false, reason: "incoming activation")
         injector.activate(
             on: targetDisplay,
             enteringFrom: activation.entryEdge,
@@ -325,7 +330,7 @@ public actor ControlSessionCoordinator {
             currentFlags = rawValue
         }
         if Self.isEmergencyStop(event, flags: currentFlags) {
-            await endCurrentSession(notifyPeer: true)
+            await endCurrentSession(notifyPeer: true, reason: "emergency stop")
             return .emergencyStop
         }
         if case let .mouseButton(button, isDown, _) = event {
@@ -408,6 +413,7 @@ public actor ControlSessionCoordinator {
             previous: smoothedRoundTripNanos,
             sample: now - sentAtNanos
         )
+        lastHeartbeatEchoNanos = now
         publishSessionSnapshotIfChanged()
         diagnostic("Heartbeat echo for session \(sessionID); latency=\(Int((smoothedRoundTripNanos ?? 0) / 1_000_000))ms")
         return Int((smoothedRoundTripNanos ?? 0) / 1_000_000)
@@ -504,18 +510,39 @@ public actor ControlSessionCoordinator {
         switch state {
         case let .activating(_, target, _) where target == deviceID,
              let .controlling(_, target, _) where target == deviceID:
-            await endCurrentSession(notifyPeer: false)
+            await endCurrentSession(notifyPeer: false, reason: "controlling peer disconnected")
         case let .receiving(_, source, _) where source == deviceID:
-            await endCurrentSession(notifyPeer: false)
+            await endCurrentSession(notifyPeer: false, reason: "controller peer disconnected")
         default:
             break
         }
     }
 
-    public func deactivateCurrentSession() async {
+    @discardableResult
+    public func receiveDeactivation(sessionID: SessionID, from source: DeviceID) async -> Bool {
+        switch state {
+        case let .activating(_, target, activeSessionID),
+             let .controlling(_, target, activeSessionID):
+            guard target == source, activeSessionID == sessionID else {
+                diagnostic("Ignoring stale deactivation for session \(sessionID) from \(source)")
+                return false
+            }
+        case let .receiving(_, controller, activeSessionID):
+            guard controller == source, activeSessionID == sessionID else {
+                diagnostic("Ignoring stale deactivation for session \(sessionID) from \(source)")
+                return false
+            }
+        case .idle:
+            return false
+        }
+        await endCurrentSession(notifyPeer: false, reason: "peer requested deactivation")
+        return true
+    }
+
+    public func deactivateCurrentSession(reason: String = "explicit deactivation") async {
         await flushPendingMotion()
         _ = await inputSender.drainOrCancel(after: .milliseconds(50))
-        await endCurrentSession(notifyPeer: true)
+        await endCurrentSession(notifyPeer: true, reason: reason)
     }
 
     /// Waits until input already accepted by the coordinator has reached the
@@ -526,13 +553,13 @@ public actor ControlSessionCoordinator {
     }
 
     public func stop() async {
-        await endCurrentSession(notifyPeer: true)
+        await endCurrentSession(notifyPeer: true, reason: "coordinator stopped")
         capture.stop()
     }
 
-    private func endCurrentSession(notifyPeer: Bool) async {
+    private func endCurrentSession(notifyPeer: Bool, reason: String) async {
         let previous = state
-        diagnostic("Ending session; state=\(previous), notifyPeer=\(notifyPeer)")
+        diagnostic("Ending session; reason=\(reason), state=\(previous), notifyPeer=\(notifyPeer)")
         cancelPendingActivation()
         setState(.idle)
         activationInputTask?.cancel()
@@ -551,6 +578,7 @@ public actor ControlSessionCoordinator {
         currentFlags = 0
         smoothedHeartbeatIntervalNanos = nil
         smoothedRoundTripNanos = nil
+        lastHeartbeatEchoNanos = nil
         pressedButtons.removeAll()
         resetRealtimeSender(incrementGeneration: true)
         resetRealtimeReceiver()
@@ -608,7 +636,8 @@ public actor ControlSessionCoordinator {
 
     private func beginActivationWait(
         target: DeviceID,
-        sessionID: SessionID
+        sessionID: SessionID,
+        timeout: Duration
     ) -> AsyncStream<ActivationOutcome> {
         cancelPendingActivation()
         let pair = AsyncStream<ActivationOutcome>.makeStream(bufferingPolicy: .bufferingNewest(1))
@@ -617,7 +646,6 @@ public actor ControlSessionCoordinator {
             sessionID: sessionID,
             continuation: pair.continuation
         )
-        let timeout = activationTimeout
         activationTimeoutTask = Task { [weak self, clock] in
             do { try await clock.sleep(for: timeout) }
             catch { return }
@@ -831,7 +859,16 @@ public actor ControlSessionCoordinator {
             diagnostic("Keeping session \(sessionID); realtime progress is fresh")
             return
         }
-        await endCurrentSession(notifyPeer: false)
+        let now = clock.nowNanoseconds()
+        if activeControlRoute?.targetCapabilities.contains(.realtimePointerProgressV1) == true,
+           let lastHeartbeatEchoNanos,
+           now >= lastHeartbeatEchoNanos,
+           now - lastHeartbeatEchoNanos <= Self.minimumHeartbeatTimeoutNanos {
+            diagnostic("Keeping session \(sessionID); control heartbeat is fresh")
+            enterRealtimeFallback(target: target)
+            return
+        }
+        await endCurrentSession(notifyPeer: false, reason: "reliable pointer delivery timed out")
     }
 
     private func enterRealtimeFallback(target: DeviceID) {
@@ -900,7 +937,7 @@ public actor ControlSessionCoordinator {
                 guard !Task.isCancelled, let self else { return }
                 let expired = await self.isHeartbeatExpired(source: source, sessionID: sessionID)
                 if expired {
-                    await self.deactivateCurrentSession()
+                    await self.deactivateCurrentSession(reason: "receiver heartbeat expired")
                     return
                 }
             }

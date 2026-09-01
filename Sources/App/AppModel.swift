@@ -338,7 +338,7 @@ final class AppModel: ObservableObject {
         finishPendingActivationInput()
         capture.setSuppressionEnabled(false)
         Task {
-            await coordinator?.deactivateCurrentSession()
+            await coordinator?.deactivateCurrentSession(reason: "manual stop")
             controlTransferGuard.completeStop()
             statusMessage = isLocalController ? "Controller ready" : "Receiver ready"
         }
@@ -790,7 +790,7 @@ final class AppModel: ObservableObject {
             }
             guard controlTransferGuard.activationSucceeded(attempt) else {
                 finishPendingActivationInput()
-                await coordinator.deactivateCurrentSession()
+                await coordinator.deactivateCurrentSession(reason: "activation attempt superseded")
                 capture.setSuppressionEnabled(false)
                 return
             }
@@ -964,9 +964,9 @@ final class AppModel: ObservableObject {
                 from: source,
                 accepted: accepted
             )
-        case .deactivate, .releaseAll:
+        case let .deactivate(sessionID), let .releaseAll(sessionID):
             let previousState = await coordinator?.currentState()
-            await coordinator?.deactivateCurrentSession()
+            guard await coordinator?.receiveDeactivation(sessionID: sessionID, from: source) == true else { return }
             if case .receiving? = previousState {
                 controlTransferGuard.reset()
             } else if case .activating? = previousState {
@@ -1057,7 +1057,7 @@ final class AppModel: ObservableObject {
                   availableDeviceIDs: routableDeviceIDs.union([localDeviceID])
               ),
               let targetDisplay = workspace.devices.flatMap(\.displays).first(where: { $0.id == destination.displayID }) else { return }
-        await coordinator.deactivateCurrentSession()
+        await coordinator.deactivateCurrentSession(reason: "peer crossed boundary \(edge.rawValue)")
         if targetDisplay.deviceID == localDeviceID {
             injector.activate(on: targetDisplay, enteringFrom: destination.edge, normalizedPosition: normalizedPosition)
             controlTransferGuard.returned(to: targetDisplay, enteringFrom: destination.edge)
