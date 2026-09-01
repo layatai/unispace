@@ -30,7 +30,7 @@ struct SessionState {
 struct PointerTracking {
     last_sequence: Option<u64>,
     generation: Option<u64>,
-    last_absolute: Option<(f64, f64)>,
+    last_cumulative: (f64, f64),
     progress: Option<(u64, u64)>,
 }
 
@@ -379,27 +379,18 @@ async fn handle_realtime_pointer(
     if state.pointer.generation != Some(frame.generation) {
         debug!(generation = frame.generation, "pointer generation changed");
         state.pointer.generation = Some(frame.generation);
-        state.pointer.last_absolute = None;
+        // Mirrors the Windows receiver: a new generation restarts from the
+        // frame's own delta (the controller also resets its cumulative base).
+        state.pointer.last_cumulative = (frame.cumulative_x - frame.dx, frame.cumulative_y - frame.dy);
     }
     state.pointer.last_sequence = Some(frame.sequence);
     state.pointer.progress = Some((frame.generation, frame.sequence));
     state.last_heartbeat = Some(Instant::now());
-    // Absolute deltas self-heal from dropped frames and controller-side
-    // cumulative resets; the first frame of a generation uses its own delta.
-    let movement = match state.pointer.last_absolute {
-        Some((last_x, last_y)) => (
-            frame.absolute_x - last_x,
-            frame.absolute_y - last_y,
-        ),
-        None => (frame.dx, frame.dy),
-    };
-    state.pointer.last_absolute = Some((frame.absolute_x, frame.absolute_y));
-    let movement = if movement.0.abs() > 300.0 || movement.1.abs() > 300.0 {
-        debug!(?movement, "pointer jump clamped");
-        (movement.0.clamp(-300.0, 300.0), movement.1.clamp(-300.0, 300.0))
-    } else {
-        movement
-    };
+    let movement = (
+        frame.cumulative_x - state.pointer.last_cumulative.0,
+        frame.cumulative_y - state.pointer.last_cumulative.1,
+    );
+    state.pointer.last_cumulative = (frame.cumulative_x, frame.cumulative_y);
     let event = protocol::InputEvent::PointerMove {
         dx: movement.0,
         dy: movement.1,
