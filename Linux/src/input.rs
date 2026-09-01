@@ -22,6 +22,7 @@ pub struct UinputSink {
     device: VirtualDevice,
     held: BTreeSet<KeyCode>,
     modifiers: u16,
+    swipe_triggered: bool,
 }
 
 impl UinputSink {
@@ -54,6 +55,7 @@ impl UinputSink {
             device,
             held: BTreeSet::new(),
             modifiers: 0,
+            swipe_triggered: false,
         })
     }
     fn emit(&mut self, events: &[LinuxEvent]) -> Result<()> {
@@ -97,41 +99,82 @@ impl UinputSink {
         self.modifiers = next;
         Ok(())
     }
-    fn gesture(&mut self, kind: u8, dx: f64, dy: f64, value: f64) -> Result<()> {
+    /// Gesture phases mirror the Windows injector: swipe/desktop-pinch
+    /// shortcuts fire once per gesture once the accumulated delta crosses a
+    /// threshold, resetting on begin/cancel/end.
+    fn gesture(&mut self, kind: u8, phase: u8, dx: f64, dy: f64, value: f64) -> Result<()> {
+        const PHASE_MAY_BEGIN: u8 = 1;
+        const PHASE_BEGAN: u8 = 2;
+        const PHASE_ENDED: u8 = 4;
+        const PHASE_CANCELLED: u8 = 5;
         match kind {
             1 => {
                 self.key(KeyCode::KEY_LEFTCTRL, true)?;
                 self.wheel(0.0, value * 8.0)?;
                 self.key(KeyCode::KEY_LEFTCTRL, false)
             }
-            2 => {
-                if dx < 0.0 {
-                    self.chord(&[KeyCode::KEY_LEFTALT, KeyCode::KEY_LEFT])
-                } else {
-                    self.chord(&[KeyCode::KEY_LEFTALT, KeyCode::KEY_RIGHT])
+            2 | 7 => {
+                if phase == PHASE_MAY_BEGIN || phase == PHASE_BEGAN {
+                    self.swipe_triggered = false;
                 }
-            }
-            4 => self.chord(&[KeyCode::KEY_LEFTCTRL, KeyCode::KEY_EQUAL]),
-            7 => {
-                if dx < 0.0 {
-                    self.chord(&[
-                        KeyCode::KEY_LEFTCTRL,
-                        KeyCode::KEY_LEFTMETA,
-                        KeyCode::KEY_LEFT,
-                    ])
-                } else if dx > 0.0 {
-                    self.chord(&[
-                        KeyCode::KEY_LEFTCTRL,
-                        KeyCode::KEY_LEFTMETA,
-                        KeyCode::KEY_RIGHT,
-                    ])
-                } else if dy > 0.0 {
-                    self.chord(&[KeyCode::KEY_LEFTMETA, KeyCode::KEY_S])
-                } else {
-                    self.chord(&[KeyCode::KEY_LEFTMETA, KeyCode::KEY_D])
+                if phase == PHASE_CANCELLED {
+                    self.swipe_triggered = false;
+                    return Ok(());
                 }
+                let horizontal = dx.abs() >= dy.abs();
+                let distance = if horizontal { dx.abs() } else { dy.abs() };
+                if !self.swipe_triggered && distance >= 1.0 {
+                    if kind == 7 {
+                        // Desktop swipe: positive X moves to the left workspace.
+                        if horizontal {
+                            self.chord(&[
+                                KeyCode::KEY_LEFTCTRL,
+                                KeyCode::KEY_LEFTMETA,
+                                if dx > 0.0 { KeyCode::KEY_LEFT } else { KeyCode::KEY_RIGHT },
+                            ])?
+                        } else if dy > 0.0 {
+                            self.chord(&[KeyCode::KEY_LEFTMETA, KeyCode::KEY_TAB])?
+                        } else {
+                            self.chord(&[KeyCode::KEY_LEFTMETA, KeyCode::KEY_D])?
+                        }
+                    } else {
+                        // Navigation swipe: finger right = back, finger left = forward.
+                        self.chord(&[
+                            KeyCode::KEY_LEFTALT,
+                            if dx > 0.0 { KeyCode::KEY_LEFT } else { KeyCode::KEY_RIGHT },
+                        ])?
+                    }
+                    self.swipe_triggered = true;
+                }
+                if phase == PHASE_ENDED {
+                    self.swipe_triggered = false;
+                }
+                Ok(())
             }
-            8 => self.chord(&[KeyCode::KEY_LEFTMETA, KeyCode::KEY_D]),
+            4 => self.chord(&[KeyCode::KEY_LEFTCTRL, KeyCode::KEY_LEFTSHIFT, KeyCode::KEY_EQUAL]),
+            8 => {
+                if phase == PHASE_MAY_BEGIN || phase == PHASE_BEGAN {
+                    self.swipe_triggered = false;
+                }
+                if phase == PHASE_CANCELLED {
+                    self.swipe_triggered = false;
+                    return Ok(());
+                }
+                if !self.swipe_triggered && value.abs() >= 1.0 {
+                    if value > 0.0 {
+                        self.chord(&[KeyCode::KEY_LEFTMETA, KeyCode::KEY_D])?
+                    } else {
+                        // Launcher substitute; Hyprland binds Super alone rarely.
+                        self.chord(&[KeyCode::KEY_LEFTMETA, KeyCode::KEY_A])?
+                    }
+                    self.swipe_triggered = true;
+                }
+                if phase == PHASE_ENDED {
+                    self.swipe_triggered = false;
+                }
+                Ok(())
+            }
+            3 | 5 | 6 | 0 => Ok(()),
             _ => Ok(()),
         }
     }
@@ -223,11 +266,12 @@ impl InputSink for UinputSink {
             InputEvent::Modifiers(mask) => self.update_modifiers(*mask),
             InputEvent::Gesture {
                 kind,
+                phase,
                 dx,
                 dy,
                 value,
                 ..
-            } => self.gesture(*kind, *dx, *dy, *value),
+            } => self.gesture(*kind, *phase, *dx, *dy, *value),
         }
     }
     fn release_all(&mut self) -> Result<()> {

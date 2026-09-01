@@ -12,7 +12,7 @@ use tokio::{
     sync::mpsc,
     time::{Instant, interval, sleep},
 };
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 const HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -30,7 +30,7 @@ struct SessionState {
 struct PointerTracking {
     last_sequence: Option<u64>,
     generation: Option<u64>,
-    last_cumulative: (f64, f64),
+    last_absolute: Option<(f64, f64)>,
     progress: Option<(u64, u64)>,
 }
 
@@ -366,34 +366,47 @@ async fn handle_realtime_pointer(
     {
         return Ok(());
     }
-    if state
-        .pointer
-        .last_sequence
-        .is_some_and(|last| frame.sequence <= last)
+    // Dedupe per generation: the controller restarts its sequence counter
+    // whenever the realtime generation increments.
+    if state.pointer.generation == Some(frame.generation)
+        && state
+            .pointer
+            .last_sequence
+            .is_some_and(|last| frame.sequence <= last)
     {
         return Ok(());
+    }
+    if state.pointer.generation != Some(frame.generation) {
+        debug!(generation = frame.generation, "pointer generation changed");
+        state.pointer.generation = Some(frame.generation);
+        state.pointer.last_absolute = None;
     }
     state.pointer.last_sequence = Some(frame.sequence);
     state.pointer.progress = Some((frame.generation, frame.sequence));
     state.last_heartbeat = Some(Instant::now());
-    // Mirrors the Windows receiver: within a generation the movement is the
-    // cumulative delta; a new generation restarts from the frame's own delta.
-    let movement = if state.pointer.generation == Some(frame.generation) {
-        (
-            frame.cumulative_x - state.pointer.last_cumulative.0,
-            frame.cumulative_y - state.pointer.last_cumulative.1,
-        )
-    } else {
-        state.pointer.generation = Some(frame.generation);
-        (frame.dx, frame.dy)
+    // Absolute deltas self-heal from dropped frames and controller-side
+    // cumulative resets; the first frame of a generation uses its own delta.
+    let movement = match state.pointer.last_absolute {
+        Some((last_x, last_y)) => (
+            frame.absolute_x - last_x,
+            frame.absolute_y - last_y,
+        ),
+        None => (frame.dx, frame.dy),
     };
-    state.pointer.last_cumulative = (frame.cumulative_x, frame.cumulative_y);
+    state.pointer.last_absolute = Some((frame.absolute_x, frame.absolute_y));
+    let movement = if movement.0.abs() > 300.0 || movement.1.abs() > 300.0 {
+        debug!(?movement, "pointer jump clamped");
+        (movement.0.clamp(-300.0, 300.0), movement.1.clamp(-300.0, 300.0))
+    } else {
+        movement
+    };
     let event = protocol::InputEvent::PointerMove {
         dx: movement.0,
         dy: movement.1,
         absolute_x: frame.absolute_x,
         absolute_y: frame.absolute_y,
     };
+    tracing::debug!(dx = movement.0, dy = movement.1, "pointer");
     inject_with_boundary(state, writer, input, event).await
 }
 
