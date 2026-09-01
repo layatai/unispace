@@ -154,29 +154,18 @@ final class SimulationMetricsRecorder: @unchecked Sendable {
 
 final class SimulationInputInjector: InputInjector, @unchecked Sendable {
     private let recorder: SimulationMetricsRecorder
-    private let lock = NSLock()
-    private var events: [InputEvent] = []
-    private var activationCount = 0
-    private var releaseCount = 0
 
     init(recorder: SimulationMetricsRecorder) {
         self.recorder = recorder
     }
 
-    func activate(on display: DisplayDescriptor, enteringFrom edge: DisplayEdge, normalizedPosition: Double) {
-        lock.withLock { activationCount += 1 }
-    }
+    func activate(on display: DisplayDescriptor, enteringFrom edge: DisplayEdge, normalizedPosition: Double) {}
 
     func inject(_ event: InputEvent) {
         recorder.recordVisible(event)
-        lock.withLock { events.append(event) }
     }
 
-    func releaseAll() { lock.withLock { releaseCount += 1 } }
-
-    func snapshot() -> (events: [InputEvent], activations: Int, releases: Int) {
-        lock.withLock { (events, activationCount, releaseCount) }
-    }
+    func releaseAll() {}
 }
 
 enum SimulationFiles {

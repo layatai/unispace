@@ -36,8 +36,6 @@ actor SimulationNodeRuntime {
 
         guard let controlPort = NWEndpoint.Port(rawValue: configuration.ports.control),
               let directControlPort = NWEndpoint.Port(rawValue: configuration.peerPorts.control),
-              let quicPort = NWEndpoint.Port(rawValue: configuration.ports.quic),
-              let directQUICPort = NWEndpoint.Port(rawValue: configuration.peerPorts.quic),
               let realtimePort = NWEndpoint.Port(rawValue: configuration.ports.realtime),
               let directRealtimePort = NWEndpoint.Port(rawValue: configuration.peerPorts.realtime),
               let filePort = NWEndpoint.Port(rawValue: configuration.ports.files),
@@ -50,8 +48,6 @@ actor SimulationNodeRuntime {
         transport = NetworkPeerTransport(
             listenPort: controlPort,
             directPort: directControlPort,
-            quicListenPort: quicPort,
-            directQUICPort: directQUICPort,
             realtimeListenPort: realtimePort,
             directRealtimePort: directRealtimePort,
             pointerListenPort: realtimePort,
@@ -146,14 +142,14 @@ actor SimulationNodeRuntime {
         let coordinator = self.coordinator
         let metrics = self.metrics
         realtimeInputTask = Task.detached(
-            priority: ControlTaskPriority.realtimeInput
+            priority: realtimeInputTaskPriority
         ) { [transport, coordinator, metrics] in
             for await event in transport.realtimeInputEvents() {
                 guard !Task.isCancelled else { return }
-                if case let .realtimeInput(_, frame) = event {
+                if case let .realtimeInput(source, frame) = event {
                     metrics.recordWire(timestampNanos: frame.timestampNanos, isPointer: true)
+                    coordinator.handleIncomingRealtime(frame, from: source)
                 }
-                _ = RemoteInputEventRouter.routeRealtime(event, to: coordinator)
             }
         }
         try await transport.start(localDevice: local, workspace: workspace, key: key)
@@ -337,12 +333,12 @@ actor SimulationNodeRuntime {
             emitter.send(.event("controlDisconnected", values: ["peer": deviceID.description]))
         case let .control(source, envelope):
             await handleControl(envelope.message, from: source)
-        case let .input(_, frame):
+        case let .input(source, frame):
             metrics.recordWire(
                 timestampNanos: frame.timestampNanos,
                 isPointer: Self.isPointer(frame.event)
             )
-            _ = await RemoteInputEventRouter.route(event, to: coordinator)
+            await coordinator.handleIncoming(frame, from: source)
         case .realtimeInput:
             break
         case .discovered, .lost, .workspaceUpgradeRequired, .health, .failure:
@@ -555,7 +551,7 @@ func runSimulationNode(configurationURL: URL) async throws {
         guard let data = line.data(using: .utf8) else { continue }
         do {
             let command = try SimulationJSON.decoder.decode(SimulationCommand.self, from: data)
-            let shouldContinue = await Task.detached(priority: ControlTaskPriority.realtimeInput) {
+            let shouldContinue = await Task.detached(priority: realtimeInputTaskPriority) {
                 await runtime.handle(command)
             }.value
             if !shouldContinue { break }

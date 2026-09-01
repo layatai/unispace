@@ -2,7 +2,6 @@ import Foundation
 
 struct SimulationPorts: Codable, Sendable {
     let control: UInt16
-    let quic: UInt16
     let realtime: UInt16
     let files: UInt16
     let clipboard: UInt16
@@ -138,7 +137,6 @@ enum SimulationFailure: Error, LocalizedError {
     case timeout(String)
     case childExited(String)
     case protocolFailure(String)
-    case thresholdFailure([String])
 
     var errorDescription: String? {
         switch self {
@@ -146,8 +144,6 @@ enum SimulationFailure: Error, LocalizedError {
              let .timeout(message), let .childExited(message),
              let .protocolFailure(message):
             message
-        case let .thresholdFailure(failures):
-            failures.joined(separator: "; ")
         }
     }
 }

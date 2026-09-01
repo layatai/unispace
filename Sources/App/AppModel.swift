@@ -610,11 +610,13 @@ final class AppModel: ObservableObject {
                 }
             }
             realtimeInputTask = Task.detached(
-                priority: ControlTaskPriority.realtimeInput
+                priority: realtimeInputTaskPriority
             ) { [coordinator, transport] in
                 for await event in transport.realtimeInputEvents() {
                     if Task.isCancelled { break }
-                    _ = RemoteInputEventRouter.routeRealtime(event, to: coordinator)
+                    if case let .realtimeInput(source, frame) = event {
+                        coordinator.handleIncomingRealtime(frame, from: source)
+                    }
                 }
             }
             sessionTask = Task { [weak self, coordinator] in
@@ -672,7 +674,7 @@ final class AppModel: ObservableObject {
         do {
             try capture.start { [weak self] event in
                 guard Thread.isMainThread else {
-                    Task(priority: ControlTaskPriority.realtimeInput) { @MainActor [weak self] in
+                    Task(priority: realtimeInputTaskPriority) { @MainActor [weak self] in
                         self?.captureSynchronously(event)
                     }
                     return false
@@ -722,7 +724,7 @@ final class AppModel: ObservableObject {
                     continuation: pair.continuation
                 )
                 capture.setSuppressionEnabled(true)
-                Task(priority: ControlTaskPriority.realtimeInput) { @MainActor [weak self] in
+                Task(priority: realtimeInputTaskPriority) { @MainActor [weak self] in
                     await self?.completeActivation(transition, attempt: attempt)
                 }
                 return true
@@ -736,7 +738,7 @@ final class AppModel: ObservableObject {
         if case .mouseButton = event {
             coordinator?.suspendCapturedPointerFastPath()
         }
-        Task(priority: ControlTaskPriority.realtimeInput) { @MainActor [weak self] in
+        Task(priority: realtimeInputTaskPriority) { @MainActor [weak self] in
             await self?.forwardCaptured(event)
         }
         return false
@@ -875,9 +877,8 @@ final class AppModel: ObservableObject {
             }
         case let .control(source, envelope):
             await handleControl(envelope.message, from: source)
-        case .input:
-            guard let coordinator else { break }
-            _ = await RemoteInputEventRouter.route(event, to: coordinator)
+        case let .input(source, frame):
+            await coordinator?.handleIncoming(frame, from: source)
         case .realtimeInput:
             break
         case let .health(deviceID, snapshot):

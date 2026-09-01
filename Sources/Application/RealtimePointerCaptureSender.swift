@@ -2,11 +2,6 @@ import Foundation
 import UniSpaceDomain
 
 final class RealtimePointerCaptureSender: @unchecked Sendable {
-    private enum Mode: Equatable {
-        case legacy
-        case acknowledged
-    }
-
     private struct Session {
         let epoch: ControllerEpoch
         let target: DeviceID
@@ -18,7 +13,6 @@ final class RealtimePointerCaptureSender: @unchecked Sendable {
         var lastAcknowledgedSequence: UInt64?
         var lastAcknowledgementNanos: UInt64?
         var isSuspended = false
-        let mode: Mode
     }
 
     private let workspaceID: WorkspaceID
@@ -40,30 +34,7 @@ final class RealtimePointerCaptureSender: @unchecked Sendable {
         self.clock = clock
     }
 
-    func enableLegacy(
-        epoch: ControllerEpoch,
-        target: DeviceID,
-        sessionID: SessionID,
-        generation: UInt64,
-        sequence: UInt64,
-        cumulativePointerX: Double,
-        cumulativePointerY: Double
-    ) {
-        enable(
-            epoch: epoch,
-            target: target,
-            sessionID: sessionID,
-            generation: generation,
-            sequence: sequence,
-            cumulativePointerX: cumulativePointerX,
-            cumulativePointerY: cumulativePointerY,
-            lastAcknowledgedSequence: nil,
-            lastAcknowledgementNanos: nil,
-            mode: .legacy
-        )
-    }
-
-    func enableAcknowledged(
+    func enable(
         epoch: ControllerEpoch,
         target: DeviceID,
         sessionID: SessionID,
@@ -71,21 +42,22 @@ final class RealtimePointerCaptureSender: @unchecked Sendable {
         sequence: UInt64,
         cumulativePointerX: Double,
         cumulativePointerY: Double,
-        acknowledgedSequence: UInt64,
-        acknowledgedAtNanos: UInt64
+        acknowledgedSequence: UInt64? = nil,
+        acknowledgedAtNanos: UInt64? = nil
     ) {
-        enable(
-            epoch: epoch,
-            target: target,
-            sessionID: sessionID,
-            generation: generation,
-            sequence: sequence,
-            cumulativePointerX: cumulativePointerX,
-            cumulativePointerY: cumulativePointerY,
-            lastAcknowledgedSequence: acknowledgedSequence,
-            lastAcknowledgementNanos: acknowledgedAtNanos,
-            mode: .acknowledged
-        )
+        lock.withLock {
+            session = Session(
+                epoch: epoch,
+                target: target,
+                sessionID: sessionID,
+                generation: generation,
+                sequence: sequence,
+                cumulativePointerX: cumulativePointerX,
+                cumulativePointerY: cumulativePointerY,
+                lastAcknowledgedSequence: acknowledgedSequence,
+                lastAcknowledgementNanos: acknowledgedAtNanos
+            )
+        }
     }
 
     func disable() {
@@ -106,7 +78,7 @@ final class RealtimePointerCaptureSender: @unchecked Sendable {
         }
         let prepared = lock.withLock { () -> (RealtimePointerFrame, DeviceID)? in
             guard var active = session, !active.isSuspended else { return nil }
-            if active.mode == .acknowledged {
+            if active.lastAcknowledgementNanos != nil {
                 let now = clock.nowNanoseconds()
                 guard let acknowledgedAt = active.lastAcknowledgementNanos,
                       now >= acknowledgedAt,
@@ -142,7 +114,7 @@ final class RealtimePointerCaptureSender: @unchecked Sendable {
     func acknowledge(_ progress: RealtimePointerProgress, from source: DeviceID) -> Bool {
         lock.withLock {
             guard var active = session,
-                  active.mode == .acknowledged,
+                  active.lastAcknowledgementNanos != nil,
                   active.target == source,
                   active.sessionID == progress.sessionID,
                   active.generation == progress.generation,
@@ -157,31 +129,13 @@ final class RealtimePointerCaptureSender: @unchecked Sendable {
         }
     }
 
-    private func enable(
-        epoch: ControllerEpoch,
-        target: DeviceID,
-        sessionID: SessionID,
-        generation: UInt64,
-        sequence: UInt64,
-        cumulativePointerX: Double,
-        cumulativePointerY: Double,
-        lastAcknowledgedSequence: UInt64?,
-        lastAcknowledgementNanos: UInt64?,
-        mode: Mode
-    ) {
-        lock.withLock {
-            session = Session(
-                epoch: epoch,
-                target: target,
-                sessionID: sessionID,
-                generation: generation,
-                sequence: sequence,
-                cumulativePointerX: cumulativePointerX,
-                cumulativePointerY: cumulativePointerY,
-                lastAcknowledgedSequence: lastAcknowledgedSequence,
-                lastAcknowledgementNanos: lastAcknowledgementNanos,
-                mode: mode
-            )
+    func hasFreshAcknowledgement() -> Bool {
+        let now = clock.nowNanoseconds()
+        return lock.withLock {
+            guard let acknowledgedAt = session?.lastAcknowledgementNanos,
+                  now >= acknowledgedAt else { return false }
+            return now - acknowledgedAt <= ControlSessionCoordinator.realtimeProgressTimeoutNanos
         }
     }
+
 }

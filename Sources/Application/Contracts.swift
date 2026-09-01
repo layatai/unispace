@@ -1,6 +1,8 @@
 import Foundation
 import UniSpaceDomain
 
+public let realtimeInputTaskPriority = TaskPriority(rawValue: 33)
+
 public enum PermissionKind: String, CaseIterable, Sendable {
     case inputMonitoring
     case postEvents
