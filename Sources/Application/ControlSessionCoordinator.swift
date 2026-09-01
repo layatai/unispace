@@ -282,7 +282,7 @@ public actor ControlSessionCoordinator {
             sessionID: sessionID,
             outcome: accepted ? .accepted : .rejected
         )
-        diagnostic("Activation result for session \(sessionID); accepted=\(accepted), handled=\(handled)")
+        diagnostic("t=\(clock.nowNanoseconds()) activation result for session \(sessionID); accepted=\(accepted), handled=\(handled)")
         return handled
     }
 
@@ -415,7 +415,7 @@ public actor ControlSessionCoordinator {
         )
         lastHeartbeatEchoNanos = now
         publishSessionSnapshotIfChanged()
-        diagnostic("Heartbeat echo for session \(sessionID); latency=\(Int((smoothedRoundTripNanos ?? 0) / 1_000_000))ms")
+        diagnostic("t=\(now) heartbeat echo for session \(sessionID); latency=\(Int((smoothedRoundTripNanos ?? 0) / 1_000_000))ms")
         return Int((smoothedRoundTripNanos ?? 0) / 1_000_000)
     }
 

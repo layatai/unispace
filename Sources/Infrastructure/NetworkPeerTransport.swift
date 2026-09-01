@@ -94,6 +94,14 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
     private var realtimeTransport: QUICRealtimeTransport?
     private var authenticatedPointerTransport: AuthenticatedPointerTransport?
     private var running = false
+    private var eventTracerClosure: (@Sendable (String) -> Void)?
+
+    /// Optional low-overhead monotonic trace sink used to diagnose cross-process
+    /// delivery latency (decoded → yielded → consumed → coordinator).
+    public var eventTracer: (@Sendable (String) -> Void)? {
+        get { lock.withLock { eventTracerClosure } }
+        set { lock.withLock { eventTracerClosure = newValue } }
+    }
 
     public init(
         listenPort: NWEndpoint.Port = NetworkPeerTransport.controlPort,
@@ -793,6 +801,17 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
         from deviceID: DeviceID,
         managed: SecurePeerConnection
     ) throws {
+        switch envelope.message {
+        case let .activationResult(sessionID, accepted):
+            eventTracer?("t=\(DispatchTime.now().uptimeNanoseconds) trace decoded activationResult session=\(sessionID) accepted=\(accepted)")
+        case let .heartbeat(sessionID, _):
+            eventTracer?(
+                "t=\(DispatchTime.now().uptimeNanoseconds) trace decoded heartbeat " +
+                    "session=\(sessionID) from=\(deviceID)"
+            )
+        default:
+            break
+        }
         if case let .hello(device) = envelope.message {
             guard device.id == deviceID else { throw PeerTransportError.authenticationFailed }
             lock.withLock {

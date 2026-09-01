@@ -64,6 +64,7 @@ final class AppModel: ObservableObject {
 
     init() {
         self.localDeviceID = Self.loadDeviceID()
+        transport.eventTracer = { [diagnosticLog] message in diagnosticLog.record(message) }
         configurePairingCallbacks()
         injector.pointerPositionHandler = { [weak self] x, y in
             Task { @MainActor [weak self] in await self?.handleInjectedPointer(x: x, y: y) }
@@ -887,6 +888,9 @@ final class AppModel: ObservableObject {
                 statusMessage = "Connection lost — control returned to this Mac"
             }
         case let .control(source, envelope):
+            if case let .activationResult(sessionID, accepted) = envelope.message {
+                diagnosticLog.record("t=\(DispatchTime.now().uptimeNanoseconds) trace consumed activationResult session=\(sessionID) accepted=\(accepted)")
+            }
             await handleControl(envelope.message, from: source)
         case let .input(source, frame):
             await coordinator?.handleIncoming(frame, from: source)
@@ -1022,6 +1026,8 @@ final class AppModel: ObservableObject {
                 if health == .degraded {
                     statusMessage = "Slow \(transportKind.rawValue.uppercased()) connection to \(deviceName(source))"
                 }
+            } else {
+                diagnosticLog.record("t=\(DispatchTime.now().uptimeNanoseconds) trace unhandled heartbeat session=\(sessionID) from=\(source)")
             }
         case let .realtimePointerProgress(progress):
             _ = await coordinator?.receiveRealtimePointerProgress(progress, from: source)
