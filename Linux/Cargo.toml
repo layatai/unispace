@@ -34,6 +34,7 @@ hex = "0.4"
 hkdf = "0.12"
 hmac = "0.12"
 keyring = { version = "3.6", features = ["sync-secret-service"] }
+libc = "0.2"
 ksni = "0.3.6"
 notify-rust = "4.11"
 p256 = { version = "0.13", features = ["ecdh", "pem"] }

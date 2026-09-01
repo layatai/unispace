@@ -113,6 +113,9 @@ impl SecureStream {
         profile: ChannelProfile,
     ) -> Result<Self> {
         ensure!(workspace_key.len() >= 32, "workspace key is too short");
+        // The channel can sit idle between sessions; without keepalive a
+        // restarted peer leaves this side parked on a half-open socket.
+        enable_keepalive(&stream);
         let mut local_nonce = vec![0u8; 32];
         OsRng.fill_bytes(&mut local_nonce);
         let proof = hello_proof(
@@ -310,6 +313,43 @@ impl SecureWriter {
         combined.extend_from_slice(&ciphertext);
         let mut write_half = self.write_half.lock().await;
         write_outer(&mut *write_half, self.sealed_kind, &combined).await
+    }
+}
+
+/// Kernel-level keepalive: the channel can sit idle between sessions, and
+/// without probes a restarted peer leaves this side parked on a half-open
+/// socket forever. Probes start after 10s idle, every 5s, ~3 retries to kill.
+fn enable_keepalive(stream: &TcpStream) {
+    use std::os::fd::AsRawFd;
+    let fd = stream.as_raw_fd();
+    unsafe {
+        let one: libc::c_int = 1;
+        libc::setsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_KEEPALIVE,
+            &one as *const _ as *const libc::c_void,
+            std::mem::size_of_val(&one) as libc::socklen_t,
+        );
+        #[cfg(target_os = "linux")]
+        {
+            let idle: libc::c_int = 10;
+            libc::setsockopt(
+                fd,
+                libc::IPPROTO_TCP,
+                libc::TCP_KEEPIDLE,
+                &idle as *const _ as *const libc::c_void,
+                std::mem::size_of_val(&idle) as libc::socklen_t,
+            );
+            let interval: libc::c_int = 5;
+            libc::setsockopt(
+                fd,
+                libc::IPPROTO_TCP,
+                libc::TCP_KEEPINTVL,
+                &interval as *const _ as *const libc::c_void,
+                std::mem::size_of_val(&interval) as libc::socklen_t,
+            );
+        }
     }
 }
 

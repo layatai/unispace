@@ -4815,6 +4815,7 @@ dependencies = [
  "hmac",
  "keyring",
  "ksni",
+ "libc",
  "notify-rust",
  "p256",
  "rand",
