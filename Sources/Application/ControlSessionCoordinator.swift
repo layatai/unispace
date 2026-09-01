@@ -227,18 +227,6 @@ public actor ControlSessionCoordinator {
             setState(.controlling(epoch: epoch, target: target, session: sessionID))
             diagnostic("Session \(sessionID) is controlling peer \(target); mode=\(realtimeDeliveryMode)")
             lastMotionFlushNanos = clock.nowNanoseconds()
-            if let initialEvent {
-                _ = await handleCaptured(initialEvent)
-            }
-            if let pendingEvents {
-                activationInputTask?.cancel()
-                activationInputTask = Task(priority: realtimeInputTaskPriority) { [weak self] in
-                    for await event in pendingEvents {
-                        guard !Task.isCancelled, let self else { return }
-                        _ = await self.handleCaptured(event)
-                    }
-                }
-            }
             if let activationResults {
                 await sendHeartbeat(target: target, sessionID: sessionID)
                 startHeartbeat(target: target, sessionID: sessionID)
@@ -252,6 +240,18 @@ public actor ControlSessionCoordinator {
                 }
             } else {
                 startHeartbeat(target: target, sessionID: sessionID)
+            }
+            if let initialEvent {
+                _ = await handleCaptured(initialEvent)
+            }
+            if let pendingEvents {
+                activationInputTask?.cancel()
+                activationInputTask = Task(priority: realtimeInputTaskPriority) { [weak self] in
+                    for await event in pendingEvents {
+                        guard !Task.isCancelled, let self else { return }
+                        _ = await self.handleCaptured(event)
+                    }
+                }
             }
             if realtimeDeliveryMode == .legacy {
                 realtimePointerCaptureSender.enable(

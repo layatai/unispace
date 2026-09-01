@@ -1757,7 +1757,7 @@ final class ApplicationTests: XCTestCase {
         await coordinator.stop()
     }
 
-    func testAcknowledgedActivationForwardsInputWhileConfirmationIsPending() async throws {
+    func testAcknowledgedActivationBuffersInputUntilPeerAccepts() async throws {
         let local = DeviceID()
         let remote = DeviceID()
         let transport = TransportSpy()
@@ -1802,15 +1802,9 @@ final class ApplicationTests: XCTestCase {
 
         pending.continuation.yield(.key(code: 12, isDown: true, isRepeat: false))
         pending.continuation.finish()
-        for _ in 0..<500 where transport.frames.count < 2 {
-            try await Task.sleep(for: .milliseconds(2))
-        }
-        await coordinator.flushPendingInput()
+        for _ in 0..<100 { await Task.yield() }
+        XCTAssertTrue(transport.frames.isEmpty, "Pointer traffic must not delay the activation acknowledgement")
 
-        XCTAssertEqual(transport.frames.map(\.event), [
-            .pointerMove(deltaX: 1, deltaY: 0, absoluteX: 100, absoluteY: 50),
-            .key(code: 12, isDown: true, isRepeat: false)
-        ])
         let acknowledged = await coordinator.receiveActivationResult(
             sessionID: sessionID,
             from: remote,
@@ -1818,6 +1812,14 @@ final class ApplicationTests: XCTestCase {
         )
         XCTAssertTrue(acknowledged)
         try await activation.value
+        for _ in 0..<500 where transport.frames.count < 2 {
+            try await Task.sleep(for: .milliseconds(2))
+        }
+        await coordinator.flushPendingInput()
+        XCTAssertEqual(transport.frames.map(\.event), [
+            .pointerMove(deltaX: 1, deltaY: 0, absoluteX: 100, absoluteY: 50),
+            .key(code: 12, isDown: true, isRepeat: false)
+        ])
         await coordinator.stop()
     }
 
