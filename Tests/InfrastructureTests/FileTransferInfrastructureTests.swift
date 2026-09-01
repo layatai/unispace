@@ -386,6 +386,7 @@ final class FileTransferInfrastructureTests: XCTestCase {
             enableBonjour: false
         )
         let connected = expectation(description: "content channel connected")
+        let clientConnected = expectation(description: "content client connected")
         let received = expectation(description: "encrypted transfer envelope received")
         let serverTask = Task {
             for await event in serverTransport.events() {
@@ -399,13 +400,20 @@ final class FileTransferInfrastructureTests: XCTestCase {
                 }
             }
         }
+        let clientTask = Task {
+            for await event in clientTransport.events() {
+                if case let .connected(deviceID) = event, deviceID == server.id {
+                    clientConnected.fulfill()
+                }
+            }
+        }
         try await clientTransport.start(
             localDevice: client,
             workspace: clientWorkspace,
             key: key
         )
         clientTransport.setDesiredPeer(server.id)
-        await fulfillment(of: [connected], timeout: 5)
+        await fulfillment(of: [connected, clientConnected], timeout: 5)
         try await clientTransport.send(
             FileTransferEnvelope(
                 workspaceID: workspaceID,
@@ -418,6 +426,7 @@ final class FileTransferInfrastructureTests: XCTestCase {
         await clientTransport.stop()
         await serverTransport.stop()
         serverTask.cancel()
+        clientTask.cancel()
     }
 
     private func makeManifest(entry: TransferManifestEntry) -> TransferManifest {
