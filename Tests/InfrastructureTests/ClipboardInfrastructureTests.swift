@@ -50,6 +50,7 @@ final class ClipboardInfrastructureTests: XCTestCase {
             enableBonjour: false
         )
         let connected = expectation(description: "clipboard channel connected")
+        let clientConnected = expectation(description: "clipboard client connected")
         let received = expectation(description: "clipboard update received")
         let serverTask = Task {
             for await event in serverTransport.events() {
@@ -63,10 +64,17 @@ final class ClipboardInfrastructureTests: XCTestCase {
                 }
             }
         }
+        let clientTask = Task {
+            for await event in clientTransport.events() {
+                if case let .connected(deviceID) = event, deviceID == server.id {
+                    clientConnected.fulfill()
+                }
+            }
+        }
 
         try await clientTransport.start(localDevice: client, workspace: clientWorkspace, key: key)
         clientTransport.setDesiredPeer(server.id)
-        await fulfillment(of: [connected], timeout: 5)
+        await fulfillment(of: [connected, clientConnected], timeout: 5)
         let representations = [ClipboardRepresentation(kind: .plainText, value: "hello")]
         try await clientTransport.send(
             ClipboardEnvelope(
@@ -106,6 +114,7 @@ final class ClipboardInfrastructureTests: XCTestCase {
         await clientTransport.stop()
         await serverTransport.stop()
         serverTask.cancel()
+        clientTask.cancel()
         XCTAssertNil(clientTransport.activePort)
     }
 

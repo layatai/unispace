@@ -55,7 +55,8 @@ if [[ "$mode" == "--input-smoke" ]]; then
 fi
 
 result_name="FullTests"
-test_arguments=()
+performance_test="UniSpaceInfrastructureTests/TwoProcessSimulationTests/testTwoProcessSimulationMeetsProtocolLatencyAndRecoveryGates"
+test_arguments=("-skip-testing:$performance_test")
 if [[ "$mode" == "--unit" ]]; then
   result_name="UnitTests"
   test_arguments+=("-skip-testing:UniSpaceUITests" "CODE_SIGNING_ALLOWED=NO")
@@ -71,3 +72,4 @@ xcodebuild "${common_arguments[@]}" \
   -resultBundlePath "$result_bundle" \
   "${test_arguments[@]}"
 node ./Scripts/check-coverage.mjs "$result_bundle"
+./Scripts/simulate.sh run-two --samples 500 --json

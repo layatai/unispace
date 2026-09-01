@@ -49,6 +49,20 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.layatai.unispace.infrastructure
         GENERATE_INFOPLIST_FILE: true
         SKIP_INSTALL: true
+  UniSpaceSimulation:
+    type: tool
+    platform: macOS
+    sources: Tools/UniSpaceSimulation
+    dependencies:
+      - target: UniSpaceDomain
+      - target: UniSpaceApplication
+      - target: UniSpaceInfrastructure
+    settings:
+      base:
+        PRODUCT_NAME: UniSpaceSimulation
+        PRODUCT_BUNDLE_IDENTIFIER: com.layatai.unispace.simulation
+        GENERATE_INFOPLIST_FILE: true
+        LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path"
   UniSpace:
     type: application
     platform: macOS
@@ -113,6 +127,7 @@ targets:
       - target: UniSpaceDomain
       - target: UniSpaceApplication
       - target: UniSpaceInfrastructure
+      - target: UniSpaceSimulation
     settings:
       base:
         GENERATE_INFOPLIST_FILE: true
@@ -133,6 +148,7 @@ schemes:
         UniSpaceDomainTests: [test]
         UniSpaceApplicationTests: [test]
         UniSpaceInfrastructureTests: [test]
+        UniSpaceSimulation: [build]
         UniSpaceUITests: [test]
     test:
       gatherCoverageData: true
@@ -141,3 +157,7 @@ schemes:
         - UniSpaceApplicationTests
         - UniSpaceInfrastructureTests
         - UniSpaceUITests
+  UniSpaceSimulation:
+    build:
+      targets:
+        UniSpaceSimulation: all

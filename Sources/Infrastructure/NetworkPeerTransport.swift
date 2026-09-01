@@ -57,6 +57,8 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
     private let configuredDirectQUICPort: NWEndpoint.Port
     private let configuredRealtimeListenPort: NWEndpoint.Port
     private let configuredDirectRealtimePort: NWEndpoint.Port
+    private let configuredPointerListenPort: NWEndpoint.Port
+    private let configuredDirectPointerPort: NWEndpoint.Port
     private let enableBonjour: Bool
     private let enableQUIC: Bool
     private let enableRealtime: Bool
@@ -98,6 +100,8 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
         directQUICPort: NWEndpoint.Port? = nil,
         realtimeListenPort: NWEndpoint.Port = NetworkPeerTransport.realtimePort,
         directRealtimePort: NWEndpoint.Port = NetworkPeerTransport.realtimePort,
+        pointerListenPort: NWEndpoint.Port = NetworkPeerTransport.crossPlatformPointerPort,
+        directPointerPort: NWEndpoint.Port = NetworkPeerTransport.crossPlatformPointerPort,
         enableBonjour: Bool = true,
         enableQUIC: Bool = true,
         enableRealtime: Bool = true,
@@ -109,6 +113,8 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
         configuredDirectQUICPort = directQUICPort ?? directPort
         configuredRealtimeListenPort = realtimeListenPort
         configuredDirectRealtimePort = directRealtimePort
+        configuredPointerListenPort = pointerListenPort
+        configuredDirectPointerPort = directPointerPort
         self.enableBonjour = enableBonjour
         self.enableQUIC = enableQUIC
         self.enableRealtime = enableRealtime
@@ -235,7 +241,10 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
         if enableRealtime,
            workspace.devices.contains(where: { $0.capabilities.contains(.udpPointerV2) }) {
             do {
-                let pointerTransport = AuthenticatedPointerTransport()
+                let pointerTransport = AuthenticatedPointerTransport(
+                    listenPort: configuredPointerListenPort,
+                    directPort: configuredDirectPointerPort
+                )
                 pointerTransport.frameHandler = { [weak self] source, frame in
                     self?.emit(.realtimeInput(source, PortableInputMapper.map(frame)))
                 }
