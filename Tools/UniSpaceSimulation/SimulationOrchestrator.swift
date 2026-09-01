@@ -356,6 +356,7 @@ final class SimulationOrchestrator {
                 "count": "100",
                 "intervalMicros": "8333",
             ])
+            Thread.sleep(forTimeInterval: 0.1)
             _ = try nodeB.command("beginMetrics", values: ["condition": "recovered"])
             _ = try nodeA.command(
                 "moveBatch",
