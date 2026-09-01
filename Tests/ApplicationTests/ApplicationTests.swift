@@ -1156,6 +1156,11 @@ final class ApplicationTests: XCTestCase {
         XCTAssertEqual(transport.realtimeFrames.last?.deltaX, 3)
         XCTAssertEqual(transport.realtimeFrames.last?.deltaY, 2)
 
+        coordinator.suspendCapturedPointerFastPath()
+        XCTAssertFalse(coordinator.sendCapturedPointerImmediately(immediate))
+        _ = await coordinator.handleCaptured(.mouseButton(button: .left, isDown: false, clickCount: 1))
+        XCTAssertTrue(coordinator.sendCapturedPointerImmediately(immediate))
+
         clock.advance(by: ControlSessionCoordinator.realtimeProgressTimeoutNanos + 1)
         XCTAssertFalse(coordinator.sendCapturedPointerImmediately(immediate))
         await coordinator.stop()
