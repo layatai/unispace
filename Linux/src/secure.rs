@@ -33,6 +33,7 @@ struct SecureHello {
     nonce: Vec<u8>,
     #[serde(with = "base64_bytes")]
     proof: Vec<u8>,
+    #[serde(default, rename = "supportedWireVersions")]
     supported_wire_versions: Vec<u16>,
 }
 

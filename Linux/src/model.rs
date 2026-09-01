@@ -177,11 +177,19 @@ mod wire_casing_tests {
     /// `deviceID` keeps its capital ID and peer addresses are plain strings.
     #[test]
     fn pairing_descriptor_matches_swift_codable_keys() {
+        let device_id = Uuid::from_u128(0x11);
         let device = DeviceDescriptor::linux(
-            Uuid::from_u128(0x11),
+            device_id,
             "dellom".into(),
             vec!["100.77.185.39".into()],
-            vec![],
+            vec![DisplayDescriptor {
+                id: Identifier { raw_value: Uuid::from_u128(0x22) },
+                device_id: Identifier { raw_value: device_id },
+                name: "Linux Desktop".into(),
+                frame: DisplayRect { x: 0.0, y: 0.0, width: 1920.0, height: 1080.0 },
+                scale_factor: 1.0,
+                is_main: true,
+            }],
         );
         let json = serde_json::to_value(&device).unwrap();
         assert!(json["displays"][0]["deviceID"].is_object(), "{json}");
@@ -190,42 +198,3 @@ mod wire_casing_tests {
     }
 }
 
-#[cfg(test)]
-mod wire_dump_tests {
-    use super::*;
-
-    #[test]
-    fn dump_pairing_join_json() {
-        let id = Uuid::from_u128(0x11);
-        let display_id = Uuid::from_u128(0x22);
-        let device = DeviceDescriptor {
-            id: Identifier { raw_value: id },
-            name: "dellom".into(),
-            displays: vec![DisplayDescriptor {
-                id: Identifier { raw_value: display_id },
-                device_id: Identifier { raw_value: id },
-                name: "Linux Desktop".into(),
-                frame: DisplayRect { x: 0.0, y: 0.0, width: 1920.0, height: 1080.0 },
-                scale_factor: 1.0,
-                is_main: true,
-            }],
-            peer_addresses: vec![PeerAddress { host: "100.77.185.39".into() }],
-            capabilities: [
-                "portable-trackpad-gestures-v1",
-                "cross-platform-input-v2",
-                "udp-pointer-v2",
-                "realtime-pointer-progress-v1",
-                "activation-ack-v1",
-                "file-transfer-v1",
-                "clipboard-text-v1",
-                "clipboard-url-v1",
-            ].into_iter().map(str::to_owned).collect(),
-            platform: RawValue { raw_value: "linux".into() },
-        };
-        let join = serde_json::json!({"join":{"device":device,"offer":{
-            "publicKey": BASE64.encode([1u8;65]),
-            "nonce": BASE64.encode([2u8;32]),
-        }}});
-        println!("JOIN_JSON={}", serde_json::to_string(&join).unwrap());
-    }
-}

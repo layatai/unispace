@@ -34,7 +34,7 @@ struct PointerHello {
     nonce: Vec<u8>,
     #[serde(with = "base64_bytes")]
     proof: Vec<u8>,
-    #[serde(rename = "supportedWireVersions")]
+    #[serde(default, rename = "supportedWireVersions")]
     supported_wire_versions: Vec<u16>,
 }
 
