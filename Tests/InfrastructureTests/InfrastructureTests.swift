@@ -1593,7 +1593,7 @@ final class InfrastructureTests: XCTestCase {
         await transport.stop()
     }
 
-    func testAuthenticatedPointerLanePreservesWindowsInitiatedFlow() async throws {
+    func testAuthenticatedPointerLaneReplacesRestartedWindowsRoute() async throws {
         let workspaceID = WorkspaceID()
         let key = PairingCryptoSession.randomData(count: 32)
         let macID = DeviceID()
@@ -1676,6 +1676,61 @@ final class InfrastructureTests: XCTestCase {
         let sentToUnknownDevice = try await transport.send(frame, to: DeviceID())
         XCTAssertFalse(sentToUnknownDevice)
         await fulfillment(of: [received], timeout: 3)
+
+        let restartedRawClient = NWConnection(
+            host: "127.0.0.1",
+            port: pointerPort,
+            using: .udp
+        )
+        let restartedClient = SecurePeerConnection(
+            connection: restartedRawClient,
+            localDeviceID: windowsID,
+            workspaceID: workspaceID,
+            workspaceKey: key,
+            expectedDeviceID: macID,
+            isOutbound: true,
+            transportKind: .tcp,
+            isDatagram: true,
+            securityProfile: .pointerV2
+        )
+        defer { restartedClient.cancel() }
+        let restartedAuthenticated = expectation(description: "Restarted Windows pointer lane authenticated")
+        let restartedReceived = expectation(description: "Restarted Windows pointer lane received state")
+        restartedClient.authenticatedHandler = { deviceID in
+            XCTAssertEqual(deviceID, macID)
+            restartedAuthenticated.fulfill()
+        }
+        let restartedFrame = PortableRealtimePointerFrame(
+            workspaceID: frame.workspaceID,
+            sessionID: frame.sessionID,
+            controllerID: frame.controllerID,
+            epoch: frame.epoch,
+            generation: frame.generation + 1,
+            sequence: 0,
+            deltaX: 1,
+            deltaY: 2,
+            cumulativeDeltaX: 1,
+            cumulativeDeltaY: 2,
+            absoluteX: frame.absoluteX,
+            absoluteY: frame.absoluteY,
+            timestampNanos: frame.timestampNanos + 1
+        )
+        restartedClient.frameHandler = { kind, payload in
+            guard kind == .realtimePointerBinaryV2,
+                  let decoded = try? WireFrameCodec.decodePortableRealtimePointer(payload),
+                  decoded == restartedFrame else { return }
+            restartedReceived.fulfill()
+        }
+        restartedRawClient.start(queue: DispatchQueue(label: "UniSpaceInfrastructureTests.RestartedWindowsPointer"))
+        await fulfillment(of: [restartedAuthenticated], timeout: 3)
+
+        sent = false
+        for _ in 0..<50 where !sent {
+            sent = try await transport.send(restartedFrame, to: windowsID)
+            if !sent { try await Task.sleep(for: .milliseconds(20)) }
+        }
+        XCTAssertTrue(sent)
+        await fulfillment(of: [restartedReceived], timeout: 3)
         transport.stop()
     }
 

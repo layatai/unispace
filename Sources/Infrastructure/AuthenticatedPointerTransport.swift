@@ -241,12 +241,17 @@ final class AuthenticatedPointerTransport: @unchecked Sendable {
                 }
             }
             if let existing = connections[deviceID], existing !== candidate {
-                let preferOutbound = peer.platform != .windows && shouldDialDesiredPeer
-                if candidate.isOutbound == preferOutbound && existing.isOutbound != preferOutbound {
+                if peer.platform == .windows, !candidate.isOutbound {
                     connections[deviceID] = candidate
                     replaced = existing
                 } else {
-                    rejected = true
+                    let preferOutbound = peer.platform != .windows && shouldDialDesiredPeer
+                    if candidate.isOutbound == preferOutbound && existing.isOutbound != preferOutbound {
+                        connections[deviceID] = candidate
+                        replaced = existing
+                    } else {
+                        rejected = true
+                    }
                 }
             } else {
                 connections[deviceID] = candidate
