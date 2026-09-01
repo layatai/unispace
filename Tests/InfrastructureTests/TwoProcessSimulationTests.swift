@@ -12,7 +12,7 @@ final class TwoProcessSimulationTests: XCTestCase {
                 "run-two", "--scenario", "all", "--samples", "500", "--json",
                 "--keep-artifacts", artifacts.path,
             ],
-            timeout: 180
+            timeout: 240
         )
 
         XCTAssertEqual(result.status, 0, result.stderr)

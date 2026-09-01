@@ -491,7 +491,7 @@ final class SimulationOrchestrator {
             _ = try nodeA.command("moveBatch", values: [
                 "count": String(samples * 2),
                 "intervalMicros": "8333",
-            ], timeout: 30)
+            ], timeout: 60)
             let report = try metrics(from: nodeB, condition: condition)
             delivered = report.visible.count
             attempts += 1
