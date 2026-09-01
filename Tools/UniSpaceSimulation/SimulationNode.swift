@@ -228,6 +228,7 @@ actor SimulationNodeRuntime {
         case "moveBatch":
             let count = Int(command.values["count"] ?? "1000") ?? 1_000
             let intervalMicroseconds = UInt64(command.values["intervalMicros"] ?? "8333") ?? 8_333
+            emitter.send(.event("moveBatchStarted", values: ["count": String(count)]))
             for index in 0..<count {
                 let capturedAt = DispatchTime.now().uptimeNanoseconds
                 _ = await coordinator.handleCaptured(.pointerMove(
@@ -236,9 +237,14 @@ actor SimulationNodeRuntime {
                     absoluteX: Double(index),
                     absoluteY: Double(capturedAt)
                 ))
+                if index > 0, index.isMultiple(of: 100) {
+                    emitter.send(.event("moveBatchProgress", values: ["captured": String(index)]))
+                }
                 try await Task.sleep(for: .microseconds(Int64(intervalMicroseconds)))
             }
+            emitter.send(.event("moveBatchFlushing", values: ["captured": String(count)]))
             await coordinator.flushPendingInput()
+            emitter.send(.event("moveBatchCompleted", values: ["captured": String(count)]))
             return ["captured": String(count)]
         case "keyBatch":
             let count = Int(command.values["count"] ?? "100") ?? 100

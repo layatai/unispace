@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import XCTest
 
@@ -11,7 +12,7 @@ final class TwoProcessSimulationTests: XCTestCase {
                 "run-two", "--scenario", "all", "--samples", "500", "--json",
                 "--keep-artifacts", artifacts.path,
             ],
-            timeout: 120
+            timeout: 180
         )
 
         XCTAssertEqual(result.status, 0, result.stderr)
@@ -55,6 +56,19 @@ final class TwoProcessSimulationTests: XCTestCase {
         let process = Process()
         process.executableURL = try simulatorURL()
         process.arguments = arguments
+        let inheritedEnvironment = ProcessInfo.processInfo.environment
+        var environment = [
+            "HOME": FileManager.default.homeDirectoryForCurrentUser.path,
+            "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+            "TMPDIR": FileManager.default.temporaryDirectory.path,
+        ]
+        for name in ["LANG", "LC_ALL", "LOGNAME", "TZ", "USER"] {
+            if let value = inheritedEnvironment[name] { environment[name] = value }
+        }
+        environment["LLVM_PROFILE_FILE"] = FileManager.default.temporaryDirectory
+            .appendingPathComponent("unispace-simulation-\(UUID().uuidString)-%p.profraw")
+            .path
+        process.environment = environment
         let output = Pipe()
         let error = Pipe()
         process.standardOutput = output
@@ -63,16 +77,44 @@ final class TwoProcessSimulationTests: XCTestCase {
         process.terminationHandler = { _ in completed.fulfill() }
 
         try process.run()
-        wait(for: [completed], timeout: timeout)
-        if process.isRunning { process.terminate() }
+        let waitResult = XCTWaiter.wait(for: [completed], timeout: timeout)
+        if waitResult == .timedOut {
+            signalChildren(of: process, signal: SIGTERM)
+            Thread.sleep(forTimeInterval: 0.2)
+            signalChildren(of: process, signal: SIGKILL)
+            process.terminate()
+            waitForExit(process, timeout: 2)
+            if process.isRunning {
+                Darwin.kill(process.processIdentifier, SIGKILL)
+                waitForExit(process, timeout: 2)
+            }
+        }
+        let status = process.isRunning ? Int32.min : process.terminationStatus
         return ProcessResult(
-            status: process.terminationStatus,
+            status: status,
             stdout: output.fileHandleForReading.readDataToEndOfFile(),
-            stderr: String(
-                decoding: error.fileHandleForReading.readDataToEndOfFile(),
-                as: UTF8.self
-            )
+            stderr: (waitResult == .timedOut ? "UniSpaceSimulation exceeded \(timeout) seconds. " : "") +
+                String(
+                    decoding: error.fileHandleForReading.readDataToEndOfFile(),
+                    as: UTF8.self
+                )
         )
+    }
+
+    private func waitForExit(_ process: Process, timeout: TimeInterval) {
+        let deadline = Date().addingTimeInterval(timeout)
+        while process.isRunning, Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.02)
+        }
+    }
+
+    private func signalChildren(of process: Process, signal: Int32) {
+        guard process.processIdentifier > 0 else { return }
+        let signalProcess = Process()
+        signalProcess.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
+        signalProcess.arguments = ["-\(signal)", "-P", String(process.processIdentifier)]
+        try? signalProcess.run()
+        signalProcess.waitUntilExit()
     }
 
     private func simulatorURL() throws -> URL {

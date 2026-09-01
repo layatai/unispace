@@ -66,7 +66,12 @@ final class SimulationProcessClient: @unchecked Sendable {
                 $0.kind == "response" && $0.id == command.id
             }
         } catch {
-            throw SimulationFailure.timeout("Timed out waiting for \(self.name) command \(name)")
+            let recentEvents = condition.withLock {
+                messages.suffix(8).map { "\($0.name)=\($0.values)" }.joined(separator: ", ")
+            }
+            throw SimulationFailure.timeout(
+                "Timed out waiting for \(self.name) command \(name). Recent events: \(recentEvents)"
+            )
         }
         guard response.ok == true else {
             let recentEvents = condition.withLock {
@@ -83,8 +88,8 @@ final class SimulationProcessClient: @unchecked Sendable {
     func terminate() {
         guard process.isRunning else { return }
         process.terminate()
-        process.waitUntilExit()
-        closePipes()
+        waitForExit(timeout: 2)
+        forceTerminateIfNeeded()
     }
 
     func recentEvents() -> String {
@@ -95,8 +100,8 @@ final class SimulationProcessClient: @unchecked Sendable {
 
     func shutdown() {
         if process.isRunning { _ = try? command("shutdown", timeout: 5) }
-        if process.isRunning { process.waitUntilExit() }
-        closePipes()
+        waitForExit(timeout: 2)
+        forceTerminateIfNeeded()
     }
 
     private func receive(_ data: Data) {
@@ -148,6 +153,19 @@ final class SimulationProcessClient: @unchecked Sendable {
         try? input.fileHandleForWriting.close()
         try? output.fileHandleForReading.close()
         try? error.fileHandleForReading.close()
+    }
+
+    private func waitForExit(timeout: TimeInterval) {
+        let deadline = Date().addingTimeInterval(timeout)
+        condition.withLock {
+            while process.isRunning, condition.wait(until: deadline) {}
+        }
+    }
+
+    private func forceTerminateIfNeeded() {
+        guard process.isRunning else { return }
+        Darwin.kill(process.processIdentifier, SIGKILL)
+        waitForExit(timeout: 2)
     }
 }
 
@@ -335,10 +353,20 @@ final class SimulationOrchestrator {
             Thread.sleep(forTimeInterval: 0.1)
             _ = try nodeA.command("activate")
             _ = try nodeB.command("beginMetrics", values: ["condition": "recovered"])
-            _ = try nodeA.command("moveBatch", values: ["count": "120", "intervalMicros": "8333"])
+            _ = try nodeA.command(
+                "moveBatch",
+                values: ["count": "120", "intervalMicros": "8333"],
+                timeout: 30
+            )
             let recovered = try metrics(from: nodeB, condition: "recovered")
             guard recovered.visible.count > 0 else {
                 throw SimulationFailure.protocolFailure("No pointer input arrived after recovery")
+            }
+            guard recovered.visible.maximumMilliseconds <= thresholds.maximumLatencyMilliseconds,
+                  recovered.visible.maximumGapMilliseconds <= thresholds.maximumLatencyMilliseconds else {
+                throw SimulationFailure.protocolFailure(
+                    "Recovered pointer exceeded the \(thresholds.maximumLatencyMilliseconds) ms latency/stall gate"
+                )
             }
         }
 
