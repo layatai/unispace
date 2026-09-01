@@ -25,6 +25,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var workspace: WorkspaceSnapshot?
     @Published private(set) var candidates: [PairingCandidate] = []
     @Published private(set) var connectedDevices: Set<DeviceID> = []
+    @Published private(set) var reportedOnlineDeviceIDs: Set<DeviceID> = []
     @Published private(set) var connectionSnapshots: [DeviceID: ConnectionSnapshot] = [:]
     @Published private(set) var currentControllerID: DeviceID?
     @Published private(set) var controlSessionSnapshot = ControlSessionSnapshot.idle
@@ -81,6 +82,36 @@ final class AppModel: ObservableObject {
         if ProcessInfo.processInfo.arguments.contains("--ui-testing-hosting") {
             setupState = .hostingPairing
             statusMessage = "Visible to nearby devices"
+            return
+        }
+        if ProcessInfo.processInfo.arguments.contains("--ui-testing-presence") {
+            let local = localDevice
+            let controller = DeviceDescriptor(
+                id: DeviceID(),
+                name: "Controller Mac",
+                capabilities: [.workspacePresenceV1],
+                platform: .macOS
+            )
+            let windows = DeviceDescriptor(id: DeviceID(), name: "Office PC", platform: .windows)
+            workspace = WorkspaceSnapshot(
+                id: WorkspaceID(),
+                name: "My UniSpace",
+                localDeviceID: localDeviceID,
+                devices: [local, controller, windows]
+            )
+            let epoch = ControllerEpoch(generation: 1, controllerID: controller.id)
+            currentEpoch = epoch
+            currentControllerID = controller.id
+            connectedDevices = [controller.id]
+            reportedOnlineDeviceIDs = [controller.id, windows.id]
+            connectionSnapshots[controller.id] = .init(health: .healthy, transport: .tcp)
+            connectionSnapshots[windows.id] = .init(
+                health: .disconnected,
+                transport: .tcp,
+                detail: "The trusted peer is temporarily unavailable"
+            )
+            setupState = .ready
+            statusMessage = "Receiver ready"
             return
         }
         if ProcessInfo.processInfo.arguments.contains("--ui-testing-connections") {
@@ -150,6 +181,7 @@ final class AppModel: ObservableObject {
                 .udpPointerV2,
                 .activationAcknowledgementV1,
                 .realtimePointerProgressV1,
+                .workspacePresenceV1,
                 .fileTransferV1,
                 .clipboardTextV1,
                 .clipboardURLV1,
@@ -162,6 +194,14 @@ final class AppModel: ObservableObject {
 
     var devices: [DeviceDescriptor] { workspace?.devices ?? [] }
     var allDisplays: [DisplayDescriptor] { devices.flatMap(\.displays) }
+    var onlineDeviceIDs: Set<DeviceID> {
+        guard let workspace else { return [] }
+        let workspaceDeviceIDs = Set(workspace.devices.map(\.id))
+        return connectedDevices
+            .union(reportedOnlineDeviceIDs)
+            .union([localDeviceID])
+            .intersection(workspaceDeviceIDs)
+    }
     var isLocalController: Bool { currentControllerID == localDeviceID }
     var peerConnectionPolicy: PeerConnectionPolicy {
         guard let workspace else { return .passive }
@@ -302,6 +342,7 @@ final class AppModel: ObservableObject {
         self.workspace = nil
         controllerIdentityStore.setControllerID(nil, for: workspace.id)
         connectedDevices = []
+        reportedOnlineDeviceIDs = []
         currentControllerID = nil
         currentEpoch = nil
         lastBoundaryTime = 0
@@ -321,6 +362,7 @@ final class AppModel: ObservableObject {
             controlTransferGuard.reset()
             currentEpoch = epoch
             currentControllerID = localDeviceID
+            reportedOnlineDeviceIDs.removeAll()
             if let workspace {
                 controllerIdentityStore.setControllerID(localDeviceID, for: workspace.id)
             }
@@ -330,6 +372,7 @@ final class AppModel: ObservableObject {
                 persistAndBroadcastLocally(workspace)
             }
             await broadcast(ControlEnvelope(message: .controllerClaim(epoch)))
+            await publishWorkspacePresence()
             statusMessage = "This Mac controls the workspace"
         }
     }
@@ -583,6 +626,7 @@ final class AppModel: ObservableObject {
             await transport.stop()
             injector.releaseAll()
             connectedDevices.removeAll()
+            reportedOnlineDeviceIDs.removeAll()
             connectionSnapshots = Dictionary(uniqueKeysWithValues: workspace.devices.compactMap { device in
                 guard device.id != localDeviceID else { return nil }
                 let previous = connectionSnapshots[device.id]
@@ -859,6 +903,7 @@ final class AppModel: ObservableObject {
             if let currentEpoch {
                 try? await transport.send(ControlEnvelope(message: .controllerClaim(currentEpoch)), to: deviceID)
             }
+            await publishWorkspacePresence()
         case let .workspaceUpgradeRequired(deviceID):
             guard let workspace,
                   workspace.devices.contains(where: { $0.id == deviceID }),
@@ -870,6 +915,9 @@ final class AppModel: ObservableObject {
             )
         case let .disconnected(deviceID):
             connectedDevices.remove(deviceID)
+            if deviceID == currentControllerID, !isLocalController {
+                reportedOnlineDeviceIDs.removeAll()
+            }
             let previousConnection = connectionSnapshots[deviceID]
             connectionSnapshots[deviceID] = .init(
                 health: previousConnection?.health == .reconnecting
@@ -887,6 +935,7 @@ final class AppModel: ObservableObject {
                 controlTransferGuard.completeStop()
                 statusMessage = "Connection lost — control returned to this Mac"
             }
+            await publishWorkspacePresence()
         case let .control(source, envelope):
             if case let .activationResult(sessionID, accepted) = envelope.message {
                 diagnosticLog.record("t=\(DispatchTime.now().uptimeNanoseconds) trace consumed activationResult session=\(sessionID) accepted=\(accepted)")
@@ -924,8 +973,12 @@ final class AppModel: ObservableObject {
             workspace.updateDevice(current)
             persistAndBroadcastLocally(workspace)
         case let .controllerClaim(epoch):
+            let previousEpoch = currentEpoch
             currentEpoch = max(currentEpoch ?? epoch, epoch)
             currentControllerID = currentEpoch?.controllerID
+            if currentEpoch != previousEpoch {
+                reportedOnlineDeviceIDs.removeAll()
+            }
             if let workspace, let currentControllerID {
                 controllerIdentityStore.setControllerID(currentControllerID, for: workspace.id)
             }
@@ -935,6 +988,7 @@ final class AppModel: ObservableObject {
                 persistAndBroadcastLocally(workspace)
             }
             await coordinator?.observeControllerClaim(epoch)
+            await publishWorkspacePresence()
             statusMessage = currentControllerID == localDeviceID ? "This Mac controls the workspace" : "Receiver ready"
         case let .activate(activation):
             let display = workspace?.devices.flatMap(\.displays).first { $0.id == activation.targetDisplayID }
@@ -1040,6 +1094,14 @@ final class AppModel: ObservableObject {
             } catch {
                 lastError = error.localizedDescription
             }
+        case let .workspacePresence(snapshot):
+            guard let workspace,
+                  let validated = snapshot.validatedOnlineDeviceIDs(
+                      from: source,
+                      currentEpoch: currentEpoch,
+                      workspace: workspace
+                  ) else { return }
+            reportedOnlineDeviceIDs = validated
         }
     }
 
@@ -1127,6 +1189,20 @@ final class AppModel: ObservableObject {
     private func broadcast(_ envelope: ControlEnvelope) async {
         guard let workspace else { return }
         for device in workspace.devices where device.id != localDeviceID {
+            try? await transport.send(envelope, to: device.id)
+        }
+    }
+
+    private func publishWorkspacePresence() async {
+        guard isLocalController, let currentEpoch else { return }
+        let envelope = ControlEnvelope(message: .workspacePresence(.init(
+            epoch: currentEpoch,
+            onlineDeviceIDs: connectedDevices.union([localDeviceID])
+        )))
+        for device in devices where device.id != localDeviceID &&
+            connectedDevices.contains(device.id) &&
+            device.platform == .macOS &&
+            device.capabilities.contains(.workspacePresenceV1) {
             try? await transport.send(envelope, to: device.id)
         }
     }

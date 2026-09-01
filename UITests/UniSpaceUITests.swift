@@ -179,6 +179,18 @@ final class UniSpaceUITests: XCTestCase {
     }
 
     @MainActor
+    func testDevicesShowControllerReportedWindowsPresence() {
+        let app = launchApp(mode: "--ui-testing-presence")
+
+        app.staticTexts["section-devices"].click()
+        XCTAssertTrue(app.staticTexts["Via controller"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["3 of 3 devices online"].exists)
+        XCTAssertFalse(app.buttons["Retry connection to Office PC"].exists)
+        XCTAssertFalse(app.staticTexts["The trusted peer is temporarily unavailable"].exists)
+        app.terminate()
+    }
+
+    @MainActor
     private func launchApp(mode: String) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = [mode, "-ApplePersistenceIgnoreState", "YES"]
