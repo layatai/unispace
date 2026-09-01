@@ -8,6 +8,34 @@ import UniSpaceApplication
 import UniSpaceDomain
 
 final class InfrastructureTests: XCTestCase {
+    func testDiagnosticLogRecordsOnlyWhileEnabled() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let suite = "UniSpaceDiagnosticLogTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer {
+            defaults.removePersistentDomain(forName: suite)
+            try? FileManager.default.removeItem(at: root)
+        }
+        let log = DiagnosticLog(rootURL: root, defaults: defaults)
+
+        log.record("disabled message")
+        log.flush()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: log.fileURL.path))
+
+        log.setEnabled(true)
+        log.record("session started")
+        log.flush()
+        var contents = try String(contentsOf: log.fileURL, encoding: .utf8)
+        XCTAssertTrue(contents.contains("Diagnostic logging enabled"))
+        XCTAssertTrue(contents.contains("session started"))
+
+        log.setEnabled(false)
+        log.record("hidden message")
+        log.flush()
+        contents = try String(contentsOf: log.fileURL, encoding: .utf8)
+        XCTAssertFalse(contents.contains("hidden message"))
+    }
+
     func testCursorSuppressionKeepsItsFirstAnchorUntilReleased() {
         let firstAnchor = CGPoint(x: 1512, y: 500)
         var state = CursorSuppressionState()

@@ -134,11 +134,14 @@ final class UniSpaceUITests: XCTestCase {
         let app = launchApp(mode: "--ui-testing-configured")
 
         let launchAtLoginCard = app.switches["launch-at-login"]
+        let diagnosticLoggingCard = app.switches["diagnostic-logging"]
         let leaveWorkspaceButton = app.buttons["leave-workspace"]
         XCTAssertTrue(launchAtLoginCard.waitForExistence(timeout: 5))
+        XCTAssertTrue(diagnosticLoggingCard.waitForExistence(timeout: 5))
         XCTAssertTrue(leaveWorkspaceButton.waitForExistence(timeout: 5))
         let expectedTrailingEdge = leaveWorkspaceButton.frame.maxX
         assertTrailingEdge(of: launchAtLoginCard, equals: expectedTrailingEdge)
+        assertTrailingEdge(of: diagnosticLoggingCard, equals: expectedTrailingEdge)
 
         app.staticTexts["section-continuity"].click()
         let sharingCard = app.switches["clipboard-sharing-toggle"]
