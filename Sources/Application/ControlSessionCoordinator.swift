@@ -217,7 +217,7 @@ public actor ControlSessionCoordinator {
             }
             if let pendingEvents {
                 activationInputTask?.cancel()
-                activationInputTask = Task { [weak self] in
+                activationInputTask = Task(priority: ControlTaskPriority.realtimeInput) { [weak self] in
                     for await event in pendingEvents {
                         guard !Task.isCancelled, let self else { return }
                         _ = await self.handleCaptured(event)
@@ -632,7 +632,7 @@ public actor ControlSessionCoordinator {
 
     private func schedulePointerFlush(after delayNanoseconds: UInt64) {
         guard pointerFlushTask == nil else { return }
-        pointerFlushTask = Task(priority: .high) { [weak self, clock] in
+        pointerFlushTask = Task(priority: ControlTaskPriority.realtimeInput) { [weak self, clock] in
             try? await clock.sleep(for: .nanoseconds(Int64(delayNanoseconds)))
             guard !Task.isCancelled else { return }
             await self?.scheduledPointerFlushFired()

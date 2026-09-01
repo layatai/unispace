@@ -552,7 +552,7 @@ func runSimulationNode(configurationURL: URL) async throws {
         guard let data = line.data(using: .utf8) else { continue }
         do {
             let command = try SimulationJSON.decoder.decode(SimulationCommand.self, from: data)
-            let shouldContinue = await Task.detached(priority: .high) {
+            let shouldContinue = await Task.detached(priority: ControlTaskPriority.realtimeInput) {
                 await runtime.handle(command)
             }.value
             if !shouldContinue { break }

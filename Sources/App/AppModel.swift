@@ -672,7 +672,9 @@ final class AppModel: ObservableObject {
         do {
             try capture.start { [weak self] event in
                 guard Thread.isMainThread else {
-                    Task { @MainActor [weak self] in self?.captureSynchronously(event) }
+                    Task(priority: ControlTaskPriority.realtimeInput) { @MainActor [weak self] in
+                        self?.captureSynchronously(event)
+                    }
                     return false
                 }
                 return MainActor.assumeIsolated {
@@ -720,14 +722,16 @@ final class AppModel: ObservableObject {
                     continuation: pair.continuation
                 )
                 capture.setSuppressionEnabled(true)
-                Task { @MainActor [weak self] in
+                Task(priority: ControlTaskPriority.realtimeInput) { @MainActor [weak self] in
                     await self?.completeActivation(transition, attempt: attempt)
                 }
                 return true
             }
         }
         guard controlTransferGuard.forwardsCapturedInput else { return false }
-        Task { @MainActor [weak self] in await self?.forwardCaptured(event) }
+        Task(priority: ControlTaskPriority.realtimeInput) { @MainActor [weak self] in
+            await self?.forwardCaptured(event)
+        }
         return false
     }
 
