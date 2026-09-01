@@ -347,6 +347,9 @@ async fn handle_reliable_input(
     }
     state.last_sequence = Some(frame.sequence);
     state.last_heartbeat = Some(Instant::now());
+    if let protocol::InputEvent::PointerMove { dx, dy, .. } = &frame.event {
+        debug!(dx, dy, "reliable pointer");
+    }
     inject_with_boundary(state, writer, input, frame.event).await
 }
 
@@ -376,12 +379,16 @@ async fn handle_realtime_pointer(
     {
         return Ok(());
     }
+    if frame.generation < state.pointer.generation.unwrap_or(0) {
+        debug!(generation = frame.generation, "stale pointer generation dropped");
+        return Ok(());
+    }
     if state.pointer.generation != Some(frame.generation) {
+        // Mirrors the Mac's RealtimeInputReceiver: the controller resets its
+        // cumulative base when the generation increments, so restart at zero.
         debug!(generation = frame.generation, "pointer generation changed");
         state.pointer.generation = Some(frame.generation);
-        // Mirrors the Windows receiver: a new generation restarts from the
-        // frame's own delta (the controller also resets its cumulative base).
-        state.pointer.last_cumulative = (frame.cumulative_x - frame.dx, frame.cumulative_y - frame.dy);
+        state.pointer.last_cumulative = (0.0, 0.0);
     }
     state.pointer.last_sequence = Some(frame.sequence);
     state.pointer.progress = Some((frame.generation, frame.sequence));
