@@ -96,7 +96,7 @@ public actor ClipboardCoordinator {
     private func startTransportObservationIfNeeded() {
         guard transportTask == nil else { return }
         let transport = self.transport
-        transportTask = Task { [weak self, transport] in
+        transportTask = Task(priority: .high) { [weak self, transport] in
             for await event in transport.events() {
                 guard !Task.isCancelled else { return }
                 await self?.handle(event)
@@ -141,7 +141,7 @@ public actor ClipboardCoordinator {
     private func startClipboardObservation() async {
         let observations = await clipboard.events()
         guard clipboardTask == nil else { return }
-        clipboardTask = Task { [weak self] in
+        clipboardTask = Task(priority: .high) { [weak self] in
             for await observation in observations {
                 guard !Task.isCancelled else { return }
                 await self?.handle(observation)

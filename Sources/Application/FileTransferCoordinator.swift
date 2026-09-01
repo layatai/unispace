@@ -688,7 +688,9 @@ public actor FileTransferCoordinator {
             records[state.transferID] = record
             emit(state.transferID)
             let sourceProvider = self.sourceProvider
-            Task { await sourceProvider.removeOutgoingTransfer(state.transferID) }
+            Task(priority: .utility) {
+                await sourceProvider.removeOutgoingTransfer(state.transferID)
+            }
             return
         }
         let offsets = try validatedOffsets(state.offsets, manifest: record.manifest)
@@ -705,7 +707,7 @@ public actor FileTransferCoordinator {
         cancelTransferTask(transferID)
         let token = UUID()
         transferTaskTokens[transferID] = token
-        transferTasks[transferID] = Task { [weak self] in
+        transferTasks[transferID] = Task(priority: .utility) { [weak self] in
             await self?.streamOutgoingTransfer(transferID, offsets: offsets, taskToken: token)
         }
     }
