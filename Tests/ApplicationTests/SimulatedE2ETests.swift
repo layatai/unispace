@@ -276,7 +276,7 @@ private final class SimulatedWireTransport: PeerTransport, @unchecked Sendable {
                 progress,
                 from: localDeviceID
             )
-        case .hello, .workspace, .boundaryCrossed, .rotateWorkspaceKey:
+        case .hello, .workspace, .boundaryCrossed, .rotateWorkspaceKey, .workspacePresence:
             break
         }
     }

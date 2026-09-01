@@ -207,6 +207,25 @@ public struct InputActivation: Codable, Equatable, Sendable {
     }
 }
 
+public struct WorkspacePresenceSnapshot: Codable, Equatable, Sendable {
+    public let epoch: ControllerEpoch
+    public let onlineDeviceIDs: Set<DeviceID>
+
+    public init(epoch: ControllerEpoch, onlineDeviceIDs: Set<DeviceID>) {
+        self.epoch = epoch
+        self.onlineDeviceIDs = onlineDeviceIDs
+    }
+
+    public func validatedOnlineDeviceIDs(
+        from source: DeviceID,
+        currentEpoch: ControllerEpoch?,
+        workspace: WorkspaceSnapshot
+    ) -> Set<DeviceID>? {
+        guard source == epoch.controllerID, currentEpoch == epoch else { return nil }
+        return onlineDeviceIDs.intersection(Set(workspace.devices.map(\.id)))
+    }
+}
+
 public enum ControlMessage: Codable, Equatable, Sendable {
     case hello(DeviceDescriptor)
     case workspace(WorkspaceSnapshot)
@@ -219,6 +238,7 @@ public enum ControlMessage: Codable, Equatable, Sendable {
     case boundaryCrossed(sessionID: SessionID, displayID: DisplayID, edge: DisplayEdge, normalizedPosition: Double)
     case releaseAll(SessionID)
     case rotateWorkspaceKey(Data)
+    case workspacePresence(WorkspacePresenceSnapshot)
 }
 
 public struct ControlEnvelope: Codable, Equatable, Sendable {

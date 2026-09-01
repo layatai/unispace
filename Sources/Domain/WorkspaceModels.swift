@@ -140,6 +140,7 @@ public struct DeviceCapability: RawRepresentable, Codable, Hashable, Sendable {
     public static let udpPointerV2 = Self(rawValue: "udp-pointer-v2")
     public static let activationAcknowledgementV1 = Self(rawValue: "activation-ack-v1")
     public static let realtimePointerProgressV1 = Self(rawValue: "realtime-pointer-progress-v1")
+    public static let workspacePresenceV1 = Self(rawValue: "workspace-presence-v1")
 }
 
 public struct DevicePlatform: RawRepresentable, Codable, Hashable, Sendable {

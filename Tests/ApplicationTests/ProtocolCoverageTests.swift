@@ -51,7 +51,8 @@ final class ProtocolCoverageTests: XCTestCase {
                 normalizedPosition: 0.75
             ),
             .releaseAll(sessionID),
-            .rotateWorkspaceKey(Data([1, 2, 3, 4]))
+            .rotateWorkspaceKey(Data([1, 2, 3, 4])),
+            .workspacePresence(.init(epoch: epoch, onlineDeviceIDs: [deviceID]))
         ]
 
         for message in messages {
@@ -169,7 +170,8 @@ final class ProtocolCoverageTests: XCTestCase {
                 normalizedPosition: 0.75
             ),
             .releaseAll(sessionID),
-            .rotateWorkspaceKey(Data([1, 2, 3, 4]))
+            .rotateWorkspaceKey(Data([1, 2, 3, 4])),
+            .workspacePresence(.init(epoch: epoch, onlineDeviceIDs: [deviceID]))
         ]
 
         for message in messages {

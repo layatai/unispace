@@ -119,10 +119,14 @@ struct DevicesView: View {
 
     private func deviceCard(_ device: DeviceDescriptor) -> some View {
         let isLocal = device.id == model.localDeviceID
-        let isOnline = isLocal || model.connectedDevices.contains(device.id)
+        let isDirectlyConnected = model.connectedDevices.contains(device.id)
+        let isOnline = model.onlineDeviceIDs.contains(device.id)
+        let isViaController = !isLocal && !isDirectlyConnected && isOnline
         let isController = device.id == model.currentControllerID
         let connection = model.connectionSnapshots[device.id]
-        let connectionColor = connectionColor(isOnline: isOnline, connection: connection)
+        let connectionColor = isViaController
+            ? Color.green
+            : connectionColor(isOnline: isOnline, connection: connection)
 
         return HStack(spacing: 14) {
             IconTile(
@@ -149,8 +153,14 @@ struct DevicesView: View {
                     Circle()
                         .fill(connectionColor)
                         .frame(width: 7, height: 7)
-                    Text(connectionStatus(isOnline: isOnline, connection: connection))
-                    if !isLocal, let connection {
+                    Text(isViaController ? "Available" : connectionStatus(
+                        isOnline: isOnline,
+                        connection: connection
+                    ))
+                    if isViaController {
+                        Text("·")
+                        Text("Via controller")
+                    } else if !isLocal, let connection {
                         Text("·")
                         Text(connectionDescription(connection))
                     }
@@ -160,7 +170,7 @@ struct DevicesView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
-                if !isLocal, let detail = connection?.detail, !detail.isEmpty {
+                if !isLocal, !isViaController, let detail = connection?.detail, !detail.isEmpty {
                     Text(detail)
                         .font(.caption2)
                         .foregroundStyle(.secondary)

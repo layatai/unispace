@@ -411,7 +411,7 @@ actor SimulationNodeRuntime {
             }
         case let .realtimePointerProgress(progress):
             _ = await coordinator.receiveRealtimePointerProgress(progress, from: source)
-        case .hello, .workspace, .boundaryCrossed, .rotateWorkspaceKey:
+        case .hello, .workspace, .boundaryCrossed, .rotateWorkspaceKey, .workspacePresence:
             break
         }
     }

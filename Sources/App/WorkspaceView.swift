@@ -104,7 +104,7 @@ struct WorkspaceView: View {
                 VStack(alignment: .leading, spacing: 1) {
                     Text(model.isLocalController ? "Controlling" : "Receiving")
                         .font(.caption.weight(.semibold))
-                    Text("\(model.connectedDevices.count + 1) of \(max(model.devices.count, 1)) devices online")
+                    Text("\(model.onlineDeviceIDs.count) of \(max(model.devices.count, 1)) devices online")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }

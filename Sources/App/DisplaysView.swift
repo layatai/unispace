@@ -183,7 +183,7 @@ private struct TopologyCanvas: View {
 
     private func card(_ display: DisplayDescriptor) -> some View {
         let isLocal = display.deviceID == model.localDeviceID
-        let isOnline = isLocal || model.connectedDevices.contains(display.deviceID)
+        let isOnline = model.onlineDeviceIDs.contains(display.deviceID)
         let isDragging = dragging == display.id
         let isTarget = snapTarget == display.id
         let tint: Color = isLocal ? .accentColor : (isOnline ? .green : .secondary)

@@ -119,6 +119,7 @@ private struct PortableControlEnvelope: Codable {
         var edge: DisplayEdge? = nil
         var normalizedPosition: Double? = nil
         var workspaceKey: Data? = nil
+        var workspacePresence: WorkspacePresenceSnapshot? = nil
     }
 
     init(_ envelope: ControlEnvelope) {
@@ -166,6 +167,9 @@ private struct PortableControlEnvelope: Codable {
         case let .rotateWorkspaceKey(workspaceKey):
             type = "rotateWorkspaceKey"
             payload = Payload(workspaceKey: workspaceKey)
+        case let .workspacePresence(snapshot):
+            type = "workspacePresence"
+            payload = Payload(workspacePresence: snapshot)
         }
     }
 
@@ -209,6 +213,8 @@ private struct PortableControlEnvelope: Codable {
             message = .releaseAll(try required(payload.sessionID))
         case "rotateWorkspaceKey":
             message = .rotateWorkspaceKey(try required(payload.workspaceKey))
+        case "workspacePresence":
+            message = .workspacePresence(try required(payload.workspacePresence))
         default:
             throw ControlProtocolError.malformedFrame
         }
