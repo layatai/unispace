@@ -106,6 +106,9 @@ Send Files action; it does not gate target selection or channel bootstrap.
 - Delayed activation preserves activation-before-input ordering with bounded
   buffering, no heartbeat loss, and no pointer stall above 50 ms.
 - Existing unit, coverage, UI, native-input, and Windows CI gates remain intact.
+- The 500-sample two-process latency scenario runs as a standalone,
+  non-instrumented performance gate after coverage tests; profiler overhead is
+  not included in the 50 ms product latency/stall limit.
 - A routed Fox session sends pointer state over UDP 61341, does not retry QUIC
   61339, and keeps pointer delivery independent from the TCP control RTT.
 
