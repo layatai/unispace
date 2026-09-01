@@ -134,7 +134,7 @@ actor SimulationNodeRuntime {
         let workspace = makeWorkspace()
         let local = try localDevice()
 
-        peerEventsTask = Task { [weak self, transport] in
+        peerEventsTask = Task(priority: .high) { [weak self, transport] in
             for await event in transport.events() {
                 guard !Task.isCancelled else { return }
                 await self?.handlePeerEvent(event)
@@ -535,7 +535,10 @@ func runSimulationNode(configurationURL: URL) async throws {
         guard let data = line.data(using: .utf8) else { continue }
         do {
             let command = try SimulationJSON.decoder.decode(SimulationCommand.self, from: data)
-            if await !runtime.handle(command) { break }
+            let shouldContinue = await Task.detached(priority: .high) {
+                await runtime.handle(command)
+            }.value
+            if !shouldContinue { break }
         } catch {
             emitter.send(.event("invalidCommand", values: ["error": error.localizedDescription]))
         }
