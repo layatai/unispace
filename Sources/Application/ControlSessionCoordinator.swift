@@ -207,7 +207,7 @@ public actor ControlSessionCoordinator {
         capture.setSuppressionEnabled(true)
         transport.setRealtimePeer(target, role: .dialer)
         let supportsExplicitAcknowledgement = targetCapabilities.contains(.activationAcknowledgementV1)
-        let confirmationTimeout = targetPlatform == .windows
+        let confirmationTimeout = targetPlatform.isPortableReceiver
             ? max(activationTimeout, Self.windowsActivationTimeout)
             : activationTimeout
         let activationResults = (requiresActivationConfirmation || supportsExplicitAcknowledgement)
