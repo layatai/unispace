@@ -504,6 +504,13 @@ final class ManualMonotonicClock: MonotonicClock, @unchecked Sendable {
     var pendingSleepCount: Int { lock.withLock { waiters.count } }
     func nowNanoseconds() -> UInt64 { lock.withLock { value } }
 
+    func hasPendingSleep(for duration: Duration) -> Bool {
+        lock.withLock {
+            let deadline = value &+ Self.nanoseconds(duration)
+            return waiters.values.contains { $0.deadline == deadline }
+        }
+    }
+
     func sleep(for duration: Duration) async throws {
         let id = UUID()
         try await withTaskCancellationHandler {

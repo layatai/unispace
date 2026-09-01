@@ -1479,8 +1479,10 @@ final class ApplicationTests: XCTestCase {
         ))
 
         let flush = Task { await coordinator.flushPendingInput() }
-        for _ in 0..<100 where clock.pendingSleepCount < 2 { await Task.yield() }
-        XCTAssertGreaterThanOrEqual(clock.pendingSleepCount, 2)
+        for _ in 0..<500 where !clock.hasPendingSleep(
+            for: ControlSessionCoordinator.reliablePointerTimeout
+        ) { await Task.yield() }
+        XCTAssertTrue(clock.hasPendingSleep(for: ControlSessionCoordinator.reliablePointerTimeout))
         clock.advance(by: ControlSessionCoordinator.realtimeProgressTimeoutNanos)
         await flush.value
         for _ in 0..<100 {
