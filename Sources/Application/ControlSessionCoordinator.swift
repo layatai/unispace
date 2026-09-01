@@ -708,7 +708,6 @@ public actor ControlSessionCoordinator {
             await sendReliablePointer(event)
             return
         case .probing, .fallback:
-            await sendReliablePointer(event)
             await sendRealtimeProbe(
                 epoch: epoch,
                 target: target,
@@ -716,6 +715,7 @@ public actor ControlSessionCoordinator {
                 absoluteX: absoluteX,
                 absoluteY: absoluteY
             )
+            await sendReliablePointer(event)
             return
         case .healthy:
             let now = clock.nowNanoseconds()
@@ -812,10 +812,20 @@ public actor ControlSessionCoordinator {
     }
 
     private func sendReliablePointer(_ event: InputEvent) async {
+        guard case let .controlling(_, target, sessionID) = state else { return }
         await sendInput(event)
         let delivered = await inputSender.drainOrCancel(after: Self.reliablePointerTimeout)
         guard !delivered else { return }
-        Task { [weak self] in await self?.endCurrentSession(notifyPeer: false) }
+        guard case let .controlling(_, currentTarget, currentSessionID) = state,
+              currentTarget == target, currentSessionID == sessionID else { return }
+        let now = clock.nowNanoseconds()
+        if realtimeDeliveryMode == .healthy,
+           let acknowledgedAt = lastRealtimeAcknowledgementNanos,
+           now >= acknowledgedAt,
+           now - acknowledgedAt <= Self.realtimeProgressTimeoutNanos {
+            return
+        }
+        await endCurrentSession(notifyPeer: false)
     }
 
     private func enterRealtimeFallback(target: DeviceID) {

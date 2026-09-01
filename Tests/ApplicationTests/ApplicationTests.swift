@@ -1526,6 +1526,72 @@ final class ApplicationTests: XCTestCase {
         await coordinator.stop()
     }
 
+    func testRealtimeProgressKeepsSessionAliveWhenReliableProbeDeliveryStalls() async throws {
+        let local = DeviceID()
+        let remote = DeviceID()
+        let capture = CaptureSpy()
+        let clock = ManualMonotonicClock()
+        let transport = TransportSpy(useRealtime: true, frameSendClock: clock)
+        let coordinator = ControlSessionCoordinator(
+            localDeviceID: local,
+            workspaceID: WorkspaceID(),
+            capture: capture,
+            injector: InjectorSpy(),
+            transport: transport,
+            clock: clock
+        )
+        _ = await coordinator.makeLocalController()
+        try await coordinator.activate(
+            target: remote,
+            displayID: DisplayID(),
+            entryEdge: .left,
+            normalizedPosition: 0.5,
+            targetCapabilities: [.realtimePointerProgressV1],
+            targetPlatform: .windows
+        )
+
+        let delivery = Task {
+            _ = await coordinator.handleCaptured(.pointerMove(
+                deltaX: 4,
+                deltaY: 0,
+                absoluteX: 10,
+                absoluteY: 10
+            ))
+            await coordinator.flushPendingInput()
+        }
+        for _ in 0..<100 where transport.realtimeFrames.isEmpty { await Task.yield() }
+        let probe = try XCTUnwrap(transport.realtimeFrames.last)
+        let acknowledged = await coordinator.receiveRealtimePointerProgress(
+            .init(
+                sessionID: probe.sessionID,
+                generation: probe.generation,
+                sequence: probe.sequence
+            ),
+            from: remote
+        )
+        XCTAssertTrue(acknowledged)
+        for _ in 0..<100 where clock.pendingSleepCount < 3 { await Task.yield() }
+        XCTAssertGreaterThanOrEqual(clock.pendingSleepCount, 3)
+        clock.advance(by: ControlSessionCoordinator.realtimeProgressTimeoutNanos)
+        await delivery.value
+
+        guard case .controlling = await coordinator.currentState() else {
+            return XCTFail("Acknowledged realtime delivery must preserve the active session")
+        }
+        XCTAssertTrue(capture.suppressed)
+
+        _ = await coordinator.handleCaptured(.pointerMove(
+            deltaX: 3,
+            deltaY: 1,
+            absoluteX: 13,
+            absoluteY: 11
+        ))
+        await coordinator.flushPendingInput()
+        XCTAssertEqual(transport.realtimeFrames.last?.deltaX, 3)
+        XCTAssertEqual(transport.realtimeFrames.last?.deltaY, 1)
+        await coordinator.stop()
+    }
+
     func testActivationDoesNotDisablePrearmedInputSuppression() async throws {
         let local = DeviceID()
         let remote = DeviceID()
