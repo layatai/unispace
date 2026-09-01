@@ -155,6 +155,9 @@ async fn run_connection(
         &format!("{} can now control this PC", remote.name),
     );
     let mut state = SessionState::default();
+    // The Mac pushes topology updates (edge links) as workspace snapshots;
+    // live edits must reach boundary detection, not stay frozen at pairing.
+    let mut topology = configuration.workspace.topology.clone();
     let mut watchdog = interval(Duration::from_secs(1));
     watchdog.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
@@ -166,19 +169,21 @@ async fn run_connection(
                 let (kind, payload) = protocol::decode_frame(&packet)?;
                 match kind {
                     WireKind::ControlJsonV2 => {
+                        let message = protocol::decode_control(payload)?;
+                        if let ControlMessage::Workspace(snapshot) = &message {
+                            topology = snapshot.topology.clone();
+                        }
                         handle_control(
                             &mut state,
+                            &topology,
                             configuration,
                             local,
                             remote,
                             &mut writer,
                             input,
-                            protocol::decode_control(payload)?,
+                            message,
                         )
                         .await?;
-                        if state.active.is_none() && state.cursor.is_none() {
-                            // session ended; nothing else to do until the Mac reactivates
-                        }
                     }
                     WireKind::InputBinaryV2 => {
                         handle_reliable_input(
@@ -219,6 +224,7 @@ async fn run_connection(
 #[allow(clippy::too_many_arguments)]
 async fn handle_control(
     state: &mut SessionState,
+    topology: &serde_json::Value,
     configuration: &Configuration,
     local: &DeviceDescriptor,
     remote: &DeviceDescriptor,
@@ -269,7 +275,7 @@ async fn handle_control(
                     height: display.frame.height,
                     x,
                     y,
-                    linked_edges: linked_edges(&configuration.workspace.topology, display_id),
+                    linked_edges: linked_edges(topology, display_id),
                 });
             }
             writer
@@ -288,6 +294,7 @@ async fn handle_control(
             configuration.replace_workspace_key(&key)?;
             return Ok(());
         }
+        ControlMessage::Workspace(_) => {}
         ControlMessage::Heartbeat {
             session_id,
             timestamp_nanos,

@@ -30,6 +30,11 @@ impl UinputSink {
         for code in 1..=248 {
             keys.insert(KeyCode::new(code));
         }
+        // Mouse buttons live above the keyboard range (BTN_LEFT = 0x110);
+        // without advertising them the kernel drops every click event.
+        for code in [0x110, 0x111, 0x112, 0x113, 0x114, 0x115, 0x116] {
+            keys.insert(KeyCode::new(code));
+        }
         let mut relative = AttributeSet::<RelativeAxisCode>::new();
         for axis in [
             RelativeAxisCode::REL_X,
