@@ -31,7 +31,15 @@ workflow. Rebased onto `docs/pointer-stall-handover` (see
 - Acceptance: `Scripts/simulate.sh` runs Mac-controller → Linux-receiver activation,
   input, clipboard, file transfer, and restart recovery headlessly.
 
-## Phase 1 — Realtime pointer lane (3–4 days)
+## Phase 1.5 — Tauri UI (done, 2026-09-01)
+
+Replaces the zenity dialogs with a native webview UI (`unispace-linux-ui`,
+Tauri 2 + static HTML in `Linux/ui/`): status view, pairing wizard (host →
+six-digit code confirm), unpair. The daemon binary and its systemd service are
+unchanged; the tray and desktop launcher open the UI binary. CLI pairing
+(`unispace-linux pair HOST`) remains the headless path.
+
+## Phase 1 — Realtime pointer lane (done, commit `1c0615b`)
 
 The single biggest user-visible gap. Mac probes with `realtimePointerProgressV1`;
 Linux currently answers nothing.
@@ -99,8 +107,6 @@ project, not a hardening project. The wire protocol already supports it.
 
 ## Explicitly skipped
 
-- GPU/UI shell (the app is a tray + notifications by design; a GUI is not needed
-  for production operation).
 - Mir/Deepin/Sway-first-class support (basic injection works; not in the QA matrix).
 - Containerized/Flatpak distribution (uinput + keyring + portal sandboxing is a
   project of its own; deb/rpm first).

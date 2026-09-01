@@ -4,8 +4,10 @@ use std::process::Command;
 pub struct StatusTray;
 impl StatusTray {
     fn open() {
-        if let Ok(exe) = std::env::current_exe() {
-            let _ = Command::new(exe).arg("open").spawn();
+        if let Ok(exe) = std::env::current_exe()
+            && let Some(dir) = exe.parent()
+        {
+            let _ = Command::new(dir.join("unispace-linux-ui")).spawn();
         }
     }
 }

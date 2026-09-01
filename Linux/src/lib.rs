@@ -1,6 +1,7 @@
 pub mod clipboard;
 pub mod config;
 pub mod files;
+pub mod host;
 pub mod input;
 pub mod model;
 pub mod pairing;

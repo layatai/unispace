@@ -5,7 +5,23 @@ edition = "2024"
 license = "MIT"
 description = "UniSpace receiver for Linux"
 
+[lib]
+name = "unispace_linux"
+path = "src/lib.rs"
+
+[[bin]]
+name = "unispace-linux"
+path = "src/main.rs"
+
+[[bin]]
+name = "unispace-linux-ui"
+path = "src/bin/ui.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
 [dependencies]
+tauri = { version = "2", features = [] }
 anyhow = "1.0"
 arboard = { version = "3.6", default-features = false, features = ["wayland-data-control"] }
 base64 = "0.22"

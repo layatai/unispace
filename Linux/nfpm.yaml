@@ -11,6 +11,8 @@ license: MIT
 contents:
   - src: ../.build/linux/release/unispace-linux
     dst: /usr/bin/unispace-linux
+  - src: ../.build/linux/release/unispace-linux-ui
+    dst: /usr/bin/unispace-linux-ui
   - src: packaging/unispace.service
     dst: /usr/lib/systemd/user/unispace.service
   - src: packaging/70-unispace-uinput.rules
@@ -27,6 +29,6 @@ depends:
   - udev
   - dbus
 recommends:
-  - zenity
+  - webkit2gtk-4.1
   - wl-clipboard
   - xclip

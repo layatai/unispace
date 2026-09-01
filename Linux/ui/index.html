@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>UniSpace</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body {
+      font-family: system-ui, sans-serif;
+      margin: 0;
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    h1 { font-size: 20px; margin: 0; }
+    h2 { font-size: 14px; margin: 0 0 8px; color: gray; }
+    .card { border: 1px solid color-mix(in srgb, currentColor 20%, transparent); border-radius: 10px; padding: 16px; }
+    button {
+      font: inherit; padding: 8px 14px; border-radius: 8px; cursor: pointer;
+      border: 1px solid color-mix(in srgb, currentColor 30%, transparent);
+    }
+    button.primary { background: #2563eb; border-color: #2563eb; color: white; }
+    input { font: inherit; padding: 8px 10px; border-radius: 8px; width: 100%;
+      box-sizing: border-box; border: 1px solid color-mix(in srgb, currentColor 30%, transparent); }
+    .row { display: flex; gap: 10px; align-items: center; }
+    .error { color: #dc2626; font-size: 13px; white-space: pre-wrap; }
+    .hidden { display: none; }
+    .code { font-size: 28px; font-weight: 600; letter-spacing: 6px; }
+    dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 0; }
+    dt { color: gray; } dd { margin: 0; }
+  </style>
+</head>
+<body>
+  <h1>UniSpace</h1>
+
+  <section id="status-card" class="card hidden">
+    <h2>Paired</h2>
+    <dl>
+      <dt>Workspace</dt><dd id="workspace-name"></dd>
+      <dt>Controller</dt><dd id="host-address"></dd>
+    </dl>
+    <div class="row" style="margin-top:12px">
+      <button id="unpair">Unpair</button>
+    </div>
+  </section>
+
+  <section id="pair-card" class="card">
+    <h2>Pair with a Mac</h2>
+    <div id="step-address">
+      <input id="address" placeholder="Controller Mac hostname or IP, e.g. macbook.local" />
+      <div class="row" style="margin-top:10px">
+        <button id="begin" class="primary">Connect</button>
+      </div>
+    </div>
+    <div id="step-confirm" class="hidden">
+      <p id="peer-prompt"></p>
+      <div class="code" id="code"></div>
+      <p>Does the Mac show the same code?</p>
+      <div class="row">
+        <button id="confirm" class="primary">Codes match</button>
+        <button id="cancel">Cancel</button>
+      </div>
+    </div>
+    <p id="error" class="error"></p>
+  </section>
+
+  <script>
+    const { invoke } = window.__TAURI__.core;
+    const $ = (id) => document.getElementById(id);
+    const show = (id) => $(id).classList.remove('hidden');
+    const hide = (id) => $(id).classList.add('hidden');
+
+    async function refresh() {
+      const state = await invoke('state');
+      if (state.paired) {
+        $('workspace-name').textContent = state.workspaceName;
+        $('host-address').textContent = state.hostAddress;
+        show('status-card');
+        hide('pair-card');
+      } else {
+        hide('status-card');
+        show('pair-card');
+        show('step-address');
+        hide('step-confirm');
+      }
+    }
+
+    async function run(action) {
+      $('error').textContent = '';
+      try { await action(); } catch (error) { $('error').textContent = String(error); }
+    }
+
+    $('begin').addEventListener('click', () => run(async () => {
+      const offer = await invoke('begin_pairing', { address: $('address').value.trim() });
+      $('peer-prompt').textContent = `Confirm that ${offer.peerName} shows this code:`;
+      $('code').textContent = offer.code;
+      hide('step-address');
+      show('step-confirm');
+    }));
+
+    $('confirm').addEventListener('click', () => run(async () => {
+      await invoke('confirm_pairing');
+      await refresh();
+    }));
+
+    $('cancel').addEventListener('click', () => run(async () => {
+      await invoke('cancel_pairing');
+      show('step-address');
+      hide('step-confirm');
+    }));
+
+    $('unpair').addEventListener('click', () => run(async () => {
+      await invoke('unpair');
+      await refresh();
+    }));
+
+    refresh();
+  </script>
+</body>
+</html>
