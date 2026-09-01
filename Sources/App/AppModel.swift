@@ -729,6 +729,13 @@ final class AppModel: ObservableObject {
             }
         }
         guard controlTransferGuard.forwardsCapturedInput else { return false }
+        if case .pointerMove = event,
+           coordinator?.sendCapturedPointerImmediately(event) == true {
+            return false
+        }
+        if case .mouseButton = event {
+            coordinator?.suspendCapturedPointerFastPath()
+        }
         Task(priority: ControlTaskPriority.realtimeInput) { @MainActor [weak self] in
             await self?.forwardCaptured(event)
         }
@@ -774,6 +781,7 @@ final class AppModel: ObservableObject {
                 capture.setSuppressionEnabled(false)
                 return
             }
+            finishPendingActivationInput()
             statusMessage = "Controlling \(deviceName(transition.targetDeviceID))"
         } catch {
             controlTransferGuard.activationFailed(attempt)

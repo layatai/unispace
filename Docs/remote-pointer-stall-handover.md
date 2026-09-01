@@ -128,6 +128,10 @@ presence of an authenticated connection object.
 - A lock-protected realtime receiver now performs session validation, replay
   rejection, cumulative-delta recovery, and injection synchronously. There is
   no actor yield between wire receipt and visible pointer injection.
+- Once activation and pointer progress are confirmed, a lock-protected sender
+  enqueues authenticated UDP motion directly from the capture callback. It
+  disables itself for dragging, stale acknowledgements, send failure, fallback,
+  and session reset; those cases retain the reliable coordinator path.
 - Active control sessions hold a scoped latency-critical `ProcessInfo`
   activity, released at idle, to reduce process and timer throttling while
   remote control is in use.

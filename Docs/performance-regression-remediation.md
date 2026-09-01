@@ -88,6 +88,15 @@ cumulative-delta recovery live in a small lock-protected receiver. The
 user-interactive transport consumer validates and injects each realtime frame
 synchronously, without a Swift actor hop between wire receipt and injection.
 
+After activation confirmation, captured pointer motion on a healthy
+authenticated UDP lane is encoded and enqueued synchronously from the capture
+callback. A lock-protected sender owns generation, sequence, cumulative delta,
+and acknowledgement freshness for that fast path. Probing, stale or failed
+lanes, dragging, and reliable input continue through the coordinator actor, so
+the fast path cannot bypass fallback or ordering safeguards. The bounded
+activation stream is closed once activation succeeds instead of remaining the
+permanent pointer route.
+
 While a control session is active, UniSpace holds a scoped
 `ProcessInfo` user-initiated, latency-critical activity. The activity ends when
 the session returns to idle or the network is stopped. This reduces timer and
@@ -141,6 +150,9 @@ Send Files action; it does not gate target selection or channel bootstrap.
 - Realtime receipt and injection contain no cooperative-executor suspension;
   session and replay state remain lock-protected and reset with the control
   session.
+- Healthy UDP capture-to-send contains no Main Actor or control-actor
+  suspension; progress expiry and send failure return motion to the existing
+  reliable/fallback path.
 - The latency-critical process activity exists only for an active controlling
   or receiving session and is released on every idle/stop path.
 - Existing unit, coverage, UI, native-input, and Windows CI gates remain intact.

@@ -126,12 +126,21 @@ final class AuthenticatedPointerTransport: @unchecked Sendable {
     }
 
     func send(_ frame: PortableRealtimePointerFrame, to deviceID: DeviceID) async throws -> Bool {
+        sendImmediately(frame, to: deviceID)
+    }
+
+    func sendImmediately(_ frame: PortableRealtimePointerFrame, to deviceID: DeviceID) -> Bool {
         guard let connection = lock.withLock({ connections[deviceID] }) else { return false }
-        let payload = try WireFrameCodec.encodePortableRealtimePointer(frame)
-        connection.send(payload) { [weak connection] error in
-            if error != nil { connection?.cancel() }
+        do {
+            let payload = try WireFrameCodec.encodePortableRealtimePointer(frame)
+            connection.send(payload) { [weak connection] error in
+                if error != nil { connection?.cancel() }
+            }
+            return true
+        } catch {
+            connection.cancel()
+            return false
         }
-        return true
     }
 
     func reconnect(to deviceID: DeviceID) {

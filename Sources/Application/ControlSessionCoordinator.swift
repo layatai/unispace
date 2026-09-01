@@ -76,6 +76,7 @@ public actor ControlSessionCoordinator {
     private let inputSender: OrderedInputSender
     private let clock: MonotonicClock
     private nonisolated let realtimeInputReceiver: RealtimeInputReceiver
+    private nonisolated let realtimePointerCaptureSender: RealtimePointerCaptureSender
     private let activationTimeout: Duration
     private let sessionStream: AsyncStream<ControlSessionSnapshot>
     private let sessionContinuation: AsyncStream<ControlSessionSnapshot>.Continuation
@@ -130,6 +131,12 @@ public actor ControlSessionCoordinator {
         self.realtimeInputReceiver = RealtimeInputReceiver(
             workspaceID: workspaceID,
             injector: injector
+        )
+        self.realtimePointerCaptureSender = RealtimePointerCaptureSender(
+            workspaceID: workspaceID,
+            localDeviceID: localDeviceID,
+            transport: transport,
+            clock: clock
         )
         self.activationTimeout = activationTimeout
         self.election = election
@@ -243,6 +250,17 @@ public actor ControlSessionCoordinator {
             } else {
                 startHeartbeat(target: target, sessionID: sessionID)
             }
+            if realtimeDeliveryMode == .legacy {
+                realtimePointerCaptureSender.enableLegacy(
+                    epoch: epoch,
+                    target: target,
+                    sessionID: sessionID,
+                    generation: realtimeGeneration,
+                    sequence: realtimeSequence,
+                    cumulativePointerX: cumulativePointerX,
+                    cumulativePointerY: cumulativePointerY
+                )
+            }
         } catch {
             await endCurrentSession(notifyPeer: false)
             throw error
@@ -310,9 +328,11 @@ public actor ControlSessionCoordinator {
             return .emergencyStop
         }
         if case let .mouseButton(button, isDown, _) = event {
+            if isDown { realtimePointerCaptureSender.suspend() }
             await flushPendingMotion()
             if isDown { pressedButtons.insert(button) } else { pressedButtons.remove(button) }
             await sendInput(event)
+            if pressedButtons.isEmpty { realtimePointerCaptureSender.resume() }
             return .forwarded
         }
         if case let .pointerMove(deltaX, deltaY, absoluteX, absoluteY) = event {
@@ -423,6 +443,14 @@ public actor ControlSessionCoordinator {
         realtimeInputReceiver.receive(frame, from: source)
     }
 
+    public nonisolated func sendCapturedPointerImmediately(_ event: InputEvent) -> Bool {
+        realtimePointerCaptureSender.send(event)
+    }
+
+    public nonisolated func suspendCapturedPointerFastPath() {
+        realtimePointerCaptureSender.suspend()
+    }
+
     public func realtimePointerProgress(
         sessionID: SessionID,
         from source: DeviceID
@@ -437,7 +465,12 @@ public actor ControlSessionCoordinator {
         _ progress: RealtimePointerProgress,
         from source: DeviceID
     ) -> Bool {
-        guard case let .controlling(_, target, sessionID) = state,
+        if realtimePointerCaptureSender.acknowledge(progress, from: source) {
+            lastRealtimeAcknowledgedSequence = progress.sequence
+            lastRealtimeAcknowledgementNanos = clock.nowNanoseconds()
+            return true
+        }
+        guard case let .controlling(epoch, target, sessionID) = state,
               source == target, progress.sessionID == sessionID,
               progress.generation == realtimeGeneration,
               let lastRealtimeSentSequence,
@@ -448,6 +481,17 @@ public actor ControlSessionCoordinator {
         lastRealtimeAcknowledgedSequence = progress.sequence
         lastRealtimeAcknowledgementNanos = clock.nowNanoseconds()
         realtimeDeliveryMode = .healthy
+        realtimePointerCaptureSender.enableAcknowledged(
+            epoch: epoch,
+            target: source,
+            sessionID: progress.sessionID,
+            generation: realtimeGeneration,
+            sequence: realtimeSequence,
+            cumulativePointerX: cumulativePointerX,
+            cumulativePointerY: cumulativePointerY,
+            acknowledgedSequence: progress.sequence,
+            acknowledgedAtNanos: lastRealtimeAcknowledgementNanos ?? clock.nowNanoseconds()
+        )
         return true
     }
 
@@ -781,6 +825,7 @@ public actor ControlSessionCoordinator {
 
     private func enterRealtimeFallback(target: DeviceID) {
         guard realtimeDeliveryMode != .fallback else { return }
+        realtimePointerCaptureSender.disable()
         resetRealtimeSender(incrementGeneration: true)
         lastRealtimeAcknowledgementNanos = nil
         lastRealtimeAcknowledgedSequence = nil
@@ -791,6 +836,7 @@ public actor ControlSessionCoordinator {
     }
 
     private func resetRealtimeSender(incrementGeneration: Bool) {
+        realtimePointerCaptureSender.disable()
         if incrementGeneration { realtimeGeneration &+= 1 }
         realtimeSequence = 0
         cumulativePointerX = 0
@@ -802,6 +848,7 @@ public actor ControlSessionCoordinator {
     }
 
     private func resetRealtimeDelivery() {
+        realtimePointerCaptureSender.disable()
         realtimeDeliveryMode = .legacy
         lastRealtimeAcknowledgementNanos = nil
         lastRealtimeAcknowledgedSequence = nil

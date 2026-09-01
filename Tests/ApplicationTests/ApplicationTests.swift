@@ -1143,6 +1143,61 @@ final class ApplicationTests: XCTestCase {
         await coordinator.stop()
     }
 
+    func testAcknowledgedPointerFastPathIsSynchronousAndExpiresWithProgress() async throws {
+        let local = DeviceID()
+        let remote = DeviceID()
+        let clock = ManualMonotonicClock()
+        let transport = TransportSpy(useRealtime: true)
+        let coordinator = ControlSessionCoordinator(
+            localDeviceID: local,
+            workspaceID: WorkspaceID(),
+            capture: CaptureSpy(),
+            injector: InjectorSpy(),
+            transport: transport,
+            clock: clock
+        )
+        _ = await coordinator.makeLocalController()
+        try await coordinator.activate(
+            target: remote,
+            displayID: DisplayID(),
+            entryEdge: .left,
+            normalizedPosition: 0.5,
+            targetCapabilities: [.realtimePointerProgressV1],
+            targetPlatform: .macOS
+        )
+        _ = await coordinator.handleCaptured(.pointerMove(
+            deltaX: 1,
+            deltaY: 0,
+            absoluteX: 10,
+            absoluteY: 10
+        ))
+        await coordinator.flushPendingInput()
+        let probe = try XCTUnwrap(transport.realtimeFrames.last)
+        let acknowledged = await coordinator.receiveRealtimePointerProgress(
+            .init(
+                sessionID: probe.sessionID,
+                generation: probe.generation,
+                sequence: probe.sequence
+            ),
+            from: remote
+        )
+        XCTAssertTrue(acknowledged)
+
+        let immediate = InputEvent.pointerMove(
+            deltaX: 3,
+            deltaY: 2,
+            absoluteX: 13,
+            absoluteY: 12
+        )
+        XCTAssertTrue(coordinator.sendCapturedPointerImmediately(immediate))
+        XCTAssertEqual(transport.realtimeFrames.last?.deltaX, 3)
+        XCTAssertEqual(transport.realtimeFrames.last?.deltaY, 2)
+
+        clock.advance(by: ControlSessionCoordinator.realtimeProgressTimeoutNanos + 1)
+        XCTAssertFalse(coordinator.sendCapturedPointerImmediately(immediate))
+        await coordinator.stop()
+    }
+
     func testReceiverReportsLatestAcceptedRealtimeProgress() async throws {
         let local = DeviceID()
         let remote = DeviceID()
@@ -2020,5 +2075,12 @@ private final class TransportSpy: PeerTransport, @unchecked Sendable {
             return true
         }
         return false
+    }
+    func sendRealtimeImmediately(_ frame: RealtimePointerFrame, to deviceID: DeviceID) -> Bool {
+        lock.withLock {
+            guard realtimeEnabled, realtimeSendError == nil else { return false }
+            storedRealtimeFrames.append(frame)
+            return true
+        }
     }
 }

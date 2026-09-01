@@ -381,6 +381,16 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
         return false
     }
 
+    public func sendRealtimeImmediately(_ frame: RealtimePointerFrame, to deviceID: DeviceID) -> Bool {
+        let lane = lock.withLock { () -> AuthenticatedPointerTransport? in
+            guard knownPeers[deviceID]?.capabilities.contains(.udpPointerV2) == true else {
+                return nil
+            }
+            return authenticatedPointerTransport
+        }
+        return lane?.sendImmediately(PortableInputMapper.map(frame), to: deviceID) == true
+    }
+
     private func send(data: Data, to deviceID: DeviceID) async throws {
         guard let connection = lock.withLock({ connections[deviceID] }) else {
             throw PeerTransportError.peerUnavailable(deviceID)

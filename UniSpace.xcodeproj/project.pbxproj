@@ -43,6 +43,7 @@
 		3572D06C3B227654B07E788E /* InputPipelineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEB8F1CADC2034E5BCEB1D9D /* InputPipelineTests.swift */; };
 		365AC41D407C6034376F50A5 /* FileTransferContracts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F7715DBADB331DC400DEB3E /* FileTransferContracts.swift */; };
 		3685E4EB870AE8B0A1C532FF /* ConnectionPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 05F047B5B71179922FCBE2DD /* ConnectionPolicy.swift */; };
+		36F9CE3AB5AA78A34CA3F61F /* RealtimePointerCaptureSender.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1F4DB4B156BDAF8BC427A70 /* RealtimePointerCaptureSender.swift */; };
 		38EE95B2C15CE7EC2C8A2FB3 /* QoSFileTransferTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9A7C3F7869A4784BF51181A /* QoSFileTransferTransport.swift */; };
 		3A3A388DE7A4473F3CAD2FD1 /* UniSpaceInfrastructure.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A92FBB5C74B263098DBE15F3 /* UniSpaceInfrastructure.framework */; };
 		3A880F050C6A00143E1A1765 /* ConnectionRetrySchedule.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4DC7CDECCF5F3E49CB27E553 /* ConnectionRetrySchedule.swift */; };
@@ -389,6 +390,7 @@
 		AD45CA2E1EFEB55F7EAA255E /* UniSpaceDomainTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = UniSpaceDomainTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		AF32C8B699ECA9115BCE438B /* FileTransferProtocolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileTransferProtocolTests.swift; sourceTree = "<group>"; };
 		B08ECF73A3310CB81B011268 /* ClipboardViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipboardViewModel.swift; sourceTree = "<group>"; };
+		B1F4DB4B156BDAF8BC427A70 /* RealtimePointerCaptureSender.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RealtimePointerCaptureSender.swift; sourceTree = "<group>"; };
 		B529336DB430FF43F7D43646 /* UserDefaultsControllerIdentityStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UserDefaultsControllerIdentityStore.swift; sourceTree = "<group>"; };
 		B5768D1126879FE096B44FAB /* ProtocolCoverageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProtocolCoverageTests.swift; sourceTree = "<group>"; };
 		B5E239C50434E115697BAFB7 /* DisplaysView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplaysView.swift; sourceTree = "<group>"; };
@@ -698,6 +700,7 @@
 				01A1425648D0C5F8712AC268 /* FrameCodec.swift */,
 				478444AE3F889D2F9D43B479 /* PortableInputMapper.swift */,
 				0731731EF8A338699B9075C7 /* RealtimeInputReceiver.swift */,
+				B1F4DB4B156BDAF8BC427A70 /* RealtimePointerCaptureSender.swift */,
 				1E725BDD4F645E9E192403B2 /* RemoteInputEventRouter.swift */,
 				2CF070D689C1AA7C27334F7E /* WorkspaceLifecycle.swift */,
 				955E18CB8A8476625C1772C6 /* WorkspaceReplicaMerger.swift */,
@@ -1082,6 +1085,7 @@
 				8E6BA003D246813AC1906B0B /* FrameCodec.swift in Sources */,
 				7AC9BE31D5C8E171DA184B8F /* PortableInputMapper.swift in Sources */,
 				17DDC5C20C28D89A2FBE0B95 /* RealtimeInputReceiver.swift in Sources */,
+				36F9CE3AB5AA78A34CA3F61F /* RealtimePointerCaptureSender.swift in Sources */,
 				9E91AEFDFB42CEAF80364B3D /* RemoteInputEventRouter.swift in Sources */,
 				3BD92A406A4851CD54C8BD66 /* WorkspaceLifecycle.swift in Sources */,
 				1717E7750DAD1E6D14EF4CD1 /* WorkspaceReplicaMerger.swift in Sources */,

@@ -247,12 +247,15 @@ actor SimulationNodeRuntime {
             emitter.send(.event("moveBatchStarted", values: ["count": String(count)]))
             for index in 0..<count {
                 let capturedAt = DispatchTime.now().uptimeNanoseconds
-                _ = await coordinator.handleCaptured(.pointerMove(
+                let event = InputEvent.pointerMove(
                     deltaX: 1,
                     deltaY: index.isMultiple(of: 2) ? 1 : -1,
                     absoluteX: Double(index),
                     absoluteY: Double(capturedAt)
-                ))
+                )
+                if !coordinator.sendCapturedPointerImmediately(event) {
+                    _ = await coordinator.handleCaptured(event)
+                }
                 if index > 0, index.isMultiple(of: 100) {
                     emitter.send(.event("moveBatchProgress", values: ["captured": String(index)]))
                 }
