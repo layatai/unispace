@@ -352,6 +352,10 @@ final class SimulationOrchestrator {
             _ = try nodeA.command("claim")
             Thread.sleep(forTimeInterval: 0.1)
             _ = try nodeA.command("activate")
+            _ = try nodeA.command("moveBatch", values: [
+                "count": "100",
+                "intervalMicros": "8333",
+            ])
             _ = try nodeB.command("beginMetrics", values: ["condition": "recovered"])
             _ = try nodeA.command(
                 "moveBatch",
@@ -365,7 +369,9 @@ final class SimulationOrchestrator {
             guard recovered.visible.maximumMilliseconds <= thresholds.maximumLatencyMilliseconds,
                   recovered.visible.maximumGapMilliseconds <= thresholds.maximumLatencyMilliseconds else {
                 throw SimulationFailure.protocolFailure(
-                    "Recovered pointer exceeded the \(thresholds.maximumLatencyMilliseconds) ms latency/stall gate"
+                    "Recovered pointer max \(recovered.visible.maximumMilliseconds) ms, " +
+                        "stall \(recovered.visible.maximumGapMilliseconds) ms; " +
+                        "limit \(thresholds.maximumLatencyMilliseconds) ms"
                 )
             }
         }
