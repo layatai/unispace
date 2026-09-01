@@ -110,9 +110,11 @@ final class InputPipelineTests: XCTestCase {
         let associations = LockedValues<Bool>()
         let warped = LockedValues<CGPoint>()
         let handledEvents = LockedValues<InputEvent>()
+        let uptime = LockedUptime()
         let capture = CGEventInputCapture(
             mouseAssociationHandler: associations.append,
             cursorWarpHandler: warped.append,
+            uptimeProvider: uptime.now,
             handler: { event in
                 handledEvents.append(event)
                 return true
@@ -155,6 +157,32 @@ final class InputPipelineTests: XCTestCase {
         XCTAssertTrue(capture.handle(type: .mouseMoved, event: suppressionEvent))
         XCTAssertEqual(associations.values, [false])
         XCTAssertEqual(warped.values.count, 1)
+
+        let anchor = try XCTUnwrap(warped.values.last)
+        let warpEvent = try XCTUnwrap(CGEvent(
+            mouseEventSource: nil,
+            mouseType: .mouseMoved,
+            mouseCursorPosition: anchor,
+            mouseButton: .left
+        ))
+        let handledBeforeWarp = handledEvents.values.count
+        XCTAssertTrue(capture.handle(type: .mouseMoved, event: warpEvent))
+        XCTAssertEqual(handledEvents.values.count, handledBeforeWarp)
+        XCTAssertEqual(warped.values.count, 1)
+
+        let physicalEvent = try XCTUnwrap(CGEvent(
+            mouseEventSource: nil,
+            mouseType: .mouseMoved,
+            mouseCursorPosition: CGPoint(x: anchor.x + 2, y: anchor.y),
+            mouseButton: .left
+        ))
+        XCTAssertTrue(capture.handle(type: .mouseMoved, event: physicalEvent))
+        XCTAssertEqual(handledEvents.values.count, handledBeforeWarp + 1)
+        XCTAssertEqual(warped.values.count, 2)
+
+        uptime.advance(by: 20_000_001)
+        XCTAssertTrue(capture.handle(type: .mouseMoved, event: warpEvent))
+        XCTAssertEqual(handledEvents.values.count, handledBeforeWarp + 2)
         XCTAssertFalse(capture.handle(type: .tapDisabledByTimeout, event: suppressionEvent))
         XCTAssertFalse(capture.handle(type: .tapDisabledByUserInput, event: suppressionEvent))
         capture.stop()
@@ -271,4 +299,11 @@ private final class LockedValues<Value: Sendable>: @unchecked Sendable {
     private var stored: [Value] = []
     var values: [Value] { lock.withLock { stored } }
     func append(_ value: Value) { lock.withLock { stored.append(value) } }
+}
+
+private final class LockedUptime: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: UInt64 = 1
+    func now() -> UInt64 { lock.withLock { value } }
+    func advance(by amount: UInt64) { lock.withLock { value &+= amount } }
 }
