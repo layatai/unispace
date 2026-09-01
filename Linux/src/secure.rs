@@ -42,12 +42,18 @@ pub struct SecureStream {
     key: [u8; 32],
     outbound_sequence: u64,
     inbound_sequence: Option<u64>,
+    hello_kind: u8,
+    sealed_kind: u8,
 }
 
 pub struct ChannelProfile {
     pub port: u16,
     pub hello_prefix: &'static str,
     pub info_prefix: &'static str,
+    /// Packet kind bytes: the control channel uses 10/11; the clipboard and
+    /// file-transfer lanes use 1/2 (matching the Mac's per-lane transports).
+    pub hello_kind: u8,
+    pub sealed_kind: u8,
 }
 
 impl SecureStream {
@@ -71,6 +77,8 @@ impl SecureStream {
                 port: crate::CONTROL_PORT,
                 hello_prefix: "UniSpace secure hello v1",
                 info_prefix: "UniSpace channel v1",
+                hello_kind: HELLO,
+                sealed_kind: SEALED,
             },
         )
         .await
@@ -122,9 +130,9 @@ impl SecureStream {
             proof,
             supported_wire_versions: vec![1, 2],
         };
-        write_outer(&mut stream, HELLO, &serde_json::to_vec(&hello)?).await?;
-        let (kind, payload) = read_outer(&mut stream).await?;
-        ensure!(kind == HELLO, "expected secure hello");
+        write_outer(&mut stream, profile.hello_kind, &serde_json::to_vec(&hello)?).await?;
+        let (kind, payload) = read_outer(&mut stream, profile.hello_kind, profile.sealed_kind).await?;
+        ensure!(kind == profile.hello_kind, "expected secure hello");
         let peer: SecureHello = serde_json::from_slice(&payload)?;
         ensure!(
             peer.version == 1
@@ -166,6 +174,8 @@ impl SecureStream {
             key,
             outbound_sequence: 0,
             inbound_sequence: None,
+            hello_kind: profile.hello_kind,
+            sealed_kind: profile.sealed_kind,
         })
     }
 
@@ -186,17 +196,18 @@ impl SecureStream {
         let mut combined = Vec::with_capacity(12 + ciphertext.len());
         combined.extend_from_slice(&nonce_bytes);
         combined.extend_from_slice(&ciphertext);
-        write_outer(&mut self.stream, SEALED, &combined).await
+        write_outer(&mut self.stream, self.sealed_kind, &combined).await
     }
 
     pub async fn receive(&mut self) -> Result<Vec<u8>> {
         loop {
-            let (kind, payload) = read_outer(&mut self.stream).await?;
-            if kind == HELLO {
+            let (kind, payload) =
+                read_outer(&mut self.stream, self.hello_kind, self.sealed_kind).await?;
+            if kind == self.hello_kind {
                 continue;
             }
             ensure!(
-                kind == SEALED && payload.len() >= 28,
+                kind == self.sealed_kind && payload.len() >= 28,
                 "invalid secure packet"
             );
             let cipher = ChaCha20Poly1305::new_from_slice(&self.key)?;
@@ -224,11 +235,14 @@ impl SecureStream {
                 read_half,
                 key: self.key,
                 inbound_sequence: self.inbound_sequence,
+                hello_kind: self.hello_kind,
+                sealed_kind: self.sealed_kind,
             },
             SecureWriter {
                 write_half: Arc::new(tokio::sync::Mutex::new(write_half)),
                 key: self.key,
                 outbound_sequence: Arc::new(AtomicU64::new(self.outbound_sequence)),
+                sealed_kind: self.sealed_kind,
             },
         )
     }
@@ -238,23 +252,27 @@ pub struct SecureReader {
     read_half: tokio::net::tcp::OwnedReadHalf,
     key: [u8; 32],
     inbound_sequence: Option<u64>,
+    hello_kind: u8,
+    sealed_kind: u8,
 }
 
 pub struct SecureWriter {
     write_half: Arc<tokio::sync::Mutex<tokio::net::tcp::OwnedWriteHalf>>,
     key: [u8; 32],
     outbound_sequence: Arc<AtomicU64>,
+    sealed_kind: u8,
 }
 
 impl SecureReader {
     pub async fn receive(&mut self) -> Result<Vec<u8>> {
         loop {
-            let (kind, payload) = read_outer(&mut self.read_half).await?;
-            if kind == HELLO {
+            let (kind, payload) =
+                read_outer(&mut self.read_half, self.hello_kind, self.sealed_kind).await?;
+            if kind == self.hello_kind {
                 continue;
             }
             ensure!(
-                kind == SEALED && payload.len() >= 28,
+                kind == self.sealed_kind && payload.len() >= 28,
                 "invalid secure packet"
             );
             let cipher = ChaCha20Poly1305::new_from_slice(&self.key)?;
@@ -291,7 +309,7 @@ impl SecureWriter {
         combined.extend_from_slice(&nonce_bytes);
         combined.extend_from_slice(&ciphertext);
         let mut write_half = self.write_half.lock().await;
-        write_outer(&mut *write_half, SEALED, &combined).await
+        write_outer(&mut *write_half, self.sealed_kind, &combined).await
     }
 }
 
@@ -327,7 +345,11 @@ where
     stream.write_all(payload).await?;
     Ok(())
 }
-async fn read_outer<T>(stream: &mut T) -> Result<(u8, Vec<u8>)>
+async fn read_outer<T>(
+    stream: &mut T,
+    hello_kind: u8,
+    sealed_kind: u8,
+) -> Result<(u8, Vec<u8>)>
 where
     T: tokio::io::AsyncReadExt + Unpin,
 {
@@ -337,7 +359,7 @@ where
         "outer packet too large"
     );
     let kind = stream.read_u8().await?;
-    if kind != HELLO && kind != SEALED {
+    if kind != hello_kind && kind != sealed_kind {
         bail!("invalid secure packet kind")
     };
     let mut payload = vec![0; length];

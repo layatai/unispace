@@ -42,13 +42,29 @@ impl Tray for StatusTray {
     }
 }
 pub async fn start() {
-    let _ = StatusTray.assume_sni_available(true).spawn().await;
+    // ksni's tray loop drives a blocking D-Bus connection; run it on a
+    // dedicated thread so it never block_on's the async runtime.
+    std::thread::spawn(|| {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("tray runtime");
+        runtime.block_on(async {
+            let _ = StatusTray.assume_sni_available(true).spawn().await;
+        });
+    });
 }
 pub fn notify(summary: &str, body: &str) {
-    let _ = notify_rust::Notification::new()
-        .appname("UniSpace Receiver")
-        .summary(summary)
-        .body(body)
-        .icon("input-mouse")
-        .show();
+    // notify-rust's sync API block_on's its own D-Bus connection, which panics
+    // inside the tokio runtime; run it on a plain thread instead.
+    let summary = summary.to_owned();
+    let body = body.to_owned();
+    std::thread::spawn(move || {
+        let _ = notify_rust::Notification::new()
+            .appname("UniSpace Receiver")
+            .summary(&summary)
+            .body(&body)
+            .icon("input-mouse")
+            .show();
+    });
 }

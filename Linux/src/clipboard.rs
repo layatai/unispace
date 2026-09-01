@@ -32,6 +32,8 @@ pub async fn run(configuration: Configuration) -> Result<()> {
             port: CLIPBOARD_PORT,
             hello_prefix: "UniSpace secure clipboard hello v1",
             info_prefix: "UniSpace clipboard channel v1",
+            hello_kind: 1,
+            sealed_kind: 2,
         },
     )
     .await?;

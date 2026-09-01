@@ -70,6 +70,8 @@ pub async fn run(configuration: Configuration) -> Result<()> {
             port: FILE_TRANSFER_PORT,
             hello_prefix: "UniSpace secure content hello v1",
             info_prefix: "UniSpace content channel v1",
+            hello_kind: 1,
+            sealed_kind: 2,
         },
     )
     .await?;
