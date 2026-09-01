@@ -978,13 +978,15 @@ final class AppModel: ObservableObject {
             }
             statusMessage = isLocalController ? "Controller ready" : "Receiver ready"
         case let .boundaryCrossed(sessionID, displayID, edge, normalizedPosition):
-            await handleBoundaryCrossed(
-                from: source,
-                sessionID: sessionID,
-                displayID: displayID,
-                edge: edge,
-                normalizedPosition: normalizedPosition
-            )
+            Task { [weak self] in
+                await self?.handleBoundaryCrossed(
+                    from: source,
+                    sessionID: sessionID,
+                    displayID: displayID,
+                    edge: edge,
+                    normalizedPosition: normalizedPosition
+                )
+            }
         case let .heartbeat(sessionID, timestampNanos):
             if await coordinator?.receiveHeartbeat(sessionID: sessionID, from: source) == true {
                 if capabilities(of: source).contains(.realtimePointerProgressV1),
