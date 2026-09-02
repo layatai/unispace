@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
-version="${UNISPACE_VERSION:-1.1.4}"
+version="${UNISPACE_VERSION:-1.2.0}"
 case "$(uname -m)" in
   x86_64) nfpm_arch=amd64 ;;
   aarch64|arm64) nfpm_arch=arm64 ;;
