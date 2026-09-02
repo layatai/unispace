@@ -68,8 +68,11 @@ package matrix pending.
   smoke also pass.
 - PR #39 is retargeted to `docs/pointer-stall-handover` and updated by exact-SHA
   force-with-lease. `897b5f6` adds the official Tauri 2 Ubuntu build
-  prerequisites after the first CI run exposed missing GLib/GTK/WebKit headers;
-  keep the PR open until the rerun passes.
+  prerequisites after the first CI run exposed missing GLib/GTK/WebKit headers.
+  Both Linux architectures and Finder continuity now pass. The macOS QoS job
+  passed tests and coverage twice but failed hosted-runner visible-latency
+  thresholds while wire p95 stayed below 2 ms; local signed full simulation
+  passes. Do not weaken the QoS gate—keep the PR open on this CI blocker.
 
 **Exit criteria Track A:** a stranger installs the deb/rpm on Ubuntu GNOME and
 Fedora KDE, pairs, controls, swaps clipboard and files, uninstalls — without
