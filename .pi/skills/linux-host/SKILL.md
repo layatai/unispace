@@ -63,10 +63,18 @@ ssh tai@dellom.tailda4c05.ts.net 'pkill -x unispace-linux; cd ~/unispace-build &
 - **Keepalive is mandatory** on every secure channel: the connection idles
   between sessions, and without TCP keepalive a Mac restart leaves the receiver
   parked on a half-open socket (edges silently stop routing).
-- **Pointer movement uses absolute-position deltas** (`absoluteX/Y`), not
-  cumulative deltas — the Mac resets its cumulative counters when the realtime
-  lane falls back, which desyncs cumulative math. Dedupe per (generation,
-  sequence): the controller restarts sequence at 0 on generation bump.
+- **Portable realtime field order is an ABI**: after version/identity/epoch,
+  generation, and sequence, Swift writes `timestampNanos` and then delta,
+  cumulative, and absolute X/Y doubles. Keep Rust aligned with
+  `PortableBinaryCodec`; regression test:
+  `protocol::tests::realtime_pointer_matches_swift_field_order_and_round_trips`.
+- **Pointer movement uses cumulative displacement differences** for datagram
+  loss recovery, with a zero baseline on generation change. `absoluteX/Y` is
+  the suppressed Mac cursor position, not a target-space coordinate. Dedupe per
+  (generation, sequence): sequence restarts at 0 on generation bump.
+- **Pointer-lane tasks must end with their control connection**. A detached UDP
+  task keeps port 61339 bound and makes every reconnect fail with
+  `bind UDP pointer lane`; keep it owned by the connection's `JoinSet`.
 - **uinput must advertise BTN_\* codes** (0x110–0x116) or every click is
   silently dropped by the kernel while movement still works.
 - **Gestures follow Windows-injector semantics**: swipe shortcuts fire once per
