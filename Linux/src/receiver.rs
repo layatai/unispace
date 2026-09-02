@@ -10,6 +10,7 @@ use anyhow::{Context, Result, ensure};
 use std::{collections::BTreeSet, time::Duration};
 use tokio::{
     sync::mpsc,
+    task::JoinSet,
     time::{Instant, interval, sleep},
 };
 use tracing::{debug, info, warn};
@@ -141,7 +142,8 @@ async fn run_connection(
     let lane_socket = tokio::net::UdpSocket::bind(("0.0.0.0", crate::POINTER_PORT))
         .await
         .context("bind UDP pointer lane")?;
-    tokio::spawn(pointer::serve_pointer_lane(
+    let mut pointer_tasks = JoinSet::new();
+    pointer_tasks.spawn(pointer::serve_pointer_lane(
         lane_socket,
         local.id.raw_value,
         configuration.workspace.id.raw_value,
