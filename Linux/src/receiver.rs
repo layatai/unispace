@@ -218,6 +218,7 @@ async fn run_connection(
                     input.release_all()?;
                     state = SessionState::default();
                 }
+                resync_cursor_from_compositor(&mut state);
             }
         }
     }
@@ -423,6 +424,19 @@ async fn inject_with_boundary(
             .as_mut()
             .and_then(|cursor| cursor.advance(*dx, *dy))
     {
+        // Pointer acceleration makes the tracked position diverge from the
+        // compositor's; only return when the REAL cursor reaches the edge.
+        if let Some(cursor) = state.cursor.as_ref()
+            && !cursor_at_edge(cursor, edge)
+        {
+            if let Some((x, y)) = crate::host::cursor_position() {
+                let cursor = state.cursor.as_mut().expect("cursor exists");
+                cursor.x = x.clamp(0.0, cursor.width - 1.0);
+                cursor.y = y.clamp(0.0, cursor.height - 1.0);
+                debug!(x, y, "cursor resynced at false crossing");
+            }
+            return Ok(());
+        }
         let display_id = state.cursor.as_ref().expect("cursor exists").display_id;
         let session = state.active.map(|(session, _)| session);
         input.release_all()?;
@@ -437,6 +451,27 @@ async fn inject_with_boundary(
         return Ok(());
     }
     input.inject(&event)
+}
+
+fn cursor_at_edge(cursor: &CursorState, edge: protocol::DisplayEdge) -> bool {
+    let Some((x, y)) = crate::host::cursor_position() else {
+        return true; // no compositor source; trust the tracked position
+    };
+    const EDGE_MARGIN: f64 = 15.0;
+    match edge {
+        protocol::DisplayEdge::Right => x >= cursor.width - EDGE_MARGIN,
+        protocol::DisplayEdge::Left => x <= EDGE_MARGIN,
+        protocol::DisplayEdge::Bottom => y >= cursor.height - EDGE_MARGIN,
+        protocol::DisplayEdge::Top => y <= EDGE_MARGIN,
+    }
+}
+
+fn resync_cursor_from_compositor(state: &mut SessionState) {
+    let Some(cursor) = state.cursor.as_mut() else { return };
+    if let Some((x, y)) = crate::host::cursor_position() {
+        cursor.x = x.clamp(0.0, cursor.width - 1.0);
+        cursor.y = y.clamp(0.0, cursor.height - 1.0);
+    }
 }
 
 fn linked_edges(topology: &serde_json::Value, display_id: Uuid) -> BTreeSet<protocol::DisplayEdge> {

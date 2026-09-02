@@ -58,6 +58,30 @@ fn display(device_id: Uuid) -> DisplayDescriptor {
     }
 }
 
+/// The compositor's real cursor position (Hyprland first). Pointer
+/// acceleration makes injected relative motion diverge from the raw delta
+/// sum, so boundary detection must trust this, not the accumulated value.
+pub fn cursor_position() -> Option<(f64, f64)> {
+    let runtime = std::env::var("XDG_RUNTIME_DIR")
+        .unwrap_or_else(|_| format!("/run/user/{}", unsafe { libc::getuid() }));
+    let signature = std::fs::read_dir(format!("{runtime}/hypr"))
+        .ok()?
+        .flatten()
+        .find(|entry| entry.file_type().map(|t| t.is_dir()).unwrap_or(false))?
+        .file_name()
+        .into_string()
+        .ok()?;
+    let output = Command::new("hyprctl")
+        .arg("cursorpos")
+        .env("XDG_RUNTIME_DIR", &runtime)
+        .env("HYPRLAND_INSTANCE_SIGNATURE", signature)
+        .output()
+        .ok()?;
+    let text = String::from_utf8(output.stdout).ok()?;
+    let (x, y) = text.trim().split_once(", ")?;
+    Some((x.trim().parse().ok()?, y.trim().parse().ok()?))
+}
+
 fn screen_size() -> (u32, u32) {
     // Hyprland (Wayland): `hyprctl monitors` reports `WxH@refresh at XxY`.
     if let Some((w, h)) = hypr_monitor_size() {
