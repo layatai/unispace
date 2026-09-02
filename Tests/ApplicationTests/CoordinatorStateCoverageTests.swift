@@ -162,7 +162,7 @@ final class CoordinatorStateCoverageTests: XCTestCase {
         XCTAssertTrue(hysteresis.allows(transition))
     }
 
-    func testPeerTransportDefaultRealtimeLaneUsesReliableFallback() async throws {
+    func testPeerTransportDefaultRealtimeLaneReportsUnavailableWithoutSending() async throws {
         let transport = ReliableOnlyTransport()
         let controllerID = DeviceID()
         let targetID = DeviceID()
@@ -183,10 +183,11 @@ final class CoordinatorStateCoverageTests: XCTestCase {
         )
 
         let usedRealtime = try await transport.sendRealtime(frame, to: targetID)
+        transport.reconnectRealtime(to: targetID)
 
         XCTAssertFalse(usedRealtime)
-        XCTAssertEqual(transport.frames, [frame.reliableFallback])
-        XCTAssertEqual(transport.targets, [targetID])
+        XCTAssertTrue(transport.frames.isEmpty)
+        XCTAssertTrue(transport.targets.isEmpty)
     }
 
     func testHeartbeatLoopAndReceiverWatchdogUseInjectedClock() async throws {
@@ -503,6 +504,13 @@ final class ManualMonotonicClock: MonotonicClock, @unchecked Sendable {
     var pendingSleepCount: Int { lock.withLock { waiters.count } }
     func nowNanoseconds() -> UInt64 { lock.withLock { value } }
 
+    func hasPendingSleep(for duration: Duration) -> Bool {
+        lock.withLock {
+            let deadline = value &+ Self.nanoseconds(duration)
+            return waiters.values.contains { $0.deadline == deadline }
+        }
+    }
+
     func sleep(for duration: Duration) async throws {
         let id = UUID()
         try await withTaskCancellationHandler {
@@ -530,6 +538,10 @@ final class ManualMonotonicClock: MonotonicClock, @unchecked Sendable {
             return ids.compactMap { waiters.removeValue(forKey: $0)?.continuation }
         }
         due.forEach { $0.resume() }
+    }
+
+    func advanceWithoutWakingSleepers(by nanoseconds: UInt64) {
+        lock.withLock { value &+= nanoseconds }
     }
 
     private static func nanoseconds(_ duration: Duration) -> UInt64 {

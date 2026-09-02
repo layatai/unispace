@@ -77,6 +77,47 @@ final class DomainModelsTests: XCTestCase {
         XCTAssertEqual(election.claim(for: low).generation, 5)
     }
 
+    func testWorkspacePresenceRequiresCurrentControllerAndFiltersUnknownDevices() {
+        let localID = DeviceID()
+        let controllerID = DeviceID()
+        let onlineID = DeviceID()
+        let unknownID = DeviceID()
+        let epoch = ControllerEpoch(generation: 4, controllerID: controllerID)
+        let workspace = WorkspaceSnapshot(
+            id: WorkspaceID(),
+            name: "Presence",
+            localDeviceID: localID,
+            devices: [
+                DeviceDescriptor(id: localID, name: "Local"),
+                DeviceDescriptor(id: controllerID, name: "Controller"),
+                DeviceDescriptor(id: onlineID, name: "Online"),
+            ]
+        )
+        let snapshot = WorkspacePresenceSnapshot(
+            epoch: epoch,
+            onlineDeviceIDs: [controllerID, onlineID, unknownID]
+        )
+
+        XCTAssertEqual(
+            snapshot.validatedOnlineDeviceIDs(
+                from: controllerID,
+                currentEpoch: epoch,
+                workspace: workspace
+            ),
+            [controllerID, onlineID]
+        )
+        XCTAssertNil(snapshot.validatedOnlineDeviceIDs(
+            from: DeviceID(),
+            currentEpoch: epoch,
+            workspace: workspace
+        ))
+        XCTAssertNil(snapshot.validatedOnlineDeviceIDs(
+            from: controllerID,
+            currentEpoch: .init(generation: 5, controllerID: controllerID),
+            workspace: workspace
+        ))
+    }
+
     func testTopologyCreatesBidirectionalExclusiveLinks() {
         let first = DisplayEndpoint(displayID: DisplayID(), edge: .right)
         let second = DisplayEndpoint(displayID: DisplayID(), edge: .left)

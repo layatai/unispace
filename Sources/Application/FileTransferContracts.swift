@@ -91,7 +91,18 @@ public struct RecoveredIncomingTransfer: Sendable, Equatable {
         self.completedURLs = completedURLs
     }
 
-    public var isCompleted: Bool { !completedURLs.isEmpty }
+    /// A multi-file transfer is recoverably complete only when every manifest
+    /// entry has a distinct materialized URL with the expected destination name.
+    /// Treating one finalized entry as a completed transfer can expose a partial
+    /// Finder selection after a crash between entries.
+    public var isCompleted: Bool {
+        guard completedURLs.count == manifest.entries.count else { return false }
+        let expectedNames = Set(manifest.entries.map(\.filename))
+        let actualNames = Set(completedURLs.map(\.lastPathComponent))
+        return expectedNames.count == manifest.entries.count &&
+            actualNames.count == completedURLs.count &&
+            expectedNames == actualNames
+    }
 }
 
 public struct PasteboardFileSelection: Sendable, Equatable {
@@ -112,7 +123,13 @@ public enum FilePasteboardPublicationError: Error, Equatable, Sendable {
 @MainActor
 public protocol FilePasteboard: AnyObject, Sendable {
     func events() -> AsyncStream<PasteboardFileSelection>
+
+    /// Legacy fire-and-forget publication entry point retained for existing
+    /// adapters and test doubles. Production coordinators use the checked form.
     func publishFiles(_ urls: [URL], transferID: TransferID)
+
+    /// Publishes receiver-local files and reports validation or platform write
+    /// failures so the sender is never told a failed Finder write succeeded.
     func publishFilesChecked(_ urls: [URL], transferID: TransferID) throws
 }
 

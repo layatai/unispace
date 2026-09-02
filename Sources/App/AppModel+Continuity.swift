@@ -1,4 +1,5 @@
 import Foundation
+import UniSpaceApplication
 import UniSpaceDomain
 
 extension AppModel {
@@ -9,18 +10,13 @@ extension AppModel {
     }
 
     var continuityTargetID: DeviceID? {
-        if let currentControllerID,
-           currentControllerID != localDeviceID,
-           connectedDevices.contains(currentControllerID) {
-            return currentControllerID
-        }
-
-        if let activeControlPeerID { return activeControlPeerID }
-
-        if continuityCandidateDevices.count == 1 {
-            return continuityCandidateDevices[0].id
-        }
-        return nil
+        ContinuityDestinationResolver.resolve(
+            localDeviceID: localDeviceID,
+            controllerID: currentControllerID,
+            controlSession: controlSessionSnapshot,
+            devices: devices,
+            connectedDeviceIDs: connectedDevices
+        )
     }
 
     var activeControlPeerID: DeviceID? {

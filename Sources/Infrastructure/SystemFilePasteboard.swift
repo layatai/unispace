@@ -49,18 +49,27 @@ public final class SystemFilePasteboard: FilePasteboard {
         guard let urls = validatedLocalFiles(urls) else {
             throw FilePasteboardPublicationError.invalidFileSet
         }
-        pasteboard.clearContents()
-        guard pasteboard.writeObjects(urls.map { $0 as NSURL }) else {
-            throw FilePasteboardPublicationError.writeRejected
+        let items: [NSPasteboardItem] = try urls.map { url in
+            let item = NSPasteboardItem()
+            guard item.setString(url.absoluteString, forType: .fileURL),
+                  item.setString(
+                      transferID.rawValue.uuidString,
+                      forType: Self.originType
+                  ) else {
+                throw FilePasteboardPublicationError.writeRejected
+            }
+            return item
         }
-        guard pasteboard.setString(
-            transferID.rawValue.uuidString,
-            forType: Self.originType
-        ) else {
-            pasteboard.clearContents()
+
+        pasteboard.clearContents()
+        guard pasteboard.writeObjects(items) else {
             throw FilePasteboardPublicationError.writeRejected
         }
         lastObservedChangeCount = pasteboard.changeCount
+    }
+
+    func pollNowForTesting() {
+        poll()
     }
 
     private func startMonitoringIfNeeded() {
@@ -79,34 +88,46 @@ public final class SystemFilePasteboard: FilePasteboard {
     private func poll() {
         let changeCount = pasteboard.changeCount
         guard changeCount != lastObservedChangeCount else { return }
-        lastObservedChangeCount = changeCount
         let items = pasteboard.pasteboardItems ?? []
-        guard !items.contains(where: { $0.string(forType: Self.originType) != nil }) else {
+
+        // A completed incoming transfer writes its own marker. Consuming it as a
+        // new Finder copy would immediately offer the same files back to the peer.
+        if items.contains(where: { $0.string(forType: Self.originType) != nil }) {
+            lastObservedChangeCount = changeCount
+            return
+        }
+
+        // Do not interpret a plain-text `file://` string as a Finder file copy.
+        guard items.contains(where: { $0.types.contains(.fileURL) }) else {
+            lastObservedChangeCount = changeCount
             return
         }
 
         var urls: [URL] = []
         var seen = Set<URL>()
-        let objects = pasteboard.readObjects(
-            forClasses: [NSURL.self],
-            options: [.urlReadingFileURLsOnly: true]
-        ) ?? []
-        for object in objects {
-            guard let value = object as? NSURL else { continue }
-            let url = value as URL
-            guard url.isFileURL else { continue }
+        for item in items {
+            guard item.types.contains(.fileURL),
+                  let value = item.string(forType: .fileURL),
+                  let url = URL(string: value),
+                  url.isFileURL else { continue }
             let normalized = url.standardizedFileURL
             guard seen.insert(normalized).inserted else { continue }
             urls.append(normalized)
         }
+
+        lastObservedChangeCount = changeCount
         guard !urls.isEmpty else { return }
         continuation.yield(PasteboardFileSelection(changeCount: changeCount, urls: urls))
     }
 
+    /// Only publish a complete set of existing regular files. This keeps Finder
+    /// from receiving a partially valid selection when one staged URL was removed
+    /// or replaced between transfer verification and pasteboard publication.
     private func validatedLocalFiles(_ urls: [URL]) -> [URL]? {
         guard !urls.isEmpty else { return nil }
         var normalized: [URL] = []
         var seen = Set<URL>()
+
         for candidate in urls {
             guard candidate.isFileURL else { return nil }
             let url = candidate.standardizedFileURL
@@ -123,7 +144,4 @@ public final class SystemFilePasteboard: FilePasteboard {
         return normalized.isEmpty ? nil : normalized
     }
 
-    func pollNowForTesting() {
-        poll()
-    }
 }

@@ -271,7 +271,12 @@ private final class SimulatedWireTransport: PeerTransport, @unchecked Sendable {
             await connection.coordinator.deactivateCurrentSession()
         case let .heartbeat(sessionID, _):
             _ = await connection.coordinator.receiveHeartbeat(sessionID: sessionID, from: localDeviceID)
-        case .hello, .workspace, .boundaryCrossed, .rotateWorkspaceKey:
+        case let .realtimePointerProgress(progress):
+            _ = await connection.coordinator.receiveRealtimePointerProgress(
+                progress,
+                from: localDeviceID
+            )
+        case .hello, .workspace, .boundaryCrossed, .rotateWorkspaceKey, .workspacePresence:
             break
         }
     }

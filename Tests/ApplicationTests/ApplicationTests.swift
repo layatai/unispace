@@ -3,6 +3,18 @@ import XCTest
 import UniSpaceDomain
 
 final class ApplicationTests: XCTestCase {
+    func testControlLatencyActivityIsIdempotentAndRecoverable() {
+        let activity = ControlLatencyActivity()
+
+        XCTAssertFalse(activity.isActive)
+        activity.start()
+        activity.start()
+        XCTAssertTrue(activity.isActive)
+        activity.stop()
+        activity.stop()
+        XCTAssertFalse(activity.isActive)
+    }
+
     func testControlRoutingKeepsConnectedLegacyAndAcknowledgedPeersAvailable() {
         let legacy = DeviceDescriptor(id: DeviceID(), name: "Legacy")
         let acknowledged = DeviceDescriptor(
@@ -493,6 +505,48 @@ final class ApplicationTests: XCTestCase {
         XCTAssertEqual(injector.releaseAllCount, 1)
     }
 
+    func testCoordinatorIgnoresStalePeerDeactivation() async throws {
+        let local = DeviceID()
+        let remote = DeviceID()
+        let capture = CaptureSpy()
+        let transport = TransportSpy()
+        let coordinator = ControlSessionCoordinator(
+            localDeviceID: local,
+            workspaceID: WorkspaceID(),
+            capture: capture,
+            injector: InjectorSpy(),
+            transport: transport
+        )
+        _ = await coordinator.makeLocalController()
+        try await coordinator.activate(
+            target: remote,
+            displayID: DisplayID(),
+            entryEdge: .left,
+            normalizedPosition: 0.5
+        )
+        guard case let .controlling(_, _, sessionID) = await coordinator.currentState() else {
+            return XCTFail("Expected an active control session")
+        }
+
+        let staleSessionAccepted = await coordinator.receiveDeactivation(sessionID: SessionID(), from: remote)
+        let staleSourceAccepted = await coordinator.receiveDeactivation(sessionID: sessionID, from: DeviceID())
+        XCTAssertFalse(staleSessionAccepted)
+        XCTAssertFalse(staleSourceAccepted)
+        XCTAssertTrue(capture.suppressed)
+
+        let matchingAccepted = await coordinator.receiveDeactivation(sessionID: sessionID, from: remote)
+        let finalState = await coordinator.currentState()
+        let idleAccepted = await coordinator.receiveDeactivation(sessionID: sessionID, from: remote)
+        XCTAssertTrue(matchingAccepted)
+        XCTAssertEqual(finalState, .idle)
+        XCTAssertFalse(idleAccepted)
+        XCTAssertFalse(capture.suppressed)
+        XCTAssertFalse(transport.controlMessages.contains { message in
+            if case .deactivate = message { return true }
+            return false
+        })
+    }
+
     func testRealtimePointerRecoversCumulativeMotionAfterDatagramLoss() async throws {
         let local = DeviceID()
         let remote = DeviceID()
@@ -680,13 +734,15 @@ final class ApplicationTests: XCTestCase {
     func testCoordinatorCoalescesPointerMovesWithoutDroppingFinalPosition() async throws {
         let local = DeviceID()
         let remote = DeviceID()
+        let clock = ManualMonotonicClock()
         let transport = TransportSpy()
         let coordinator = ControlSessionCoordinator(
             localDeviceID: local,
             workspaceID: WorkspaceID(),
             capture: CaptureSpy(),
             injector: InjectorSpy(),
-            transport: transport
+            transport: transport,
+            clock: clock
         )
         _ = await coordinator.makeLocalController()
         try await coordinator.activate(
@@ -698,7 +754,7 @@ final class ApplicationTests: XCTestCase {
 
         _ = await coordinator.handleCaptured(.pointerMove(deltaX: 1, deltaY: 2, absoluteX: 10, absoluteY: 20))
         _ = await coordinator.handleCaptured(.pointerMove(deltaX: 3, deltaY: 4, absoluteX: 13, absoluteY: 24))
-        try await Task.sleep(for: .milliseconds(30))
+        await coordinator.flushPendingInput()
 
         XCTAssertEqual(transport.frames.count, 1)
         XCTAssertEqual(
@@ -708,7 +764,53 @@ final class ApplicationTests: XCTestCase {
         await coordinator.stop()
     }
 
-    func testPointerMotionUsesRealtimeLaneButDraggingStaysReliable() async throws {
+    func testCoordinatorFlushesMotionWhenScheduledFlushMissesItsDeadline() async throws {
+        let local = DeviceID()
+        let remote = DeviceID()
+        let clock = ManualMonotonicClock()
+        let transport = TransportSpy()
+        let coordinator = ControlSessionCoordinator(
+            localDeviceID: local,
+            workspaceID: WorkspaceID(),
+            capture: CaptureSpy(),
+            injector: InjectorSpy(),
+            transport: transport,
+            clock: clock
+        )
+        _ = await coordinator.makeLocalController()
+        try await coordinator.activate(
+            target: remote,
+            displayID: DisplayID(),
+            entryEdge: .left,
+            normalizedPosition: 0.5
+        )
+
+        _ = await coordinator.handleCaptured(.pointerMove(
+            deltaX: 1,
+            deltaY: 2,
+            absoluteX: 10,
+            absoluteY: 20
+        ))
+        XCTAssertTrue(transport.frames.isEmpty)
+
+        clock.advanceWithoutWakingSleepers(
+            by: ControlSessionCoordinator.pointerFlushIntervalNanos + 1
+        )
+        _ = await coordinator.handleCaptured(.pointerMove(
+            deltaX: 3,
+            deltaY: 4,
+            absoluteX: 13,
+            absoluteY: 24
+        ))
+        await coordinator.flushPendingInput()
+
+        XCTAssertEqual(transport.frames.map(\.event), [
+            .pointerMove(deltaX: 4, deltaY: 6, absoluteX: 13, absoluteY: 24)
+        ])
+        await coordinator.stop()
+    }
+
+    func testWindowsPointerMotionKeepsLegacyRealtimeCompatibility() async throws {
         let local = DeviceID()
         let remote = DeviceID()
         let transport = TransportSpy(useRealtime: true)
@@ -724,7 +826,8 @@ final class ApplicationTests: XCTestCase {
             target: remote,
             displayID: DisplayID(),
             entryEdge: .left,
-            normalizedPosition: 0.5
+            normalizedPosition: 0.5,
+            targetPlatform: .windows
         )
 
         _ = await coordinator.handleCaptured(.pointerMove(
@@ -733,7 +836,7 @@ final class ApplicationTests: XCTestCase {
             absoluteX: 12,
             absoluteY: 11
         ))
-        try await Task.sleep(for: .milliseconds(25))
+        await coordinator.flushPendingInput()
         _ = await coordinator.handleCaptured(.mouseButton(button: .left, isDown: true, clickCount: 1))
         _ = await coordinator.handleCaptured(.pointerMove(
             deltaX: 5,
@@ -751,6 +854,367 @@ final class ApplicationTests: XCTestCase {
             .mouseButton(button: .left, isDown: true, clickCount: 1),
             .pointerMove(deltaX: 5, deltaY: 0, absoluteX: 17, absoluteY: 11)
         ])
+        await coordinator.stop()
+    }
+
+    func testMacWithoutProgressCapabilityUsesReliablePointer() async throws {
+        let local = DeviceID()
+        let remote = DeviceID()
+        let transport = TransportSpy(useRealtime: true)
+        let coordinator = ControlSessionCoordinator(
+            localDeviceID: local,
+            workspaceID: WorkspaceID(),
+            capture: CaptureSpy(),
+            injector: InjectorSpy(),
+            transport: transport
+        )
+        _ = await coordinator.makeLocalController()
+        try await coordinator.activate(
+            target: remote,
+            displayID: DisplayID(),
+            entryEdge: .left,
+            normalizedPosition: 0.5,
+            targetCapabilities: [.udpPointerV2],
+            targetPlatform: .macOS
+        )
+
+        _ = await coordinator.handleCaptured(.pointerMove(
+            deltaX: 2,
+            deltaY: 1,
+            absoluteX: 12,
+            absoluteY: 11
+        ))
+        await coordinator.flushPendingInput()
+
+        XCTAssertEqual(transport.frames.map(\.event), [
+            .pointerMove(deltaX: 2, deltaY: 1, absoluteX: 12, absoluteY: 11)
+        ])
+        XCTAssertTrue(transport.realtimeFrames.isEmpty)
+        await coordinator.stop()
+    }
+
+    func testLegacyRealtimeFailureFallsBackToReliablePointer() async throws {
+        let local = DeviceID()
+        let remote = DeviceID()
+        let transport = TransportSpy(
+            useRealtime: true,
+            realtimeSendError: SpyError.failure
+        )
+        let coordinator = ControlSessionCoordinator(
+            localDeviceID: local,
+            workspaceID: WorkspaceID(),
+            capture: CaptureSpy(),
+            injector: InjectorSpy(),
+            transport: transport
+        )
+        _ = await coordinator.makeLocalController()
+        try await coordinator.activate(
+            target: remote,
+            displayID: DisplayID(),
+            entryEdge: .left,
+            normalizedPosition: 0.5,
+            targetPlatform: .windows
+        )
+
+        _ = await coordinator.handleCaptured(.pointerMove(
+            deltaX: 2,
+            deltaY: 1,
+            absoluteX: 12,
+            absoluteY: 11
+        ))
+        await coordinator.flushPendingInput()
+
+        XCTAssertEqual(transport.frames.map(\.event), [
+            .pointerMove(deltaX: 2, deltaY: 1, absoluteX: 12, absoluteY: 11)
+        ])
+        XCTAssertTrue(transport.realtimeReconnects.isEmpty)
+        guard case .controlling = await coordinator.currentState() else {
+            return XCTFail("Reliable fallback must keep the legacy session active")
+        }
+        await coordinator.stop()
+    }
+
+    func testProgressLaneSendFailuresKeepReliableDeliveryAndReconnect() async throws {
+        let local = DeviceID()
+        let remote = DeviceID()
+        let transport = TransportSpy(
+            useRealtime: true,
+            realtimeSendError: SpyError.failure
+        )
+        let coordinator = ControlSessionCoordinator(
+            localDeviceID: local,
+            workspaceID: WorkspaceID(),
+            capture: CaptureSpy(),
+            injector: InjectorSpy(),
+            transport: transport
+        )
+        _ = await coordinator.makeLocalController()
+        try await coordinator.activate(
+            target: remote,
+            displayID: DisplayID(),
+            entryEdge: .left,
+            normalizedPosition: 0.5,
+            targetCapabilities: [.realtimePointerProgressV1],
+            targetPlatform: .macOS
+        )
+
+        _ = await coordinator.handleCaptured(.pointerMove(
+            deltaX: 1,
+            deltaY: 0,
+            absoluteX: 11,
+            absoluteY: 10
+        ))
+        await coordinator.flushPendingInput()
+        XCTAssertEqual(transport.frames.count, 1)
+        XCTAssertTrue(transport.realtimeFrames.isEmpty)
+
+        transport.setRealtimeSendError(nil)
+        _ = await coordinator.handleCaptured(.pointerMove(
+            deltaX: 2,
+            deltaY: 0,
+            absoluteX: 13,
+            absoluteY: 10
+        ))
+        await coordinator.flushPendingInput()
+        let probe = try XCTUnwrap(transport.realtimeFrames.last)
+        let acknowledged = await coordinator.receiveRealtimePointerProgress(
+            .init(
+                sessionID: probe.sessionID,
+                generation: probe.generation,
+                sequence: probe.sequence
+            ),
+            from: remote
+        )
+        XCTAssertTrue(acknowledged)
+
+        transport.setRealtimeSendError(SpyError.failure)
+        _ = await coordinator.handleCaptured(.pointerMove(
+            deltaX: 3,
+            deltaY: 0,
+            absoluteX: 16,
+            absoluteY: 10
+        ))
+        await coordinator.flushPendingInput()
+
+        XCTAssertEqual(transport.frames.count, 3)
+        XCTAssertEqual(transport.realtimeReconnects, [remote])
+        guard case .controlling = await coordinator.currentState() else {
+            return XCTFail("Reliable fallback must keep the progress session active")
+        }
+        await coordinator.stop()
+    }
+
+    func testAcknowledgedPointerLaneFallsBackAndReconnectsWhenProgressStops() async throws {
+        let local = DeviceID()
+        let remote = DeviceID()
+        let clock = ManualMonotonicClock()
+        let transport = TransportSpy(useRealtime: true)
+        let coordinator = ControlSessionCoordinator(
+            localDeviceID: local,
+            workspaceID: WorkspaceID(),
+            capture: CaptureSpy(),
+            injector: InjectorSpy(),
+            transport: transport,
+            clock: clock
+        )
+        _ = await coordinator.makeLocalController()
+        try await coordinator.activate(
+            target: remote,
+            displayID: DisplayID(),
+            entryEdge: .left,
+            normalizedPosition: 0.5,
+            targetCapabilities: [.realtimePointerProgressV1],
+            targetPlatform: .macOS
+        )
+
+        _ = await coordinator.handleCaptured(.pointerMove(
+            deltaX: 2,
+            deltaY: 1,
+            absoluteX: 12,
+            absoluteY: 11
+        ))
+        await coordinator.flushPendingInput()
+
+        XCTAssertEqual(transport.frames.count, 1, "Probing must keep pointer delivery reliable")
+        let probe = try XCTUnwrap(transport.realtimeFrames.last)
+        XCTAssertEqual(probe.deltaX, 0)
+        XCTAssertEqual(probe.deltaY, 0)
+        let acknowledged = await coordinator.receiveRealtimePointerProgress(
+            .init(
+                sessionID: probe.sessionID,
+                generation: probe.generation,
+                sequence: probe.sequence
+            ),
+            from: remote
+        )
+        XCTAssertTrue(acknowledged)
+
+        _ = await coordinator.handleCaptured(.pointerMove(
+            deltaX: 3,
+            deltaY: 0,
+            absoluteX: 15,
+            absoluteY: 11
+        ))
+        await coordinator.flushPendingInput()
+        XCTAssertEqual(transport.frames.count, 1)
+        XCTAssertEqual(transport.realtimeFrames.last?.deltaX, 3)
+
+        clock.advance(by: 500_000_000)
+        let repeatedAcknowledgement = await coordinator.receiveRealtimePointerProgress(
+            .init(
+                sessionID: probe.sessionID,
+                generation: probe.generation,
+                sequence: probe.sequence
+            ),
+            from: remote
+        )
+        XCTAssertFalse(repeatedAcknowledgement, "Stale progress must not refresh lane health")
+        clock.advance(by: ControlSessionCoordinator.realtimeProgressTimeoutNanos - 500_000_000 + 1)
+        _ = await coordinator.handleCaptured(.pointerMove(
+            deltaX: 4,
+            deltaY: 0,
+            absoluteX: 19,
+            absoluteY: 11
+        ))
+        await coordinator.flushPendingInput()
+
+        XCTAssertEqual(transport.frames.count, 2)
+        XCTAssertEqual(transport.realtimeFrames.last?.deltaX, 0)
+        XCTAssertNotEqual(transport.realtimeFrames.last?.generation, probe.generation)
+        XCTAssertEqual(transport.realtimeReconnects, [remote])
+
+        let recoveryProbe = try XCTUnwrap(transport.realtimeFrames.last)
+        let recovered = await coordinator.receiveRealtimePointerProgress(
+            .init(
+                sessionID: recoveryProbe.sessionID,
+                generation: recoveryProbe.generation,
+                sequence: recoveryProbe.sequence
+            ),
+            from: remote
+        )
+        XCTAssertTrue(recovered)
+        transport.setRealtimeEnabled(false)
+        _ = await coordinator.handleCaptured(.pointerMove(
+            deltaX: 5,
+            deltaY: 0,
+            absoluteX: 24,
+            absoluteY: 11
+        ))
+        await coordinator.flushPendingInput()
+        XCTAssertEqual(transport.frames.count, 3)
+        XCTAssertEqual(transport.realtimeReconnects, [remote, remote])
+        await coordinator.stop()
+    }
+
+    func testAcknowledgedPointerFastPathIsSynchronousAndExpiresWithProgress() async throws {
+        let local = DeviceID()
+        let remote = DeviceID()
+        let clock = ManualMonotonicClock()
+        let transport = TransportSpy(useRealtime: true)
+        let coordinator = ControlSessionCoordinator(
+            localDeviceID: local,
+            workspaceID: WorkspaceID(),
+            capture: CaptureSpy(),
+            injector: InjectorSpy(),
+            transport: transport,
+            clock: clock
+        )
+        _ = await coordinator.makeLocalController()
+        try await coordinator.activate(
+            target: remote,
+            displayID: DisplayID(),
+            entryEdge: .left,
+            normalizedPosition: 0.5,
+            targetCapabilities: [.realtimePointerProgressV1],
+            targetPlatform: .macOS
+        )
+        _ = await coordinator.handleCaptured(.pointerMove(
+            deltaX: 1,
+            deltaY: 0,
+            absoluteX: 10,
+            absoluteY: 10
+        ))
+        await coordinator.flushPendingInput()
+        let probe = try XCTUnwrap(transport.realtimeFrames.last)
+        let acknowledged = await coordinator.receiveRealtimePointerProgress(
+            .init(
+                sessionID: probe.sessionID,
+                generation: probe.generation,
+                sequence: probe.sequence
+            ),
+            from: remote
+        )
+        XCTAssertTrue(acknowledged)
+
+        let immediate = InputEvent.pointerMove(
+            deltaX: 3,
+            deltaY: 2,
+            absoluteX: 13,
+            absoluteY: 12
+        )
+        XCTAssertTrue(coordinator.sendCapturedPointerImmediately(immediate))
+        XCTAssertEqual(transport.realtimeFrames.last?.deltaX, 3)
+        XCTAssertEqual(transport.realtimeFrames.last?.deltaY, 2)
+
+        coordinator.suspendCapturedPointerFastPath()
+        XCTAssertFalse(coordinator.sendCapturedPointerImmediately(immediate))
+        _ = await coordinator.handleCaptured(.mouseButton(button: .left, isDown: false, clickCount: 1))
+        XCTAssertTrue(coordinator.sendCapturedPointerImmediately(immediate))
+
+        clock.advance(by: ControlSessionCoordinator.realtimeProgressTimeoutNanos + 1)
+        XCTAssertFalse(coordinator.sendCapturedPointerImmediately(immediate))
+        await coordinator.stop()
+    }
+
+    func testReceiverReportsLatestAcceptedRealtimeProgress() async throws {
+        let local = DeviceID()
+        let remote = DeviceID()
+        let workspaceID = WorkspaceID()
+        let coordinator = ControlSessionCoordinator(
+            localDeviceID: local,
+            workspaceID: workspaceID,
+            capture: CaptureSpy(),
+            injector: InjectorSpy(),
+            transport: TransportSpy(),
+            election: .init(currentEpoch: .init(generation: 1, controllerID: remote))
+        )
+        let display = display(device: local, frame: .init(x: 0, y: 0, width: 100, height: 100))
+        let sessionID = SessionID()
+        let accepted = await coordinator.receiveActivation(
+            .init(
+                sessionID: sessionID,
+                epoch: .init(generation: 1, controllerID: remote),
+                targetDisplayID: display.id,
+                entryEdge: .left,
+                normalizedPosition: 0.5
+            ),
+            from: remote,
+            targetDisplay: display
+        )
+        XCTAssertTrue(accepted)
+        await coordinator.handleIncomingRealtime(.init(
+            workspaceID: workspaceID,
+            sessionID: sessionID,
+            controllerID: remote,
+            epoch: .init(generation: 1, controllerID: remote),
+            generation: 3,
+            sequence: 7,
+            deltaX: 0,
+            deltaY: 0,
+            cumulativeDeltaX: 0,
+            cumulativeDeltaY: 0,
+            absoluteX: 10,
+            absoluteY: 10,
+            timestampNanos: 1
+        ), from: remote)
+
+        let progress = await coordinator.realtimePointerProgress(sessionID: sessionID, from: remote)
+        let invalidProgress = await coordinator.realtimePointerProgress(
+            sessionID: sessionID,
+            from: DeviceID()
+        )
+        XCTAssertEqual(progress, .init(sessionID: sessionID, generation: 3, sequence: 7))
+        XCTAssertNil(invalidProgress)
         await coordinator.stop()
     }
 
@@ -850,7 +1314,7 @@ final class ApplicationTests: XCTestCase {
 
         _ = await coordinator.handleCaptured(.scroll(deltaX: 1, deltaY: 2, isContinuous: true))
         _ = await coordinator.handleCaptured(.scroll(deltaX: 3, deltaY: 4, isContinuous: true))
-        try await Task.sleep(for: .milliseconds(40))
+        await coordinator.flushPendingInput()
 
         XCTAssertEqual(transport.frames.map(\.event), [
             .scroll(deltaX: 4, deltaY: 6, isContinuous: true)
@@ -946,7 +1410,7 @@ final class ApplicationTests: XCTestCase {
         await coordinator.stop()
     }
 
-    func testControllerDoesNotReturnLocallyAfterSingleInputSendFailure() async throws {
+    func testControllerFailsOpenWhenReliablePointerDeliveryFails() async throws {
         let local = DeviceID()
         let remote = DeviceID()
         let capture = CaptureSpy()
@@ -963,7 +1427,8 @@ final class ApplicationTests: XCTestCase {
             target: remote,
             displayID: DisplayID(),
             entryEdge: .left,
-            normalizedPosition: 0.5
+            normalizedPosition: 0.5,
+            targetPlatform: .macOS
         )
 
         _ = await coordinator.handleCaptured(.pointerMove(
@@ -972,13 +1437,248 @@ final class ApplicationTests: XCTestCase {
             absoluteX: 10,
             absoluteY: 10
         ))
-        try await Task.sleep(for: .milliseconds(30))
-
-        guard case let .controlling(_, target, _) = await coordinator.currentState() else {
-            return XCTFail("A send failure must wait for confirmed transport disconnection")
+        await coordinator.flushPendingInput()
+        for _ in 0..<100 {
+            if await coordinator.currentState() == .idle { break }
+            await Task.yield()
         }
-        XCTAssertEqual(target, remote)
+
+        let finalState = await coordinator.currentState()
+        XCTAssertEqual(finalState, .idle)
+        XCTAssertFalse(capture.suppressed)
+        await coordinator.stop()
+    }
+
+    func testControllerFailsOpenWhenReliablePointerSendDoesNotComplete() async throws {
+        let local = DeviceID()
+        let remote = DeviceID()
+        let capture = CaptureSpy()
+        let clock = ManualMonotonicClock()
+        let transport = TransportSpy(frameSendClock: clock)
+        let coordinator = ControlSessionCoordinator(
+            localDeviceID: local,
+            workspaceID: WorkspaceID(),
+            capture: capture,
+            injector: InjectorSpy(),
+            transport: transport,
+            clock: clock
+        )
+        _ = await coordinator.makeLocalController()
+        try await coordinator.activate(
+            target: remote,
+            displayID: DisplayID(),
+            entryEdge: .left,
+            normalizedPosition: 0.5,
+            targetPlatform: .macOS
+        )
+        _ = await coordinator.handleCaptured(.pointerMove(
+            deltaX: 4,
+            deltaY: 0,
+            absoluteX: 10,
+            absoluteY: 10
+        ))
+
+        let flush = Task { await coordinator.flushPendingInput() }
+        for _ in 0..<500 where !clock.hasPendingSleep(
+            for: ControlSessionCoordinator.reliablePointerTimeout
+        ) { await Task.yield() }
+        XCTAssertTrue(clock.hasPendingSleep(for: ControlSessionCoordinator.reliablePointerTimeout))
+        clock.advance(by: ControlSessionCoordinator.realtimeProgressTimeoutNanos)
+        await flush.value
+        for _ in 0..<100 {
+            if await coordinator.currentState() == .idle { break }
+            await Task.yield()
+        }
+
+        let finalState = await coordinator.currentState()
+        XCTAssertEqual(finalState, .idle)
+        XCTAssertFalse(capture.suppressed)
+        await coordinator.stop()
+    }
+
+    func testRealtimeProgressKeepsSessionAliveWhenReliableProbeDeliveryStalls() async throws {
+        let local = DeviceID()
+        let remote = DeviceID()
+        let capture = CaptureSpy()
+        let clock = ManualMonotonicClock()
+        let transport = TransportSpy(useRealtime: true, frameSendClock: clock)
+        let diagnostics = CallRecorder()
+        let coordinator = ControlSessionCoordinator(
+            localDeviceID: local,
+            workspaceID: WorkspaceID(),
+            capture: capture,
+            injector: InjectorSpy(),
+            transport: transport,
+            clock: clock,
+            diagnostic: diagnostics.append
+        )
+        _ = await coordinator.makeLocalController()
+        try await coordinator.activate(
+            target: remote,
+            displayID: DisplayID(),
+            entryEdge: .left,
+            normalizedPosition: 0.5,
+            targetCapabilities: [.realtimePointerProgressV1],
+            targetPlatform: .windows
+        )
+
+        let delivery = Task {
+            _ = await coordinator.handleCaptured(.pointerMove(
+                deltaX: 4,
+                deltaY: 0,
+                absoluteX: 10,
+                absoluteY: 10
+            ))
+            await coordinator.flushPendingInput()
+        }
+        for _ in 0..<100 where transport.realtimeFrames.isEmpty { await Task.yield() }
+        let probe = try XCTUnwrap(transport.realtimeFrames.last)
+        let acknowledged = await coordinator.receiveRealtimePointerProgress(
+            .init(
+                sessionID: probe.sessionID,
+                generation: probe.generation,
+                sequence: probe.sequence
+            ),
+            from: remote
+        )
+        XCTAssertTrue(acknowledged)
+        for _ in 0..<100 where clock.pendingSleepCount < 3 { await Task.yield() }
+        XCTAssertGreaterThanOrEqual(clock.pendingSleepCount, 3)
+        clock.advance(by: ControlSessionCoordinator.realtimeProgressTimeoutNanos)
+        await delivery.value
+
+        guard case .controlling = await coordinator.currentState() else {
+            return XCTFail("Acknowledged realtime delivery must preserve the active session")
+        }
         XCTAssertTrue(capture.suppressed)
+
+        _ = await coordinator.handleCaptured(.pointerMove(
+            deltaX: 3,
+            deltaY: 1,
+            absoluteX: 13,
+            absoluteY: 11
+        ))
+        await coordinator.flushPendingInput()
+        XCTAssertEqual(transport.realtimeFrames.last?.deltaX, 3)
+        XCTAssertEqual(transport.realtimeFrames.last?.deltaY, 1)
+        await coordinator.stop()
+        XCTAssertTrue(diagnostics.values.contains { $0.contains("Activating session") })
+        XCTAssertTrue(diagnostics.values.contains { $0.contains("Realtime progress established") })
+        XCTAssertTrue(diagnostics.values.contains { $0.contains("Reliable pointer timed out") })
+        XCTAssertTrue(diagnostics.values.contains { $0.contains("Keeping session") })
+        XCTAssertTrue(diagnostics.values.contains { $0.contains("Ending session") })
+    }
+
+    func testProgressPeerKeepsSessionWhenReliablePointerStallsButHeartbeatIsFresh() async throws {
+        let local = DeviceID()
+        let remote = DeviceID()
+        let capture = CaptureSpy()
+        let clock = ManualMonotonicClock()
+        let transport = TransportSpy(useRealtime: true, frameSendClock: clock)
+        let diagnostics = CallRecorder()
+        let coordinator = ControlSessionCoordinator(
+            localDeviceID: local,
+            workspaceID: WorkspaceID(),
+            capture: capture,
+            injector: InjectorSpy(),
+            transport: transport,
+            clock: clock,
+            diagnostic: diagnostics.append
+        )
+        _ = await coordinator.makeLocalController()
+        try await coordinator.activate(
+            target: remote,
+            displayID: DisplayID(),
+            entryEdge: .left,
+            normalizedPosition: 0.5,
+            targetCapabilities: [.realtimePointerProgressV1],
+            targetPlatform: .windows
+        )
+        guard case let .controlling(_, _, sessionID) = await coordinator.currentState() else {
+            return XCTFail("Expected an active control session")
+        }
+        let heartbeatLatency = await coordinator.receiveHeartbeatEcho(
+            sessionID: sessionID,
+            from: remote,
+            sentAtNanos: 0
+        )
+        XCTAssertEqual(heartbeatLatency, 0)
+
+        let delivery = Task {
+            _ = await coordinator.handleCaptured(.pointerMove(
+                deltaX: 4,
+                deltaY: 0,
+                absoluteX: 10,
+                absoluteY: 10
+            ))
+            await coordinator.flushPendingInput()
+        }
+        for _ in 0..<100 where transport.realtimeFrames.isEmpty { await Task.yield() }
+        for _ in 0..<100 where clock.pendingSleepCount < 3 { await Task.yield() }
+        clock.advance(by: ControlSessionCoordinator.realtimeProgressTimeoutNanos)
+        await delivery.value
+
+        guard case .controlling = await coordinator.currentState() else {
+            return XCTFail("Fresh control liveness must preserve the session")
+        }
+        XCTAssertTrue(capture.suppressed)
+        XCTAssertEqual(transport.realtimeReconnects, [remote])
+        XCTAssertTrue(diagnostics.values.contains { $0.contains("control heartbeat is fresh") })
+        await coordinator.stop()
+    }
+
+    func testProgressPeerReturnsControlWhenPointerAndHeartbeatAreStale() async throws {
+        let local = DeviceID()
+        let remote = DeviceID()
+        let capture = CaptureSpy()
+        let clock = ManualMonotonicClock()
+        let transport = TransportSpy(useRealtime: true, frameSendClock: clock)
+        let coordinator = ControlSessionCoordinator(
+            localDeviceID: local,
+            workspaceID: WorkspaceID(),
+            capture: capture,
+            injector: InjectorSpy(),
+            transport: transport,
+            clock: clock
+        )
+        _ = await coordinator.makeLocalController()
+        try await coordinator.activate(
+            target: remote,
+            displayID: DisplayID(),
+            entryEdge: .left,
+            normalizedPosition: 0.5,
+            targetCapabilities: [.realtimePointerProgressV1],
+            targetPlatform: .windows
+        )
+        guard case let .controlling(_, _, sessionID) = await coordinator.currentState() else {
+            return XCTFail("Expected an active control session")
+        }
+        _ = await coordinator.receiveHeartbeatEcho(
+            sessionID: sessionID,
+            from: remote,
+            sentAtNanos: 0
+        )
+        clock.advanceWithoutWakingSleepers(
+            by: ControlSessionCoordinator.minimumHeartbeatTimeoutNanos + 1
+        )
+
+        let delivery = Task {
+            _ = await coordinator.handleCaptured(.pointerMove(
+                deltaX: 4,
+                deltaY: 0,
+                absoluteX: 10,
+                absoluteY: 10
+            ))
+            await coordinator.flushPendingInput()
+        }
+        for _ in 0..<100 where transport.realtimeFrames.isEmpty { await Task.yield() }
+        for _ in 0..<100 where clock.pendingSleepCount < 3 { await Task.yield() }
+        clock.advance(by: ControlSessionCoordinator.realtimeProgressTimeoutNanos)
+        await delivery.value
+
+        let finalState = await coordinator.currentState()
+        XCTAssertEqual(finalState, .idle)
+        XCTAssertFalse(capture.suppressed)
         await coordinator.stop()
     }
 
@@ -1064,7 +1764,7 @@ final class ApplicationTests: XCTestCase {
         await coordinator.stop()
     }
 
-    func testAcknowledgedActivationForwardsInputWhileConfirmationIsPending() async throws {
+    func testAcknowledgedActivationBuffersInputUntilPeerAccepts() async throws {
         let local = DeviceID()
         let remote = DeviceID()
         let transport = TransportSpy()
@@ -1096,16 +1796,22 @@ final class ApplicationTests: XCTestCase {
             )
         }
         let sessionID = try await activationSessionID(in: transport)
+        for _ in 0..<500 where !transport.controlMessages.contains(where: {
+            guard case let .heartbeat(heartbeatSessionID, _) = $0 else { return false }
+            return heartbeatSessionID == sessionID
+        }) {
+            await Task.yield()
+        }
+        XCTAssertTrue(transport.controlMessages.contains(where: {
+            guard case let .heartbeat(heartbeatSessionID, _) = $0 else { return false }
+            return heartbeatSessionID == sessionID
+        }), "Acknowledged activation must start heartbeat liveness before confirmation")
 
         pending.continuation.yield(.key(code: 12, isDown: true, isRepeat: false))
         pending.continuation.finish()
-        for _ in 0..<100 where transport.frames.count < 2 { await Task.yield() }
-        await coordinator.flushPendingInput()
+        for _ in 0..<100 { await Task.yield() }
+        XCTAssertTrue(transport.frames.isEmpty, "Pointer traffic must not delay the activation acknowledgement")
 
-        XCTAssertEqual(transport.frames.map(\.event), [
-            .pointerMove(deltaX: 1, deltaY: 0, absoluteX: 100, absoluteY: 50),
-            .key(code: 12, isDown: true, isRepeat: false)
-        ])
         let acknowledged = await coordinator.receiveActivationResult(
             sessionID: sessionID,
             from: remote,
@@ -1113,6 +1819,14 @@ final class ApplicationTests: XCTestCase {
         )
         XCTAssertTrue(acknowledged)
         try await activation.value
+        for _ in 0..<500 where transport.frames.count < 2 {
+            try await Task.sleep(for: .milliseconds(2))
+        }
+        await coordinator.flushPendingInput()
+        XCTAssertEqual(transport.frames.map(\.event), [
+            .pointerMove(deltaX: 1, deltaY: 0, absoluteX: 100, absoluteY: 50),
+            .key(code: 12, isDown: true, isRepeat: false)
+        ])
         await coordinator.stop()
     }
 
@@ -1259,6 +1973,49 @@ final class ApplicationTests: XCTestCase {
             accepted: true
         )
         XCTAssertFalse(lateAcknowledgement)
+    }
+
+    func testWindowsActivationAllowsBridgeAcknowledgementLatency() async throws {
+        let local = DeviceID()
+        let remote = DeviceID()
+        let clock = ManualMonotonicClock()
+        let transport = TransportSpy()
+        let coordinator = ControlSessionCoordinator(
+            localDeviceID: local,
+            workspaceID: WorkspaceID(),
+            capture: CaptureSpy(),
+            injector: InjectorSpy(),
+            transport: transport,
+            clock: clock,
+            activationTimeout: .seconds(1)
+        )
+        _ = await coordinator.makeLocalController()
+
+        let activation = Task {
+            try await coordinator.activate(
+                target: remote,
+                displayID: DisplayID(),
+                entryEdge: .left,
+                normalizedPosition: 0.5,
+                targetCapabilities: [.activationAcknowledgementV1],
+                targetPlatform: .windows
+            )
+        }
+        let sessionID = try await activationSessionID(in: transport)
+        for _ in 0..<500 where clock.pendingSleepCount == 0 { await Task.yield() }
+        clock.advance(by: 2_000_000_000)
+
+        let acknowledged = await coordinator.receiveActivationResult(
+            sessionID: sessionID,
+            from: remote,
+            accepted: true
+        )
+        XCTAssertTrue(acknowledged)
+        try await activation.value
+        guard case .controlling = await coordinator.currentState() else {
+            return XCTFail("Windows acknowledgement inside the bridge budget must preserve control")
+        }
+        await coordinator.stop()
     }
 
     func testEmergencyHotkeyReturnsControlLocallyAndReleasesPeer() async throws {
@@ -1469,29 +2226,49 @@ private final class TransportSpy: PeerTransport, @unchecked Sendable {
     private let stream = AsyncStream<PeerEvent> { $0.finish() }
     private let lock = NSLock()
     private let frameSendError: Error?
-    private let useRealtime: Bool
+    private var realtimeEnabled: Bool
+    private var realtimeSendError: Error?
+    private let frameSendClock: ManualMonotonicClock?
     private var storedFrames: [InputFrame] = []
     private var storedRealtimeFrames: [RealtimePointerFrame] = []
     private var storedRealtimePeerIDs: [DeviceID?] = []
     private var storedRealtimeRoles: [RealtimeConnectionRole] = []
+    private var storedRealtimeReconnects: [DeviceID] = []
     private var storedControlMessages: [ControlMessage] = []
     var frames: [InputFrame] { lock.withLock { storedFrames } }
     var realtimeFrames: [RealtimePointerFrame] { lock.withLock { storedRealtimeFrames } }
     var realtimePeerIDs: [DeviceID?] { lock.withLock { storedRealtimePeerIDs } }
     var realtimeRoles: [RealtimeConnectionRole] { lock.withLock { storedRealtimeRoles } }
+    var realtimeReconnects: [DeviceID] { lock.withLock { storedRealtimeReconnects } }
     var controlMessages: [ControlMessage] { lock.withLock { storedControlMessages } }
-    init(frameSendError: Error? = nil, useRealtime: Bool = false) {
+    init(
+        frameSendError: Error? = nil,
+        useRealtime: Bool = false,
+        realtimeSendError: Error? = nil,
+        frameSendClock: ManualMonotonicClock? = nil
+    ) {
         self.frameSendError = frameSendError
-        self.useRealtime = useRealtime
+        self.realtimeEnabled = useRealtime
+        self.realtimeSendError = realtimeSendError
+        self.frameSendClock = frameSendClock
     }
     func start(localDevice: DeviceDescriptor, workspace: WorkspaceSnapshot, key: Data) async throws {}
     func stop() async {}
     func reconnect(to deviceID: DeviceID) {}
+    func reconnectRealtime(to deviceID: DeviceID) {
+        lock.withLock { storedRealtimeReconnects.append(deviceID) }
+    }
     func setRealtimePeer(_ deviceID: DeviceID?, role: RealtimeConnectionRole) {
         lock.withLock {
             storedRealtimePeerIDs.append(deviceID)
             storedRealtimeRoles.append(role)
         }
+    }
+    func setRealtimeEnabled(_ enabled: Bool) {
+        lock.withLock { realtimeEnabled = enabled }
+    }
+    func setRealtimeSendError(_ error: Error?) {
+        lock.withLock { realtimeSendError = error }
     }
     func events() -> AsyncStream<PeerEvent> { stream }
     func send(_ envelope: ControlEnvelope, to deviceID: DeviceID) async throws {
@@ -1499,14 +2276,22 @@ private final class TransportSpy: PeerTransport, @unchecked Sendable {
     }
     func send(_ frame: InputFrame, to deviceID: DeviceID) async throws {
         if let frameSendError { throw frameSendError }
+        if let frameSendClock { try await frameSendClock.sleep(for: .seconds(60)) }
         lock.withLock { storedFrames.append(frame) }
     }
     func sendRealtime(_ frame: RealtimePointerFrame, to deviceID: DeviceID) async throws -> Bool {
-        if useRealtime {
+        if let error = lock.withLock({ realtimeSendError }) { throw error }
+        if lock.withLock({ realtimeEnabled }) {
             lock.withLock { storedRealtimeFrames.append(frame) }
             return true
         }
-        try await send(frame.reliableFallback, to: deviceID)
         return false
+    }
+    func sendRealtimeImmediately(_ frame: RealtimePointerFrame, to deviceID: DeviceID) -> Bool {
+        lock.withLock {
+            guard realtimeEnabled, realtimeSendError == nil else { return false }
+            storedRealtimeFrames.append(frame)
+            return true
+        }
     }
 }

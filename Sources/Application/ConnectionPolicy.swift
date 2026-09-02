@@ -12,6 +12,10 @@ public struct PeerConnectionPolicy: Sendable, Equatable {
 
     public static let passive = PeerConnectionPolicy()
 
+    public func ownsReconnect(to deviceID: DeviceID) -> Bool {
+        outboundPeerIDs.contains(deviceID)
+    }
+
     public static func macCanDial(_ peer: DeviceDescriptor?) -> Bool {
         peer.map { $0.platform != .windows } == true
     }

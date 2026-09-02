@@ -137,6 +137,8 @@ continuation remain intentionally unsupported.
 ./Scripts/test.sh --unit   # deterministic unit, protocol, transport, and simulated E2E tests
 ./Scripts/test.sh --input-smoke # signed TCC/event-tap check; requires both input permissions
 ./Scripts/build.sh --universal
+./Scripts/simulate.sh           # two headless nodes with protocol-latency gates
+./Scripts/simulate.sh shell     # interactive two-node fault-injection shell
 ```
 
 The full and unit modes write an `.xcresult` bundle under `.build/test-results` and enforce the coverage floors in `Config/Coverage.json`. The native input smoke test is opt-in because macOS grants Input Monitoring and Accessibility to the signed test process separately.
@@ -144,6 +146,14 @@ The full and unit modes write an `.xcresult` bundle under `.build/test-results` 
 The generated Xcode project is derived from `project.yml`; edit the YAML and regenerate instead of hand-editing `project.pbxproj`.
 
 The Windows receiver and its tests are maintained in the companion Macifier repository. Cross-platform file-transfer codec fixtures must pass in both Swift and .NET before release.
+
+The simulator launches two isolated CLI node processes over loopback and uses
+named pasteboards, so it does not open windows or modify the general pasteboard.
+It generates an ephemeral workspace key in mode-`0600` temporary configuration
+files and never reads or writes Keychain.
+Its scripted run checks control activation, input latency, clipboard delivery,
+Finder-style file transfer, and restart recovery. Pointer p95 is compared with
+the idle baseline and any latency or delivery stall above 50 ms fails the run.
 
 </details>
 

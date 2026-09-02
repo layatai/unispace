@@ -8,6 +8,34 @@ import UniSpaceApplication
 import UniSpaceDomain
 
 final class InfrastructureTests: XCTestCase {
+    func testDiagnosticLogRecordsOnlyWhileEnabled() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let suite = "UniSpaceDiagnosticLogTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer {
+            defaults.removePersistentDomain(forName: suite)
+            try? FileManager.default.removeItem(at: root)
+        }
+        let log = DiagnosticLog(rootURL: root, defaults: defaults)
+
+        log.record("disabled message")
+        log.flush()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: log.fileURL.path))
+
+        log.setEnabled(true)
+        log.record("session started")
+        log.flush()
+        var contents = try String(contentsOf: log.fileURL, encoding: .utf8)
+        XCTAssertTrue(contents.contains("Diagnostic logging enabled"))
+        XCTAssertTrue(contents.contains("session started"))
+
+        log.setEnabled(false)
+        log.record("hidden message")
+        log.flush()
+        contents = try String(contentsOf: log.fileURL, encoding: .utf8)
+        XCTAssertFalse(contents.contains("hidden message"))
+    }
+
     func testCursorSuppressionKeepsItsFirstAnchorUntilReleased() {
         let firstAnchor = CGPoint(x: 1512, y: 500)
         var state = CursorSuppressionState()
@@ -478,6 +506,8 @@ final class InfrastructureTests: XCTestCase {
         let clientConnected = expectation(description: "client connected directly")
         let capabilitiesReceived = expectation(description: "peer capabilities received")
         let controlReceived = expectation(description: "control transferred")
+        let serverDisconnected = expectation(description: "passive server reports client offline")
+        let serverHealth = ConnectionHealthRecorder()
         let serverEvents = Task {
             for await event in server.events() {
                 switch event {
@@ -492,6 +522,9 @@ final class InfrastructureTests: XCTestCase {
                     default:
                         break
                     }
+                case .health(let id, let snapshot) where id == clientID:
+                    serverHealth.append(snapshot.health)
+                    if snapshot.health == .disconnected { serverDisconnected.fulfill() }
                 default:
                     break
                 }
@@ -511,6 +544,9 @@ final class InfrastructureTests: XCTestCase {
         )
         await fulfillment(of: [controlReceived], timeout: 3)
         await client.stop()
+        await fulfillment(of: [serverDisconnected], timeout: 3)
+        XCTAssertTrue(serverHealth.values.contains(.disconnected))
+        XCTAssertFalse(serverHealth.values.contains(.reconnecting))
         await server.stop()
         serverEvents.cancel()
         clientEvents.cancel()
@@ -1022,11 +1058,16 @@ final class InfrastructureTests: XCTestCase {
         let retried = expectation(description: "connection retried after authentication timeout")
         retried.expectedFulfillmentCount = 2
         retried.assertForOverFulfill = false
+        let reconnecting = expectation(description: "owned route reports reconnecting")
+        reconnecting.assertForOverFulfill = false
         let events = Task {
             for await event in transport.events() {
                 if case let .health(id, snapshot) = event,
                    id == peerID, snapshot.health == .connecting {
                     retried.fulfill()
+                } else if case let .health(id, snapshot) = event,
+                          id == peerID, snapshot.health == .reconnecting {
+                    reconnecting.fulfill()
                 }
             }
         }
@@ -1037,7 +1078,7 @@ final class InfrastructureTests: XCTestCase {
             key: PairingCryptoSession.randomData(count: 32)
         )
         transport.updateConnectionPolicy(.init(outboundPeerIDs: [peerID]))
-        await fulfillment(of: [retried], timeout: 3)
+        await fulfillment(of: [retried, reconnecting], timeout: 3)
 
         await transport.stop()
         listener.cancel()
@@ -1580,7 +1621,7 @@ final class InfrastructureTests: XCTestCase {
         await transport.stop()
     }
 
-    func testAuthenticatedPointerLanePreservesWindowsInitiatedFlow() async throws {
+    func testAuthenticatedPointerLaneReplacesRestartedWindowsRoute() async throws {
         let workspaceID = WorkspaceID()
         let key = PairingCryptoSession.randomData(count: 32)
         let macID = DeviceID()
@@ -1663,6 +1704,61 @@ final class InfrastructureTests: XCTestCase {
         let sentToUnknownDevice = try await transport.send(frame, to: DeviceID())
         XCTAssertFalse(sentToUnknownDevice)
         await fulfillment(of: [received], timeout: 3)
+
+        let restartedRawClient = NWConnection(
+            host: "127.0.0.1",
+            port: pointerPort,
+            using: .udp
+        )
+        let restartedClient = SecurePeerConnection(
+            connection: restartedRawClient,
+            localDeviceID: windowsID,
+            workspaceID: workspaceID,
+            workspaceKey: key,
+            expectedDeviceID: macID,
+            isOutbound: true,
+            transportKind: .tcp,
+            isDatagram: true,
+            securityProfile: .pointerV2
+        )
+        defer { restartedClient.cancel() }
+        let restartedAuthenticated = expectation(description: "Restarted Windows pointer lane authenticated")
+        let restartedReceived = expectation(description: "Restarted Windows pointer lane received state")
+        restartedClient.authenticatedHandler = { deviceID in
+            XCTAssertEqual(deviceID, macID)
+            restartedAuthenticated.fulfill()
+        }
+        let restartedFrame = PortableRealtimePointerFrame(
+            workspaceID: frame.workspaceID,
+            sessionID: frame.sessionID,
+            controllerID: frame.controllerID,
+            epoch: frame.epoch,
+            generation: frame.generation + 1,
+            sequence: 0,
+            deltaX: 1,
+            deltaY: 2,
+            cumulativeDeltaX: 1,
+            cumulativeDeltaY: 2,
+            absoluteX: frame.absoluteX,
+            absoluteY: frame.absoluteY,
+            timestampNanos: frame.timestampNanos + 1
+        )
+        restartedClient.frameHandler = { kind, payload in
+            guard kind == .realtimePointerBinaryV2,
+                  let decoded = try? WireFrameCodec.decodePortableRealtimePointer(payload),
+                  decoded == restartedFrame else { return }
+            restartedReceived.fulfill()
+        }
+        restartedRawClient.start(queue: DispatchQueue(label: "UniSpaceInfrastructureTests.RestartedWindowsPointer"))
+        await fulfillment(of: [restartedAuthenticated], timeout: 3)
+
+        sent = false
+        for _ in 0..<50 where !sent {
+            sent = try await transport.send(restartedFrame, to: windowsID)
+            if !sent { try await Task.sleep(for: .milliseconds(20)) }
+        }
+        XCTAssertTrue(sent)
+        await fulfillment(of: [restartedReceived], timeout: 3)
         transport.stop()
     }
 
@@ -1818,6 +1914,17 @@ private final class StringRecorder: @unchecked Sendable {
     var values: [String] { lock.withLock { storedValues } }
 
     func append(_ value: String) {
+        lock.withLock { storedValues.append(value) }
+    }
+}
+
+private final class ConnectionHealthRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storedValues: [ConnectionHealth] = []
+
+    var values: [ConnectionHealth] { lock.withLock { storedValues } }
+
+    func append(_ value: ConnectionHealth) {
         lock.withLock { storedValues.append(value) }
     }
 }

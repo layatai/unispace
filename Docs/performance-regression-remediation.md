@@ -24,6 +24,13 @@ both Macs showed 9–16% CPU in pointer encryption, TCP receive/decode, event-ta
 suppression, and injection. TCP head-of-line blocking is the direct cause of
 the visible pointer lag.
 
+Build 19 removed that QUIC dependency by moving modern Mac pointer traffic to
+authenticated UDP. A follow-up live session exposed a separate failover defect:
+UDP delivery stopped while TCP heartbeat remained healthy, leaving the remote
+session active and the controller cursor suppressed. See
+[`remote-pointer-stall-handover.md`](remote-pointer-stall-handover.md) for the
+evidence, code review, and required regression coverage.
+
 ## Connection ownership
 
 | Connection | Proactive dial owner |
@@ -45,6 +52,11 @@ Each peer has at most one connection attempt in flight. Retry delays are 1, 2,
 Backoff resets only after ten seconds of stable connectivity. Network recovery,
 a changed route, a controller change, and an explicit refresh may wake a retry.
 
+Connection status follows actual ownership. An offline peer is `Reconnecting`
+only while this Mac owns and schedules its outbound retry. Passive Macs and
+inbound-only Windows peers remain `Offline`, and the UI does not offer a retry
+action that policy would reject.
+
 ## Controller isolation
 
 `ControlSessionCoordinator` publishes a typed, read-only session snapshot.
@@ -54,6 +66,43 @@ transport, stop a control session, or alter input suppression.
 Activation input uses a bounded stream. The activation envelope is written
 before buffered input is drained, so confirmation does not create per-event
 main-actor tasks or allow input to overtake activation.
+
+Pointer motion keeps the 16 ms coalescing budget, but the budget is no longer
+enforced only by a sleeping task. Every captured motion event also checks the
+monotonic deadline and flushes accumulated motion immediately when the
+scheduled task is late. The scheduled task runs at high priority and no longer
+cancels itself before sending. This preserves backpressure while preventing
+continuity or process scheduling load from stretching one frame into a visible
+multi-frame stall.
+
+Incoming realtime pointer input has its own transport stream and is dispatched
+by a dedicated user-interactive task directly to `ControlSessionCoordinator`.
+Reliable ordered input stays on the control stream for legacy activation
+ordering. Discovery, connection status, workspace changes, and other
+application events still cross to `AppModel` on the Main Actor. Realtime
+pointer injection therefore no longer waits behind SwiftUI publication,
+clipboard state, heartbeat handling, or file-transfer UI work.
+
+Realtime receive-session validation, generation/sequence deduplication, and
+cumulative-delta recovery live in a small lock-protected receiver. The
+user-interactive transport consumer validates and injects each realtime frame
+synchronously, without a Swift actor hop between wire receipt and injection.
+
+After activation confirmation, captured pointer motion on a healthy
+authenticated UDP lane is encoded and enqueued synchronously from the capture
+callback. A lock-protected sender owns generation, sequence, cumulative delta,
+and acknowledgement freshness for that fast path. Probing, stale or failed
+lanes, dragging, and reliable input continue through the coordinator actor, so
+the fast path cannot bypass fallback or ordering safeguards. The bounded
+activation stream is closed once activation succeeds instead of remaining the
+permanent pointer route.
+
+While a control session is active, UniSpace holds a scoped
+`ProcessInfo` user-initiated, latency-critical activity. The activity ends when
+the session returns to idle or the network is stopped. This reduces timer and
+process-throttling risk without keeping the process latency-critical at idle;
+the synchronous realtime receiver, rather than this activity alone, removes
+the measured wire-to-injection actor stall.
 
 ## Event-driven continuity
 
@@ -71,6 +120,13 @@ peer that does not advertise UDP pointer v2. Clipboard connects only while
 sharing has a target. File transfer connects only to the selected or automatic
 destination.
 
+Secondary targets are resolved from the authenticated control plane before
+their dedicated channels exist: remote controller, active control-session
+peer, then a sole connected compatible peer. Clipboard uses that target to
+establish TCP 61342; file transfer uses it to establish TCP 61340. Dedicated
+connectivity controls readiness such as the `Waiting`/`Encrypted` badge and the
+Send Files action; it does not gate target selection or channel bootstrap.
+
 ## Regression gates
 
 - Four-node topology with one unavailable node: only the dial owner retries.
@@ -78,10 +134,31 @@ destination.
 - At most one attempt per unavailable peer per minute after the circuit opens.
 - Controller transfer cancels retries owned by the former controller.
 - Macifier reconnects only to its persisted controller.
+- Passive and inbound-only peers show `Offline` and expose no manual retry.
+- Clipboard selects one control-connected target before TCP 61342 is connected;
+  an idle multi-peer workspace selects none and never dials every peer.
+- File transfer selects one control-connected target before TCP 61340 is
+  connected, then enables Send Files only after authentication.
 - Identical context produces no Keychain read, QoS update, or UI publication.
 - Delayed activation preserves activation-before-input ordering with bounded
   buffering, no heartbeat loss, and no pointer stall above 50 ms.
+- A delayed pointer-flush task cannot extend the 16 ms batching deadline; the
+  next captured event must flush the latest coalesced position immediately.
+- Clipboard, file-transfer, heartbeat, and UI activity cannot enter the
+  realtime-input dispatch path or require a Main Actor hop before pointer
+  injection.
+- Realtime receipt and injection contain no cooperative-executor suspension;
+  session and replay state remain lock-protected and reset with the control
+  session.
+- Healthy UDP capture-to-send contains no Main Actor or control-actor
+  suspension; progress expiry and send failure return motion to the existing
+  reliable/fallback path.
+- The latency-critical process activity exists only for an active controlling
+  or receiving session and is released on every idle/stop path.
 - Existing unit, coverage, UI, native-input, and Windows CI gates remain intact.
+- The 500-sample two-process latency scenario runs as a standalone,
+  non-instrumented performance gate after coverage tests; profiler overhead is
+  not included in the 50 ms product latency/stall limit.
 - A routed Fox session sends pointer state over UDP 61341, does not retry QUIC
   61339, and keeps pointer delivery independent from the TCP control RTT.
 

@@ -71,3 +71,4 @@ xcodebuild "${common_arguments[@]}" \
   -resultBundlePath "$result_bundle" \
   "${test_arguments[@]}"
 node ./Scripts/check-coverage.mjs "$result_bundle"
+./Scripts/simulate.sh run-two --samples 500

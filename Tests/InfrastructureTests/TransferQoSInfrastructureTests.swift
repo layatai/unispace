@@ -307,6 +307,10 @@ final class TransferQoSInfrastructureTests: XCTestCase {
             await fixture.store.diagnostics().checkpointTimerCreationCount == 2
         }
         XCTAssertTrue(retryScheduled)
+        let retrySleeping = await eventually {
+            fixture.clock.pendingSleepCount == 1
+        }
+        XCTAssertTrue(retrySleeping)
         fixture.clock.advance(by: 10)
 
         let checkpointed = await eventually {

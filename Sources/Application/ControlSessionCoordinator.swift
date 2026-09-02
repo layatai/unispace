@@ -10,6 +10,14 @@ public actor ControlSessionCoordinator {
         let targetCapabilities: Set<DeviceCapability>
     }
 
+    private enum RealtimeDeliveryMode: Sendable, Equatable {
+        case legacy
+        case reliableOnly
+        case probing
+        case healthy
+        case fallback
+    }
+
     private enum ActivationOutcome: Sendable {
         case accepted
         case rejected
@@ -54,6 +62,12 @@ public actor ControlSessionCoordinator {
     public static let heartbeatTimeoutNanos: UInt64 = 10_000_000_000
     public static let minimumHeartbeatTimeoutNanos: UInt64 = 5_000_000_000
     public static let maximumHeartbeatTimeoutNanos: UInt64 = 30_000_000_000
+    public static let realtimeProgressTimeoutNanos: UInt64 = 750_000_000
+    public static let realtimeProbeIntervalNanos: UInt64 = 250_000_000
+    public static let realtimeHeartbeatInterval: Duration = .milliseconds(250)
+    public static let reliablePointerTimeout: Duration = .milliseconds(750)
+    public static let pointerFlushIntervalNanos: UInt64 = 16_000_000
+    public static let windowsActivationTimeout: Duration = .seconds(5)
 
     private let localDeviceID: DeviceID
     private let workspaceID: WorkspaceID
@@ -62,6 +76,9 @@ public actor ControlSessionCoordinator {
     private let transport: PeerTransport
     private let inputSender: OrderedInputSender
     private let clock: MonotonicClock
+    private let diagnostic: @Sendable (String) -> Void
+    private nonisolated let realtimeInputReceiver: RealtimeInputReceiver
+    private nonisolated let realtimePointerCaptureSender: RealtimePointerCaptureSender
     private let activationTimeout: Duration
     private let sessionStream: AsyncStream<ControlSessionSnapshot>
     private let sessionContinuation: AsyncStream<ControlSessionSnapshot>.Continuation
@@ -73,18 +90,19 @@ public actor ControlSessionCoordinator {
     private var realtimeSequence: UInt64 = 0
     private var cumulativePointerX: Double = 0
     private var cumulativePointerY: Double = 0
-    private var receivedRealtimeGeneration: UInt64?
-    private var receivedRealtimeSequence: UInt64?
-    private var receivedCumulativePointerX: Double = 0
-    private var receivedCumulativePointerY: Double = 0
+    private var realtimeDeliveryMode: RealtimeDeliveryMode = .legacy
+    private var lastRealtimeSentSequence: UInt64?
+    private var lastRealtimeProbeNanos: UInt64?
     private var pressedButtons: Set<PointerButton> = []
     private var state: State = .idle
     private var pendingPointerEvent: InputEvent?
     private var pendingScrollEvent: InputEvent?
     private var pointerFlushTask: Task<Void, Never>?
+    private var lastMotionFlushNanos: UInt64?
     private var heartbeatTask: Task<Void, Never>?
     private var watchdogTask: Task<Void, Never>?
     private var lastHeartbeatNanos: UInt64 = 0
+    private var lastHeartbeatEchoNanos: UInt64?
     private var smoothedHeartbeatIntervalNanos: UInt64?
     private var smoothedRoundTripNanos: UInt64?
     private var activeControlRoute: ActiveControlRoute?
@@ -101,7 +119,8 @@ public actor ControlSessionCoordinator {
         transport: PeerTransport,
         clock: MonotonicClock = SystemMonotonicClock(),
         activationTimeout: Duration = .seconds(2),
-        election: ControllerStateMachine = .init()
+        election: ControllerStateMachine = .init(),
+        diagnostic: @escaping @Sendable (String) -> Void = { _ in }
     ) {
         precondition(activationTimeout > .zero)
         self.localDeviceID = localDeviceID
@@ -109,8 +128,19 @@ public actor ControlSessionCoordinator {
         self.capture = capture
         self.injector = injector
         self.transport = transport
-        self.inputSender = OrderedInputSender(transport: transport)
+        self.inputSender = OrderedInputSender(transport: transport, clock: clock)
         self.clock = clock
+        self.diagnostic = diagnostic
+        self.realtimeInputReceiver = RealtimeInputReceiver(
+            workspaceID: workspaceID,
+            injector: injector
+        )
+        self.realtimePointerCaptureSender = RealtimePointerCaptureSender(
+            workspaceID: workspaceID,
+            localDeviceID: localDeviceID,
+            transport: transport,
+            clock: clock
+        )
         self.activationTimeout = activationTimeout
         self.election = election
         let pair = AsyncStream<ControlSessionSnapshot>.makeStream(bufferingPolicy: .bufferingNewest(1))
@@ -127,7 +157,7 @@ public actor ControlSessionCoordinator {
     @discardableResult
     public func makeLocalController() async -> ControllerEpoch {
         let epoch = election.claim(for: localDeviceID)
-        await endCurrentSession(notifyPeer: true)
+        await endCurrentSession(notifyPeer: true, reason: "local controller claimed")
         setState(.idle)
         return epoch
     }
@@ -135,7 +165,7 @@ public actor ControlSessionCoordinator {
     public func observeControllerClaim(_ epoch: ControllerEpoch) async {
         guard election.observe(epoch) else { return }
         if epoch.controllerID != localDeviceID {
-            await endCurrentSession(notifyPeer: false)
+            await endCurrentSession(notifyPeer: false, reason: "remote controller claimed")
         }
     }
 
@@ -145,6 +175,7 @@ public actor ControlSessionCoordinator {
         entryEdge: DisplayEdge,
         normalizedPosition: Double,
         targetCapabilities: Set<DeviceCapability> = [],
+        targetPlatform: DevicePlatform = .unknown,
         requiresActivationConfirmation: Bool = false,
         initialEvent: InputEvent? = nil,
         pendingEvents: AsyncStream<InputEvent>? = nil
@@ -153,9 +184,10 @@ public actor ControlSessionCoordinator {
         if case .idle = state {
             // Input capture may already be synchronously pre-armed by the edge event tap.
         } else {
-            await endCurrentSession(notifyPeer: true)
+            await endCurrentSession(notifyPeer: true, reason: "session replaced")
         }
         let sessionID = SessionID()
+        diagnostic("Activating session \(sessionID) for peer \(target); platform=\(targetPlatform.rawValue)")
         resetRealtimeSender(incrementGeneration: true)
         setState(.activating(epoch: epoch, target: target, session: sessionID))
         activeControlRoute = ActiveControlRoute(
@@ -165,11 +197,21 @@ public actor ControlSessionCoordinator {
             normalizedPosition: normalizedPosition,
             targetCapabilities: targetCapabilities
         )
+        realtimeDeliveryMode = if targetCapabilities.contains(.realtimePointerProgressV1) {
+            .probing
+        } else if targetPlatform == .macOS {
+            .reliableOnly
+        } else {
+            .legacy
+        }
         capture.setSuppressionEnabled(true)
         transport.setRealtimePeer(target, role: .dialer)
         let supportsExplicitAcknowledgement = targetCapabilities.contains(.activationAcknowledgementV1)
+        let confirmationTimeout = targetPlatform == .windows
+            ? max(activationTimeout, Self.windowsActivationTimeout)
+            : activationTimeout
         let activationResults = (requiresActivationConfirmation || supportsExplicitAcknowledgement)
-            ? beginActivationWait(target: target, sessionID: sessionID)
+            ? beginActivationWait(target: target, sessionID: sessionID, timeout: confirmationTimeout)
             : nil
         do {
             try await transport.send(
@@ -183,23 +225,11 @@ public actor ControlSessionCoordinator {
                 to: target
             )
             setState(.controlling(epoch: epoch, target: target, session: sessionID))
-            if let initialEvent {
-                _ = await handleCaptured(initialEvent)
-            }
-            if let pendingEvents {
-                activationInputTask?.cancel()
-                activationInputTask = Task { [weak self] in
-                    for await event in pendingEvents {
-                        guard !Task.isCancelled, let self else { return }
-                        _ = await self.handleCaptured(event)
-                    }
-                }
-            }
+            diagnostic("Session \(sessionID) is controlling peer \(target); mode=\(realtimeDeliveryMode)")
+            lastMotionFlushNanos = clock.nowNanoseconds()
             if let activationResults {
-                if !supportsExplicitAcknowledgement {
-                    await sendHeartbeat(target: target, sessionID: sessionID)
-                    startHeartbeat(target: target, sessionID: sessionID)
-                }
+                await sendHeartbeat(target: target, sessionID: sessionID)
+                startHeartbeat(target: target, sessionID: sessionID)
                 switch await firstActivationOutcome(from: activationResults) {
                 case .accepted:
                     break
@@ -208,14 +238,35 @@ public actor ControlSessionCoordinator {
                 case .timedOut:
                     throw ActivationError.timedOut
                 }
-                if supportsExplicitAcknowledgement {
-                    startHeartbeat(target: target, sessionID: sessionID)
-                }
             } else {
                 startHeartbeat(target: target, sessionID: sessionID)
             }
+            if let initialEvent {
+                _ = await handleCaptured(initialEvent)
+            }
+            if let pendingEvents {
+                activationInputTask?.cancel()
+                activationInputTask = Task(priority: realtimeInputTaskPriority) { [weak self] in
+                    for await event in pendingEvents {
+                        guard !Task.isCancelled, let self else { return }
+                        _ = await self.handleCaptured(event)
+                    }
+                }
+            }
+            if realtimeDeliveryMode == .legacy {
+                realtimePointerCaptureSender.enable(
+                    epoch: epoch,
+                    target: target,
+                    sessionID: sessionID,
+                    generation: realtimeGeneration,
+                    sequence: realtimeSequence,
+                    cumulativePointerX: cumulativePointerX,
+                    cumulativePointerY: cumulativePointerY
+                )
+            }
         } catch {
-            await endCurrentSession(notifyPeer: false)
+            diagnostic("Activation failed for session \(sessionID): \(error.localizedDescription)")
+            await endCurrentSession(notifyPeer: false, reason: "activation failed")
             throw error
         }
     }
@@ -226,11 +277,13 @@ public actor ControlSessionCoordinator {
         from source: DeviceID,
         accepted: Bool
     ) -> Bool {
-        finishPendingActivation(
+        let handled = finishPendingActivation(
             target: source,
             sessionID: sessionID,
             outcome: accepted ? .accepted : .rejected
         )
+        diagnostic("t=\(clock.nowNanoseconds()) activation result for session \(sessionID); accepted=\(accepted), handled=\(handled)")
+        return handled
     }
 
     public func receiveActivation(
@@ -246,11 +299,16 @@ public actor ControlSessionCoordinator {
               let targetDisplay,
               targetDisplay.id == activation.targetDisplayID,
               targetDisplay.deviceID == localDeviceID else { return false }
-        await endCurrentSession(notifyPeer: false)
+        await endCurrentSession(notifyPeer: false, reason: "incoming activation")
         injector.activate(
             on: targetDisplay,
             enteringFrom: activation.entryEdge,
             normalizedPosition: activation.normalizedPosition
+        )
+        realtimeInputReceiver.begin(
+            epoch: epoch,
+            source: source,
+            sessionID: activation.sessionID
         )
         setState(.receiving(epoch: epoch, source: source, session: activation.sessionID))
         transport.setRealtimePeer(source, role: .listener)
@@ -272,13 +330,15 @@ public actor ControlSessionCoordinator {
             currentFlags = rawValue
         }
         if Self.isEmergencyStop(event, flags: currentFlags) {
-            await endCurrentSession(notifyPeer: true)
+            await endCurrentSession(notifyPeer: true, reason: "emergency stop")
             return .emergencyStop
         }
         if case let .mouseButton(button, isDown, _) = event {
+            if isDown { realtimePointerCaptureSender.suspend() }
             await flushPendingMotion()
             if isDown { pressedButtons.insert(button) } else { pressedButtons.remove(button) }
             await sendInput(event)
+            if pressedButtons.isEmpty { realtimePointerCaptureSender.resume() }
             return .forwarded
         }
         if case let .pointerMove(deltaX, deltaY, absoluteX, absoluteY) = event {
@@ -297,7 +357,7 @@ public actor ControlSessionCoordinator {
             } else {
                 pendingPointerEvent = event
             }
-            schedulePointerFlush()
+            await flushPendingMotionIfDue()
             return .forwarded
         }
         if case let .scroll(deltaX, deltaY, isContinuous) = event {
@@ -312,7 +372,7 @@ public actor ControlSessionCoordinator {
                 await flushPendingMotion()
                 pendingScrollEvent = event
             }
-            schedulePointerFlush()
+            await flushPendingMotionIfDue()
             return .forwarded
         }
         await flushPendingMotion()
@@ -353,7 +413,9 @@ public actor ControlSessionCoordinator {
             previous: smoothedRoundTripNanos,
             sample: now - sentAtNanos
         )
+        lastHeartbeatEchoNanos = now
         publishSessionSnapshotIfChanged()
+        diagnostic("t=\(now) heartbeat echo for session \(sessionID); latency=\(Int((smoothedRoundTripNanos ?? 0) / 1_000_000))ms")
         return Int((smoothedRoundTripNanos ?? 0) / 1_000_000)
     }
 
@@ -382,74 +444,129 @@ public actor ControlSessionCoordinator {
         injector.inject(frame.event)
     }
 
-    public func handleIncomingRealtime(_ frame: RealtimePointerFrame, from source: DeviceID) {
-        guard frame.workspaceID == workspaceID,
-              election.currentEpoch == frame.epoch,
-              frame.controllerID == source,
-              case let .receiving(epoch, expectedSource, sessionID) = state,
-              epoch == frame.epoch,
-              expectedSource == source,
-              sessionID == frame.sessionID else { return }
+    public nonisolated func handleIncomingRealtime(
+        _ frame: RealtimePointerFrame,
+        from source: DeviceID
+    ) {
+        realtimeInputReceiver.receive(frame, from: source)
+    }
 
-        if let receivedRealtimeGeneration, frame.generation < receivedRealtimeGeneration { return }
-        if receivedRealtimeGeneration != frame.generation {
-            receivedRealtimeGeneration = frame.generation
-            receivedRealtimeSequence = nil
-            receivedCumulativePointerX = 0
-            receivedCumulativePointerY = 0
+    public nonisolated func sendCapturedPointerImmediately(_ event: InputEvent) -> Bool {
+        realtimePointerCaptureSender.send(event)
+    }
+
+    public nonisolated func suspendCapturedPointerFastPath() {
+        realtimePointerCaptureSender.suspend()
+    }
+
+    public func realtimePointerProgress(
+        sessionID: SessionID,
+        from source: DeviceID
+    ) -> RealtimePointerProgress? {
+        guard case let .receiving(_, expectedSource, expectedSession) = state,
+              source == expectedSource, sessionID == expectedSession else { return nil }
+        return realtimeInputReceiver.progress(sessionID: sessionID, source: source)
+    }
+
+    @discardableResult
+    public func receiveRealtimePointerProgress(
+        _ progress: RealtimePointerProgress,
+        from source: DeviceID
+    ) -> Bool {
+        if realtimePointerCaptureSender.acknowledge(progress, from: source) {
+            diagnostic("Realtime progress accepted for session \(progress.sessionID); generation=\(progress.generation), sequence=\(progress.sequence)")
+            return true
         }
-        guard receivedRealtimeSequence.map({ frame.sequence > $0 }) ?? true else { return }
-        let deltaX = frame.cumulativeDeltaX - receivedCumulativePointerX
-        let deltaY = frame.cumulativeDeltaY - receivedCumulativePointerY
-        receivedRealtimeSequence = frame.sequence
-        receivedCumulativePointerX = frame.cumulativeDeltaX
-        receivedCumulativePointerY = frame.cumulativeDeltaY
-        injector.inject(.pointerMove(
-            deltaX: deltaX,
-            deltaY: deltaY,
-            absoluteX: frame.absoluteX,
-            absoluteY: frame.absoluteY
-        ))
+        guard realtimeDeliveryMode != .healthy else {
+            diagnostic("Realtime progress ignored for healthy session \(progress.sessionID); generation=\(progress.generation), sequence=\(progress.sequence)")
+            return false
+        }
+        guard case let .controlling(epoch, target, sessionID) = state,
+              source == target, progress.sessionID == sessionID,
+              progress.generation == realtimeGeneration,
+              let lastRealtimeSentSequence,
+              progress.sequence <= lastRealtimeSentSequence else {
+            diagnostic("Realtime progress rejected for session \(progress.sessionID); generation=\(progress.generation), sequence=\(progress.sequence), expectedGeneration=\(realtimeGeneration)")
+            return false
+        }
+        let acknowledgedAtNanos = clock.nowNanoseconds()
+        realtimeDeliveryMode = .healthy
+        diagnostic("Realtime progress established for session \(progress.sessionID); generation=\(progress.generation), sequence=\(progress.sequence)")
+        realtimePointerCaptureSender.enable(
+            epoch: epoch,
+            target: source,
+            sessionID: progress.sessionID,
+            generation: realtimeGeneration,
+            sequence: realtimeSequence,
+            cumulativePointerX: cumulativePointerX,
+            cumulativePointerY: cumulativePointerY,
+            acknowledgedSequence: progress.sequence,
+            acknowledgedAtNanos: acknowledgedAtNanos
+        )
+        return true
     }
 
     public func peerDisconnected(_ deviceID: DeviceID) async {
         switch state {
         case let .activating(_, target, _) where target == deviceID,
              let .controlling(_, target, _) where target == deviceID:
-            await endCurrentSession(notifyPeer: false)
+            await endCurrentSession(notifyPeer: false, reason: "controlling peer disconnected")
         case let .receiving(_, source, _) where source == deviceID:
-            await endCurrentSession(notifyPeer: false)
+            await endCurrentSession(notifyPeer: false, reason: "controller peer disconnected")
         default:
             break
         }
     }
 
-    public func deactivateCurrentSession() async {
+    @discardableResult
+    public func receiveDeactivation(sessionID: SessionID, from source: DeviceID) async -> Bool {
+        switch state {
+        case let .activating(_, target, activeSessionID),
+             let .controlling(_, target, activeSessionID):
+            guard target == source, activeSessionID == sessionID else {
+                diagnostic("Ignoring stale deactivation for session \(sessionID) from \(source)")
+                return false
+            }
+        case let .receiving(_, controller, activeSessionID):
+            guard controller == source, activeSessionID == sessionID else {
+                diagnostic("Ignoring stale deactivation for session \(sessionID) from \(source)")
+                return false
+            }
+        case .idle:
+            return false
+        }
+        await endCurrentSession(notifyPeer: false, reason: "peer requested deactivation")
+        return true
+    }
+
+    public func deactivateCurrentSession(reason: String = "explicit deactivation") async {
         await flushPendingMotion()
-        await inputSender.drainOrCancel(after: .milliseconds(50))
-        await endCurrentSession(notifyPeer: true)
+        _ = await inputSender.drainOrCancel(after: .milliseconds(50))
+        await endCurrentSession(notifyPeer: true, reason: reason)
     }
 
     /// Waits until input already accepted by the coordinator has reached the
     /// transport. This is primarily useful at explicit session boundaries.
-    func flushPendingInput() async {
+    public func flushPendingInput() async {
         await flushPendingMotion()
         await inputSender.drain()
     }
 
     public func stop() async {
-        await endCurrentSession(notifyPeer: true)
+        await endCurrentSession(notifyPeer: true, reason: "coordinator stopped")
         capture.stop()
     }
 
-    private func endCurrentSession(notifyPeer: Bool) async {
+    private func endCurrentSession(notifyPeer: Bool, reason: String) async {
         let previous = state
+        diagnostic("Ending session; reason=\(reason), state=\(previous), notifyPeer=\(notifyPeer)")
         cancelPendingActivation()
         setState(.idle)
         activationInputTask?.cancel()
         activationInputTask = nil
         pointerFlushTask?.cancel()
         pointerFlushTask = nil
+        lastMotionFlushNanos = nil
         pendingPointerEvent = nil
         pendingScrollEvent = nil
         heartbeatTask?.cancel()
@@ -461,9 +578,11 @@ public actor ControlSessionCoordinator {
         currentFlags = 0
         smoothedHeartbeatIntervalNanos = nil
         smoothedRoundTripNanos = nil
+        lastHeartbeatEchoNanos = nil
         pressedButtons.removeAll()
         resetRealtimeSender(incrementGeneration: true)
         resetRealtimeReceiver()
+        resetRealtimeDelivery()
         capture.setSuppressionEnabled(false)
 
         if case .receiving = previous {
@@ -517,7 +636,8 @@ public actor ControlSessionCoordinator {
 
     private func beginActivationWait(
         target: DeviceID,
-        sessionID: SessionID
+        sessionID: SessionID,
+        timeout: Duration
     ) -> AsyncStream<ActivationOutcome> {
         cancelPendingActivation()
         let pair = AsyncStream<ActivationOutcome>.makeStream(bufferingPolicy: .bufferingNewest(1))
@@ -526,7 +646,6 @@ public actor ControlSessionCoordinator {
             sessionID: sessionID,
             continuation: pair.continuation
         )
-        let timeout = activationTimeout
         activationTimeoutTask = Task { [weak self, clock] in
             do { try await clock.sleep(for: timeout) }
             catch { return }
@@ -578,22 +697,44 @@ public actor ControlSessionCoordinator {
         return (flags & emergencyFlags) == emergencyFlags
     }
 
-    private func schedulePointerFlush() {
+    private func flushPendingMotionIfDue() async {
+        let now = clock.nowNanoseconds()
+        guard let lastMotionFlushNanos,
+              now >= lastMotionFlushNanos,
+              now - lastMotionFlushNanos < Self.pointerFlushIntervalNanos else {
+            await flushPendingMotion()
+            return
+        }
+        schedulePointerFlush(after: Self.pointerFlushIntervalNanos - (now - lastMotionFlushNanos))
+    }
+
+    private func schedulePointerFlush(after delayNanoseconds: UInt64) {
         guard pointerFlushTask == nil else { return }
-        pointerFlushTask = Task { [weak self, clock] in
-            try? await clock.sleep(for: .milliseconds(16))
+        pointerFlushTask = Task(priority: realtimeInputTaskPriority) { [weak self, clock] in
+            try? await clock.sleep(for: .nanoseconds(Int64(delayNanoseconds)))
             guard !Task.isCancelled else { return }
-            await self?.flushPendingMotion()
+            await self?.scheduledPointerFlushFired()
         }
     }
 
     private func flushPendingMotion() async {
         pointerFlushTask?.cancel()
         pointerFlushTask = nil
+        await sendPendingMotion()
+    }
+
+    private func scheduledPointerFlushFired() async {
+        pointerFlushTask = nil
+        await sendPendingMotion()
+    }
+
+    private func sendPendingMotion() async {
         let pointer = pendingPointerEvent
         let scroll = pendingScrollEvent
         pendingPointerEvent = nil
         pendingScrollEvent = nil
+        guard pointer != nil || scroll != nil else { return }
+        lastMotionFlushNanos = clock.nowNanoseconds()
         if let pointer { await sendPointer(pointer) }
         if let scroll { await sendInput(scroll) }
     }
@@ -601,6 +742,35 @@ public actor ControlSessionCoordinator {
     private func sendPointer(_ event: InputEvent) async {
         guard case let .pointerMove(deltaX, deltaY, absoluteX, absoluteY) = event,
               case let .controlling(epoch, target, sessionID) = state else { return }
+        switch realtimeDeliveryMode {
+        case .reliableOnly:
+            await sendReliablePointer(event)
+            return
+        case .probing, .fallback:
+            await sendRealtimeProbe(
+                epoch: epoch,
+                target: target,
+                sessionID: sessionID,
+                absoluteX: absoluteX,
+                absoluteY: absoluteY
+            )
+            await sendReliablePointer(event)
+            return
+        case .healthy:
+            if realtimePointerCaptureSender.send(event) { return }
+            enterRealtimeFallback(target: target)
+            await sendReliablePointer(event)
+            await sendRealtimeProbe(
+                epoch: epoch,
+                target: target,
+                sessionID: sessionID,
+                absoluteX: absoluteX,
+                absoluteY: absoluteY
+            )
+            return
+        case .legacy:
+            break
+        }
         cumulativePointerX += deltaX
         cumulativePointerY += deltaY
         let frame = RealtimePointerFrame(
@@ -621,15 +791,99 @@ public actor ControlSessionCoordinator {
         realtimeSequence &+= 1
         do {
             let usedRealtime = try await transport.sendRealtime(frame, to: target)
-            if !usedRealtime {
+            if usedRealtime {
+                lastRealtimeSentSequence = frame.sequence
+            } else if realtimeDeliveryMode == .legacy {
                 resetRealtimeSender(incrementGeneration: true)
+                await sendReliablePointer(event)
+            } else {
+                enterRealtimeFallback(target: target)
+                await sendReliablePointer(event)
             }
         } catch {
-            resetRealtimeSender(incrementGeneration: true)
+            if realtimeDeliveryMode == .legacy {
+                resetRealtimeSender(incrementGeneration: true)
+            } else {
+                enterRealtimeFallback(target: target)
+            }
+            await sendReliablePointer(event)
         }
     }
 
+    private func sendRealtimeProbe(
+        epoch: ControllerEpoch,
+        target: DeviceID,
+        sessionID: SessionID,
+        absoluteX: Double,
+        absoluteY: Double
+    ) async {
+        let now = clock.nowNanoseconds()
+        if let lastRealtimeProbeNanos,
+           now >= lastRealtimeProbeNanos,
+           now - lastRealtimeProbeNanos < Self.realtimeProbeIntervalNanos { return }
+        let frame = RealtimePointerFrame(
+            workspaceID: workspaceID,
+            sessionID: sessionID,
+            controllerID: localDeviceID,
+            epoch: epoch,
+            generation: realtimeGeneration,
+            sequence: realtimeSequence,
+            deltaX: 0,
+            deltaY: 0,
+            cumulativeDeltaX: cumulativePointerX,
+            cumulativeDeltaY: cumulativePointerY,
+            absoluteX: absoluteX,
+            absoluteY: absoluteY,
+            timestampNanos: now
+        )
+        realtimeSequence &+= 1
+        do {
+            guard try await transport.sendRealtime(frame, to: target) else { return }
+            lastRealtimeProbeNanos = now
+            lastRealtimeSentSequence = frame.sequence
+        } catch {
+            // Reliable input remains active while the lane reconnects.
+        }
+    }
+
+    private func sendReliablePointer(_ event: InputEvent) async {
+        guard case let .controlling(_, target, sessionID) = state else { return }
+        await sendInput(event)
+        let delivered = await inputSender.drainOrCancel(after: Self.reliablePointerTimeout)
+        guard !delivered else { return }
+        diagnostic("Reliable pointer timed out for session \(sessionID); mode=\(realtimeDeliveryMode)")
+        guard case let .controlling(_, currentTarget, currentSessionID) = state,
+              currentTarget == target, currentSessionID == sessionID else { return }
+        if realtimeDeliveryMode == .healthy,
+           realtimePointerCaptureSender.hasFreshAcknowledgement() {
+            diagnostic("Keeping session \(sessionID); realtime progress is fresh")
+            return
+        }
+        let now = clock.nowNanoseconds()
+        if activeControlRoute?.targetCapabilities.contains(.realtimePointerProgressV1) == true,
+           let lastHeartbeatEchoNanos,
+           now >= lastHeartbeatEchoNanos,
+           now - lastHeartbeatEchoNanos <= Self.minimumHeartbeatTimeoutNanos {
+            diagnostic("Keeping session \(sessionID); control heartbeat is fresh")
+            enterRealtimeFallback(target: target)
+            return
+        }
+        await endCurrentSession(notifyPeer: false, reason: "reliable pointer delivery timed out")
+    }
+
+    private func enterRealtimeFallback(target: DeviceID) {
+        guard realtimeDeliveryMode != .fallback else { return }
+        realtimePointerCaptureSender.disable()
+        resetRealtimeSender(incrementGeneration: true)
+        lastRealtimeSentSequence = nil
+        lastRealtimeProbeNanos = nil
+        realtimeDeliveryMode = .fallback
+        diagnostic("Realtime pointer entered fallback for peer \(target); generation=\(realtimeGeneration)")
+        transport.reconnectRealtime(to: target)
+    }
+
     private func resetRealtimeSender(incrementGeneration: Bool) {
+        realtimePointerCaptureSender.disable()
         if incrementGeneration { realtimeGeneration &+= 1 }
         realtimeSequence = 0
         cumulativePointerX = 0
@@ -637,17 +891,25 @@ public actor ControlSessionCoordinator {
     }
 
     private func resetRealtimeReceiver() {
-        receivedRealtimeGeneration = nil
-        receivedRealtimeSequence = nil
-        receivedCumulativePointerX = 0
-        receivedCumulativePointerY = 0
+        realtimeInputReceiver.reset()
+    }
+
+    private func resetRealtimeDelivery() {
+        realtimePointerCaptureSender.disable()
+        realtimeDeliveryMode = .legacy
+        lastRealtimeSentSequence = nil
+        lastRealtimeProbeNanos = nil
     }
 
     private func startHeartbeat(target: DeviceID, sessionID: SessionID) {
         heartbeatTask?.cancel()
+        let interval = activeControlRoute?.targetCapabilities.contains(.realtimePointerProgressV1) == true
+            ? Self.realtimeHeartbeatInterval
+            : .seconds(1)
+        diagnostic("Heartbeat started for session \(sessionID); interval=\(interval)")
         heartbeatTask = Task { [weak self, clock] in
             while !Task.isCancelled {
-                try? await clock.sleep(for: .seconds(1))
+                try? await clock.sleep(for: interval)
                 guard !Task.isCancelled, let self else { return }
                 await self.sendHeartbeat(target: target, sessionID: sessionID)
             }
@@ -657,10 +919,14 @@ public actor ControlSessionCoordinator {
     private func sendHeartbeat(target: DeviceID, sessionID: SessionID) async {
         guard case let .controlling(_, expectedTarget, expectedSession) = state,
               target == expectedTarget, sessionID == expectedSession else { return }
-        try? await transport.send(
-            ControlEnvelope(message: .heartbeat(sessionID: sessionID, timestampNanos: clock.nowNanoseconds())),
-            to: target
-        )
+        do {
+            try await transport.send(
+                ControlEnvelope(message: .heartbeat(sessionID: sessionID, timestampNanos: clock.nowNanoseconds())),
+                to: target
+            )
+        } catch {
+            diagnostic("Heartbeat send failed for session \(sessionID): \(error.localizedDescription)")
+        }
     }
 
     private func startWatchdog(source: DeviceID, sessionID: SessionID) {
@@ -671,7 +937,7 @@ public actor ControlSessionCoordinator {
                 guard !Task.isCancelled, let self else { return }
                 let expired = await self.isHeartbeatExpired(source: source, sessionID: sessionID)
                 if expired {
-                    await self.deactivateCurrentSession()
+                    await self.deactivateCurrentSession(reason: "receiver heartbeat expired")
                     return
                 }
             }
@@ -705,14 +971,17 @@ private actor OrderedInputSender {
     }
 
     private let transport: PeerTransport
+    private let clock: MonotonicClock
     private var pending: [PendingFrame] = []
     private var nextIndex = 0
     private var generation: UInt64 = 0
     private var worker: Task<Void, Never>?
     private var drainWaiters: [CheckedContinuation<Void, Never>] = []
+    private var failedGeneration: UInt64?
 
-    init(transport: PeerTransport) {
+    init(transport: PeerTransport, clock: MonotonicClock) {
         self.transport = transport
+        self.clock = clock
     }
 
     func enqueue(_ frame: InputFrame, to target: DeviceID) {
@@ -738,12 +1007,14 @@ private actor OrderedInputSender {
         await withCheckedContinuation { drainWaiters.append($0) }
     }
 
-    func drainOrCancel(after timeout: Duration) async {
-        guard worker != nil || nextIndex < pending.count else { return }
+    func drainOrCancel(after timeout: Duration) async -> Bool {
+        guard worker != nil || nextIndex < pending.count else {
+            return failedGeneration != generation
+        }
         let activeGeneration = generation
-        let timeoutTask = Task { [weak self] in
+        let timeoutTask = Task { [weak self, clock] in
             do {
-                try await Task.sleep(for: timeout)
+                try await clock.sleep(for: timeout)
             } catch {
                 return
             }
@@ -751,6 +1022,7 @@ private actor OrderedInputSender {
         }
         await drain()
         timeoutTask.cancel()
+        return generation == activeGeneration && failedGeneration != activeGeneration
     }
 
     private func sendPendingFrames(generation activeGeneration: UInt64) async {
@@ -767,7 +1039,16 @@ private actor OrderedInputSender {
 
             let item = pending[nextIndex]
             nextIndex += 1
-            try? await transport.send(item.frame, to: item.target)
+            do {
+                try await transport.send(item.frame, to: item.target)
+            } catch {
+                failedGeneration = activeGeneration
+                pending.removeAll(keepingCapacity: true)
+                nextIndex = 0
+                worker = nil
+                resumeDrainWaiters()
+                return
+            }
             guard !Task.isCancelled, generation == activeGeneration else { return }
 
             if nextIndex >= 64, nextIndex * 2 >= pending.count {

@@ -1,6 +1,8 @@
 import Foundation
 import UniSpaceDomain
 
+public let realtimeInputTaskPriority = TaskPriority(rawValue: 33)
+
 public enum PermissionKind: String, CaseIterable, Sendable {
     case inputMonitoring
     case postEvents
@@ -111,21 +113,24 @@ public protocol PeerTransport: Sendable {
     func stop() async
     func updateConnectionPolicy(_ policy: PeerConnectionPolicy)
     func setRealtimePeer(_ deviceID: DeviceID?, role: RealtimeConnectionRole)
+    func reconnectRealtime(to deviceID: DeviceID)
     func reconnect(to deviceID: DeviceID)
     func events() -> AsyncStream<PeerEvent>
     func send(_ envelope: ControlEnvelope, to deviceID: DeviceID) async throws
     func send(_ frame: InputFrame, to deviceID: DeviceID) async throws
     @discardableResult
     func sendRealtime(_ frame: RealtimePointerFrame, to deviceID: DeviceID) async throws -> Bool
+    func sendRealtimeImmediately(_ frame: RealtimePointerFrame, to deviceID: DeviceID) -> Bool
 }
 
 public extension PeerTransport {
     func updateConnectionPolicy(_ policy: PeerConnectionPolicy) {}
     func setRealtimePeer(_ deviceID: DeviceID?, role: RealtimeConnectionRole) {}
+    func reconnectRealtime(to deviceID: DeviceID) {}
+    func sendRealtimeImmediately(_ frame: RealtimePointerFrame, to deviceID: DeviceID) -> Bool { false }
 
     @discardableResult
     func sendRealtime(_ frame: RealtimePointerFrame, to deviceID: DeviceID) async throws -> Bool {
-        try await send(frame.reliableFallback, to: deviceID)
         return false
     }
 }
