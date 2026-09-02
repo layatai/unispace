@@ -10,12 +10,12 @@ use hmac::{Hmac, Mac};
 use rand::{RngCore, rngs::OsRng};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
-use std::sync::{Arc, atomic::{AtomicU64, Ordering}};
-use subtle::ConstantTimeEq;
-use tokio::{
-
-    net::TcpStream,
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
 };
+use subtle::ConstantTimeEq;
+use tokio::net::TcpStream;
 use uuid::Uuid;
 
 type HmacSha256 = Hmac<Sha256>;
@@ -133,8 +133,14 @@ impl SecureStream {
             proof,
             supported_wire_versions: vec![1, 2],
         };
-        write_outer(&mut stream, profile.hello_kind, &serde_json::to_vec(&hello)?).await?;
-        let (kind, payload) = read_outer(&mut stream, profile.hello_kind, profile.sealed_kind).await?;
+        write_outer(
+            &mut stream,
+            profile.hello_kind,
+            &serde_json::to_vec(&hello)?,
+        )
+        .await?;
+        let (kind, payload) =
+            read_outer(&mut stream, profile.hello_kind, profile.sealed_kind).await?;
         ensure!(kind == profile.hello_kind, "expected secure hello");
         let peer: SecureHello = serde_json::from_slice(&payload)?;
         ensure!(
@@ -296,9 +302,7 @@ impl SecureReader {
 
 impl SecureWriter {
     pub async fn send(&self, data: &[u8]) -> Result<()> {
-        let sequence = self
-            .outbound_sequence
-            .fetch_add(1, Ordering::Relaxed);
+        let sequence = self.outbound_sequence.fetch_add(1, Ordering::Relaxed);
         let mut plaintext = Vec::with_capacity(data.len() + 8);
         plaintext.extend_from_slice(&sequence.to_be_bytes());
         plaintext.extend_from_slice(data);
@@ -385,11 +389,7 @@ where
     stream.write_all(payload).await?;
     Ok(())
 }
-async fn read_outer<T>(
-    stream: &mut T,
-    hello_kind: u8,
-    sealed_kind: u8,
-) -> Result<(u8, Vec<u8>)>
+async fn read_outer<T>(stream: &mut T, hello_kind: u8, sealed_kind: u8) -> Result<(u8, Vec<u8>)>
 where
     T: tokio::io::AsyncReadExt + Unpin,
 {

@@ -183,10 +183,19 @@ mod wire_casing_tests {
             "dellom".into(),
             vec!["100.77.185.39".into()],
             vec![DisplayDescriptor {
-                id: Identifier { raw_value: Uuid::from_u128(0x22) },
-                device_id: Identifier { raw_value: device_id },
+                id: Identifier {
+                    raw_value: Uuid::from_u128(0x22),
+                },
+                device_id: Identifier {
+                    raw_value: device_id,
+                },
                 name: "Linux Desktop".into(),
-                frame: DisplayRect { x: 0.0, y: 0.0, width: 1920.0, height: 1080.0 },
+                frame: DisplayRect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 1920.0,
+                    height: 1080.0,
+                },
                 scale_factor: 1.0,
                 is_main: true,
             }],
@@ -197,4 +206,3 @@ mod wire_casing_tests {
         assert_eq!(json["platform"], "linux");
     }
 }
-

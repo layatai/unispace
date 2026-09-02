@@ -284,8 +284,7 @@ async fn handle_control(
                 .send(&protocol::activation_result_frame(session_id, accepted)?)
                 .await?;
         }
-        ControlMessage::Deactivate { session_id }
-        | ControlMessage::ReleaseAll { session_id } => {
+        ControlMessage::Deactivate { session_id } | ControlMessage::ReleaseAll { session_id } => {
             if state.active.is_some_and(|active| active.0 == session_id) {
                 input.release_all()?;
                 *state = SessionState::default();
@@ -300,20 +299,19 @@ async fn handle_control(
         ControlMessage::Heartbeat {
             session_id,
             timestamp_nanos,
-        }
-            if state.active.is_some_and(|active| active.0 == session_id) => {
-                state.last_heartbeat = Some(Instant::now());
+        } if state.active.is_some_and(|active| active.0 == session_id) => {
+            state.last_heartbeat = Some(Instant::now());
+            writer
+                .send(&protocol::heartbeat_frame(session_id, timestamp_nanos)?)
+                .await?;
+            if let Some((generation, sequence)) = state.pointer.progress {
                 writer
-                    .send(&protocol::heartbeat_frame(session_id, timestamp_nanos)?)
+                    .send(&protocol::realtime_pointer_progress_frame(
+                        session_id, generation, sequence,
+                    )?)
                     .await?;
-                if let Some((generation, sequence)) = state.pointer.progress {
-                    writer
-                        .send(&protocol::realtime_pointer_progress_frame(
-                            session_id, generation, sequence,
-                        )?)
-                        .await?;
-                }
             }
+        }
         _ => {}
     }
     Ok(())
@@ -382,7 +380,10 @@ async fn handle_realtime_pointer(
         return Ok(());
     }
     if frame.generation < state.pointer.generation.unwrap_or(0) {
-        debug!(generation = frame.generation, "stale pointer generation dropped");
+        debug!(
+            generation = frame.generation,
+            "stale pointer generation dropped"
+        );
         return Ok(());
     }
     if state.pointer.generation != Some(frame.generation) {

@@ -114,21 +114,24 @@ async fn handle_datagram(
                     && hello.proof.len() == 32,
                 "invalid pointer hello"
             );
-            let expected = hello_proof(context.workspace_key, context.workspace, hello.device_id, &hello.nonce)?;
+            let expected = hello_proof(
+                context.workspace_key,
+                context.workspace,
+                hello.device_id,
+                &hello.nonce,
+            )?;
             ensure!(
                 bool::from(expected.ct_eq(&hello.proof)),
                 "pointer hello authentication failed"
             );
             let peer_nonce = hello.nonce.clone();
             let peer_device = hello.device_id;
-            let lane = context.peers
-                .entry(address)
-                .or_insert_with(|| PeerLane {
-                    device_id: peer_device,
-                    nonce: peer_nonce.clone(),
-                    key: None,
-                    inbound_sequence: None,
-                });
+            let lane = context.peers.entry(address).or_insert_with(|| PeerLane {
+                device_id: peer_device,
+                nonce: peer_nonce.clone(),
+                key: None,
+                inbound_sequence: None,
+            });
             if lane.device_id == peer_device && lane.nonce == peer_nonce && lane.key.is_some() {
                 return Ok(()); // repeated handshake from an authenticated peer
             }
@@ -139,7 +142,12 @@ async fn handle_datagram(
 
             let mut local_nonce = vec![0u8; 32];
             OsRng.fill_bytes(&mut local_nonce);
-            let proof = hello_proof(context.workspace_key, context.workspace, context.local_device, &local_nonce)?;
+            let proof = hello_proof(
+                context.workspace_key,
+                context.workspace,
+                context.local_device,
+                &local_nonce,
+            )?;
             let reply = PointerHello {
                 version: 2,
                 workspace_id: context.workspace,
@@ -187,8 +195,7 @@ async fn handle_datagram(
                 "unexpected pointer lane frame"
             );
             ensure!(
-                frame.workspace_id == context.workspace
-                    && frame.controller_id == lane.device_id,
+                frame.workspace_id == context.workspace && frame.controller_id == lane.device_id,
                 "pointer lane workspace mismatch"
             );
             let _ = events.try_send(frame); // pointer state is replaceable; drop on backlog
@@ -284,7 +291,8 @@ mod tests {
         let controller = Uuid::new_v4();
         let workspace_key: Vec<u8> = (0u8..32).collect();
         let (_events_tx, _events_rx) = mpsc::channel::<protocol::RealtimePointerFrame>(8);
-        let (client, mut events_rx) = start_lane(local_device, workspace, workspace_key.clone()).await;
+        let (client, mut events_rx) =
+            start_lane(local_device, workspace, workspace_key.clone()).await;
 
         // Send the controller hello.
         let mut nonce = vec![0u8; 32];
@@ -304,18 +312,19 @@ mod tests {
 
         // Receive the receiver's hello reply.
         let mut buffer = vec![0u8; MAX_DATAGRAM];
-        let size = tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            client.recv(&mut buffer),
-        )
-        .await
-        .context("no hello reply")??;
+        let size =
+            tokio::time::timeout(std::time::Duration::from_secs(2), client.recv(&mut buffer))
+                .await
+                .context("no hello reply")??;
         let (kind, payload) = decode_outer(&buffer[..size])?;
         assert_eq!(kind, HELLO);
         let reply_result: std::result::Result<PointerHello, _> = serde_json::from_slice(payload);
         let reply = match reply_result {
             Ok(reply) => reply,
-            Err(error) => panic!("reply parse failed: {error}; payload={}", String::from_utf8_lossy(payload)),
+            Err(error) => panic!(
+                "reply parse failed: {error}; payload={}",
+                String::from_utf8_lossy(payload)
+            ),
         };
         assert_eq!(reply.version, 2);
         assert_eq!(reply.workspace_id, workspace);
@@ -323,8 +332,14 @@ mod tests {
         assert_eq!(expected, reply.proof);
 
         // Derive the shared key the same way the lane does and send a frame.
-        let session_key =
-            derive_pointer_key(&workspace_key, controller, &nonce, reply.device_id, &reply.nonce, workspace)?;
+        let session_key = derive_pointer_key(
+            &workspace_key,
+            controller,
+            &nonce,
+            reply.device_id,
+            &reply.nonce,
+            workspace,
+        )?;
         let frame = protocol::RealtimePointerFrame {
             workspace_id: workspace,
             session_id: Uuid::new_v4(),
@@ -378,17 +393,21 @@ mod tests {
             .send(&encode_outer(HELLO, &serde_json::to_vec(&hello)?))
             .await?;
         let mut buffer = vec![0u8; MAX_DATAGRAM];
-        let size = tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            client.recv(&mut buffer),
-        )
-        .await
-        .context("no hello reply")??;
+        let size =
+            tokio::time::timeout(std::time::Duration::from_secs(2), client.recv(&mut buffer))
+                .await
+                .context("no hello reply")??;
         let (kind, payload) = decode_outer(&buffer[..size])?;
         assert_eq!(kind, HELLO);
         let reply: PointerHello = serde_json::from_slice(payload)?;
-        let session_key =
-            derive_pointer_key(&workspace_key, controller, &nonce, reply.device_id, &reply.nonce, workspace)?;
+        let session_key = derive_pointer_key(
+            &workspace_key,
+            controller,
+            &nonce,
+            reply.device_id,
+            &reply.nonce,
+            workspace,
+        )?;
         let frame = protocol::RealtimePointerFrame {
             workspace_id: workspace,
             session_id: Uuid::new_v4(),
@@ -416,9 +435,16 @@ mod tests {
             .expect("channel open");
         assert_eq!(received.sequence, 7);
         // A second frame must arrive for the replay to have been dropped.
-        let next = protocol::RealtimePointerFrame { sequence: 8, ..frame };
+        let next = protocol::RealtimePointerFrame {
+            sequence: 8,
+            ..frame
+        };
         client
-            .send(&seal(&session_key, 8, &protocol::encode_realtime_pointer(&next)?)?)
+            .send(&seal(
+                &session_key,
+                8,
+                &protocol::encode_realtime_pointer(&next)?,
+            )?)
             .await?;
         let received = tokio::time::timeout(std::time::Duration::from_secs(2), events_rx.recv())
             .await
@@ -432,7 +458,10 @@ mod tests {
         local_device: Uuid,
         workspace: Uuid,
         workspace_key: Vec<u8>,
-    ) -> (tokio::net::UdpSocket, mpsc::Receiver<protocol::RealtimePointerFrame>) {
+    ) -> (
+        tokio::net::UdpSocket,
+        mpsc::Receiver<protocol::RealtimePointerFrame>,
+    ) {
         let socket = tokio::net::UdpSocket::bind("127.0.0.1:0")
             .await
             .expect("bind lane socket");
