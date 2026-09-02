@@ -204,14 +204,22 @@ fn prepare(manifest: Manifest) -> Result<Incoming> {
         .data_local_dir()
         .join("Transfers")
         .join(manifest.transfer_id.raw_value.to_string());
+    prepare_in(manifest, root)
+}
+
+fn prepare_in(manifest: Manifest, root: PathBuf) -> Result<Incoming> {
     fs::create_dir_all(&root)?;
     let mut offsets = BTreeMap::new();
     for entry in &manifest.entries {
         let path = root.join(format!("{}.partial", entry.id.raw_value));
-        let size = fs::metadata(path)
-            .map(|m| m.len())
-            .unwrap_or(0)
-            .min(entry.byte_count);
+        let file = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(path)?;
+        let size = file.metadata()?.len().min(entry.byte_count);
+        file.set_len(size)?;
         offsets.insert(entry.id.raw_value, size);
     }
     Ok(Incoming {
@@ -446,4 +454,51 @@ async fn send_outgoing(
         )?)
         .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn zero_byte_transfer_creates_and_finalizes_a_partial_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let entry_id = Uuid::new_v4();
+        let root = directory.path().join("transfer");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join(format!("{entry_id}.partial")), b"stale").unwrap();
+        let manifest = Manifest {
+            transfer_id: Identifier::new(),
+            workspace_id: Identifier::new(),
+            source_device_id: Identifier::new(),
+            destination_device_id: Identifier::new(),
+            entries: vec![Entry {
+                id: Identifier {
+                    raw_value: entry_id,
+                },
+                filename: "empty.txt".into(),
+                byte_count: 0,
+                sha256: BASE64.encode(Sha256::digest([])),
+            }],
+        };
+
+        let mut transfer = prepare_in(manifest, root).unwrap();
+        assert_eq!(transfer.offsets[&entry_id], 0);
+        finalize_entry(&mut transfer, entry_id).unwrap();
+        assert_eq!(
+            fs::metadata(transfer.completed[&entry_id].clone())
+                .unwrap()
+                .len(),
+            0
+        );
+    }
+
+    #[test]
+    fn file_uri_round_trips_spaces_and_unicode() {
+        let path = PathBuf::from("/tmp/UniSpace file 🚀.txt");
+        assert_eq!(
+            file_uri(&format!("file://{}", percent_path(&path))),
+            Some(path)
+        );
+    }
 }
