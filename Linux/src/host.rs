@@ -59,6 +59,11 @@ fn display(device_id: Uuid) -> DisplayDescriptor {
 }
 
 fn screen_size() -> (u32, u32) {
+    // Hyprland (Wayland): `hyprctl monitors` reports `WxH@refresh at XxY`.
+    if let Some((w, h)) = hypr_monitor_size() {
+        return (w, h);
+    }
+    // X11: parse the first connected output mode from xrandr.
     let output = Command::new("xrandr").arg("--current").output().ok();
     let text = output
         .as_ref()
@@ -75,4 +80,39 @@ fn screen_size() -> (u32, u32) {
         }
     }
     (1920, 1080)
+}
+
+fn hypr_monitor_size() -> Option<(u32, u32)> {
+    // The session env is absent over SSH; derive it from the runtime dir.
+    let uid = unsafe { libc::getuid() };
+    let runtime = std::env::var("XDG_RUNTIME_DIR")
+        .unwrap_or_else(|_| format!("/run/user/{uid}"));
+    let instance = std::fs::read_dir(format!("{runtime}/hypr"))
+        .ok()?
+        .flatten()
+        .find(|entry| entry.file_type().map(|t| t.is_dir()).unwrap_or(false))?
+        .file_name()
+        .into_string()
+        .ok();
+    let output = Command::new("hyprctl")
+        .arg("monitors")
+        .env("XDG_RUNTIME_DIR", &runtime)
+        .env("HYPRLAND_INSTANCE_ID", instance?)
+        .output()
+        .ok()?;
+    let text = String::from_utf8(output.stdout).ok()?;
+    // First monitor line looks like: `Monitor eDP-1 (ID 0):`
+    // followed by `	1366x768@60.01600 at 0x0`.
+    for line in text.lines() {
+        let line = line.trim_start();
+        if !line.contains("@") || !line.contains(" at ") || !line.contains('x') {
+            continue;
+        }
+        let mode = line.split('@').next()?;
+        let (w, h) = mode.split_once('x')?;
+        if let (Ok(w), Ok(h)) = (w.trim().parse(), h.trim().parse()) {
+            return Some((w, h));
+        }
+    }
+    None
 }
