@@ -107,6 +107,7 @@ impl PendingPairing {
                     device_id: local.id.raw_value,
                     host_address: address,
                     workspace,
+                    gesture_bindings: Default::default(),
                 };
                 configuration.save(&key)?;
                 return Ok(configuration);

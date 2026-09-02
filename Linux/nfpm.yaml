@@ -24,11 +24,20 @@ contents:
 scripts:
   postinstall: packaging/postinstall.sh
   preremove: packaging/preremove.sh
-depends:
-  - systemd
-  - udev
-  - dbus
-recommends:
-  - webkit2gtk-4.1
-  - wl-clipboard
-  - xclip
+overrides:
+  deb:
+    depends:
+      - systemd
+      - udev
+      - dbus
+      - libwebkit2gtk-4.1-0
+      - wl-clipboard
+      - xclip
+  rpm:
+    depends:
+      - systemd
+      - udev
+      - dbus
+      - webkit2gtk4.1
+      - wl-clipboard
+      - xclip

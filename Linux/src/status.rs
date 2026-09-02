@@ -50,7 +50,10 @@ pub async fn start() {
             .build()
             .expect("tray runtime");
         runtime.block_on(async {
-            let _ = StatusTray.assume_sni_available(true).spawn().await;
+            match StatusTray.assume_sni_available(true).spawn().await {
+                Ok(_handle) => std::future::pending::<()>().await,
+                Err(error) => tracing::warn!(%error, "status tray unavailable"),
+            }
         });
     });
 }

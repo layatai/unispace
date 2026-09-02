@@ -100,8 +100,9 @@
     }));
 
     $('confirm').addEventListener('click', () => run(async () => {
-      await invoke('confirm_pairing');
+      const result = await invoke('confirm_pairing');
       await refresh();
+      $('error').textContent = result.warning || '';
     }));
 
     $('cancel').addEventListener('click', () => run(async () => {

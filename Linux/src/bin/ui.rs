@@ -1,5 +1,5 @@
 use anyhow::Result;
-use unispace_linux::{config::Configuration, host, pairing::PendingPairing};
+use unispace_linux::{config::Configuration, host, pairing::PendingPairing, service};
 
 #[derive(serde::Serialize)]
 struct UiState {
@@ -30,6 +30,12 @@ fn summarize(configuration: &Configuration) -> UiState {
 struct Offer {
     peer_name: String,
     code: String,
+}
+
+#[derive(serde::Serialize)]
+struct PairingResult {
+    state: UiState,
+    warning: Option<String>,
 }
 
 type PendingSlot = tokio::sync::Mutex<Option<PendingPairing>>;
@@ -65,7 +71,7 @@ async fn begin_pairing(
 async fn confirm_pairing(
     pending: tauri::State<'_, PendingSlot>,
     target: tauri::State<'_, tokio::sync::Mutex<String>>,
-) -> Result<UiState, String> {
+) -> Result<PairingResult, String> {
     let Some(started) = pending.lock().await.take() else {
         return Err("No pairing in progress".into());
     };
@@ -74,7 +80,13 @@ async fn confirm_pairing(
         .confirm(address)
         .await
         .map_err(|error| error.to_string())?;
-    Ok(summarize(&configuration))
+    let warning = service::start()
+        .err()
+        .map(|error| format!("Paired, but the receiver service did not start: {error}"));
+    Ok(PairingResult {
+        state: summarize(&configuration),
+        warning,
+    })
 }
 
 #[tauri::command]
@@ -85,6 +97,7 @@ async fn cancel_pairing(pending: tauri::State<'_, PendingSlot>) -> Result<(), St
 
 #[tauri::command]
 fn unpair() -> Result<(), String> {
+    service::stop().map_err(|error| error.to_string())?;
     if let Ok(configuration) = Configuration::load() {
         configuration.remove().map_err(|error| error.to_string())?;
     }

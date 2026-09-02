@@ -1,4 +1,7 @@
-use crate::protocol::{DisplayEdge, InputEvent};
+use crate::{
+    config::{GestureKey, ResolvedGestureBindings},
+    protocol::{DisplayEdge, InputEvent},
+};
 use anyhow::{Context, Result};
 use evdev::{
     AttributeSet, EventType, InputEvent as LinuxEvent, KeyCode, RelativeAxisCode,
@@ -23,10 +26,11 @@ pub struct UinputSink {
     held: BTreeSet<KeyCode>,
     modifiers: u16,
     swipe_triggered: bool,
+    gesture_bindings: ResolvedGestureBindings,
 }
 
 impl UinputSink {
-    pub fn open() -> Result<Self> {
+    pub fn open(gesture_bindings: ResolvedGestureBindings) -> Result<Self> {
         let mut keys = AttributeSet::<KeyCode>::new();
         for code in 1..=248 {
             keys.insert(KeyCode::new(code));
@@ -56,6 +60,7 @@ impl UinputSink {
             held: BTreeSet::new(),
             modifiers: 0,
             swipe_triggered: false,
+            gesture_bindings,
         })
     }
     fn emit(&mut self, events: &[LinuxEvent]) -> Result<()> {
@@ -82,6 +87,15 @@ impl UinputSink {
             self.key(*key, false)?
         }
         Ok(())
+    }
+    fn gesture_chord(&mut self, keys: &[GestureKey]) -> Result<()> {
+        self.chord(
+            &keys
+                .iter()
+                .copied()
+                .map(gesture_key_code)
+                .collect::<Vec<_>>(),
+        )
     }
     fn update_modifiers(&mut self, next: u16) -> Result<()> {
         for (bit, key) in [
@@ -125,24 +139,27 @@ impl UinputSink {
                 let distance = if horizontal { dx.abs() } else { dy.abs() };
                 if !self.swipe_triggered && distance >= 1.0 {
                     if kind == 7 {
-                        // Desktop swipe: positive X moves to the left workspace.
-                        if horizontal {
-                            self.chord(&[
-                                KeyCode::KEY_LEFTCTRL,
-                                KeyCode::KEY_LEFTMETA,
-                                if dx > 0.0 { KeyCode::KEY_LEFT } else { KeyCode::KEY_RIGHT },
-                            ])?
+                        let binding = if horizontal && dx > 0.0 {
+                            self.gesture_bindings.workspace_previous.clone()
+                        } else if horizontal {
+                            self.gesture_bindings.workspace_next.clone()
                         } else if dy > 0.0 {
-                            self.chord(&[KeyCode::KEY_LEFTMETA, KeyCode::KEY_TAB])?
+                            self.gesture_bindings.workspace_up.clone()
                         } else {
-                            self.chord(&[KeyCode::KEY_LEFTMETA, KeyCode::KEY_D])?
+                            self.gesture_bindings.workspace_down.clone()
+                        };
+                        if let Some(binding) = binding {
+                            self.gesture_chord(&binding)?
                         }
                     } else {
-                        // Navigation swipe: finger right = back, finger left = forward.
-                        self.chord(&[
-                            KeyCode::KEY_LEFTALT,
-                            if dx > 0.0 { KeyCode::KEY_LEFT } else { KeyCode::KEY_RIGHT },
-                        ])?
+                        let binding = if dx > 0.0 {
+                            self.gesture_bindings.navigation_back.clone()
+                        } else {
+                            self.gesture_bindings.navigation_forward.clone()
+                        };
+                        if let Some(binding) = binding {
+                            self.gesture_chord(&binding)?
+                        }
                     }
                     self.swipe_triggered = true;
                 }
@@ -151,7 +168,12 @@ impl UinputSink {
                 }
                 Ok(())
             }
-            4 => self.chord(&[KeyCode::KEY_LEFTCTRL, KeyCode::KEY_LEFTSHIFT, KeyCode::KEY_EQUAL]),
+            4 => {
+                if let Some(binding) = self.gesture_bindings.smart_magnify.clone() {
+                    self.gesture_chord(&binding)?
+                }
+                Ok(())
+            }
             8 => {
                 if phase == PHASE_MAY_BEGIN || phase == PHASE_BEGAN {
                     self.swipe_triggered = false;
@@ -161,11 +183,13 @@ impl UinputSink {
                     return Ok(());
                 }
                 if !self.swipe_triggered && value.abs() >= 1.0 {
-                    if value > 0.0 {
-                        self.chord(&[KeyCode::KEY_LEFTMETA, KeyCode::KEY_D])?
+                    let binding = if value > 0.0 {
+                        self.gesture_bindings.spread.clone()
                     } else {
-                        // Launcher substitute; Hyprland binds Super alone rarely.
-                        self.chord(&[KeyCode::KEY_LEFTMETA, KeyCode::KEY_A])?
+                        self.gesture_bindings.pinch_in.clone()
+                    };
+                    if let Some(binding) = binding {
+                        self.gesture_chord(&binding)?
                     }
                     self.swipe_triggered = true;
                 }
@@ -200,6 +224,23 @@ impl UinputSink {
             self.emit(&events)?
         }
         Ok(())
+    }
+}
+
+fn gesture_key_code(key: GestureKey) -> KeyCode {
+    match key {
+        GestureKey::LeftCtrl => KeyCode::KEY_LEFTCTRL,
+        GestureKey::LeftShift => KeyCode::KEY_LEFTSHIFT,
+        GestureKey::LeftAlt => KeyCode::KEY_LEFTALT,
+        GestureKey::LeftMeta => KeyCode::KEY_LEFTMETA,
+        GestureKey::Left => KeyCode::KEY_LEFT,
+        GestureKey::Right => KeyCode::KEY_RIGHT,
+        GestureKey::Tab => KeyCode::KEY_TAB,
+        GestureKey::Space => KeyCode::KEY_SPACE,
+        GestureKey::A => KeyCode::KEY_A,
+        GestureKey::D => KeyCode::KEY_D,
+        GestureKey::S => KeyCode::KEY_S,
+        GestureKey::Equal => KeyCode::KEY_EQUAL,
     }
 }
 

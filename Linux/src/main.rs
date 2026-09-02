@@ -1,14 +1,12 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use std::{io::{self, Write}, process::Command};
+use std::{
+    io::{self, Write},
+    process::Command,
+};
 use unispace_linux::{
-    clipboard,
-    config::Configuration,
-    files,
-    host,
-    input::UinputSink,
-    pairing::PendingPairing,
-    receiver, status,
+    clipboard, config::Configuration, files, host, input::UinputSink, pairing::PendingPairing,
+    receiver, service, status,
 };
 
 #[derive(Parser)]
@@ -46,7 +44,8 @@ async fn main() -> Result<()> {
             tokio::spawn(status::start());
             tokio::spawn(clipboard::supervise(configuration.clone()));
             tokio::spawn(files::supervise(configuration.clone()));
-            receiver::run(configuration, UinputSink::open()?).await
+            let gesture_bindings = configuration.resolved_gesture_bindings();
+            receiver::run(configuration, UinputSink::open(gesture_bindings)?).await
         }
         CommandKind::Status => {
             match Configuration::load() {
@@ -57,6 +56,7 @@ async fn main() -> Result<()> {
         }
         CommandKind::Open => open_ui().await,
         CommandKind::Unpair => {
+            service::stop()?;
             if let Ok(configuration) = Configuration::load() {
                 configuration.remove()?;
             }
@@ -81,10 +81,17 @@ async fn pair(address: String) -> Result<()> {
         anyhow::bail!("pairing cancelled")
     }
     let configuration = pending.confirm(address).await?;
-    println!(
-        "Joined {}. Start the receiver with `systemctl --user enable --now unispace.service`.",
-        configuration.workspace.name
-    );
+    if let Err(error) = service::start() {
+        eprintln!(
+            "Joined {}, but the receiver service did not start: {error}",
+            configuration.workspace.name
+        );
+        eprintln!(
+            "Run `systemctl --user enable --now unispace.service` after installing the unit."
+        );
+    } else {
+        println!("Joined {}. Receiver started.", configuration.workspace.name);
+    }
     Ok(())
 }
 
@@ -94,8 +101,11 @@ async fn open_ui() -> Result<()> {
         .parent()
         .expect("executable parent")
         .join("unispace-linux-ui");
-    Command::new(&exe)
-        .spawn()
-        .with_context(|| format!("launch {} (is it installed alongside unispace-linux?)", exe.display()))?;
+    Command::new(&exe).spawn().with_context(|| {
+        format!(
+            "launch {} (is it installed alongside unispace-linux?)",
+            exe.display()
+        )
+    })?;
     Ok(())
 }

@@ -9,6 +9,7 @@ pub mod pointer;
 pub mod protocol;
 pub mod receiver;
 pub mod secure;
+pub mod service;
 pub mod status;
 
 pub const CONTROL_PORT: u16 = 61_338;

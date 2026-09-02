@@ -35,16 +35,66 @@ On the controller Mac choose **Pair New Device**. On Linux run:
 
 ```sh
 unispace-linux pair MAC_ADDRESS
-systemctl --user start unispace.service
 ```
 
-The package globally enables the user service; it remains dormant until a
-workspace configuration exists. The workspace key is stored in Secret Service
-(GNOME Keyring or KWallet), never in the JSON configuration file.
+Pairing starts the packaged user service automatically. If the desktop session
+was not available during pairing, start it after signing in:
+
+```sh
+systemctl --user enable --now unispace.service
+```
+
+The package globally enables the service; it remains dormant until a workspace
+configuration exists. The workspace key is stored in Secret Service (GNOME
+Keyring or KWallet), never in the JSON configuration file.
 
 The application launcher opens receiver status. KDE and desktops implementing
 StatusNotifierItem can also show a tray item; GNOME uses the launcher and desktop
 notifications unless an AppIndicator extension is installed.
+
+## Gesture bindings
+
+`~/.config/unispace/receiver.json` accepts a `gestureBindings` section. The
+default `auto` profile uses `XDG_CURRENT_DESKTOP` to select Hyprland, GNOME, or
+KDE shortcuts. Omitted bindings inherit the profile; an empty array disables a
+binding.
+
+```json
+{
+  "gestureBindings": {
+    "profile": "auto",
+    "workspaceUp": ["leftMeta", "space"],
+    "workspaceDown": []
+  }
+}
+```
+
+Profiles are `auto`, `hyprland`, `gnome`, `kde`, and `disabled`. Override names
+are `navigationBack`, `navigationForward`, `workspacePrevious`,
+`workspaceNext`, `workspaceUp`, `workspaceDown`, `smartMagnify`, `pinchIn`, and
+`spread`. Supported keys are `leftCtrl`, `leftShift`, `leftAlt`, `leftMeta`,
+`left`, `right`, `tab`, `space`, `a`, `d`, `s`, and `equal`.
+
+The Hyprland profile follows Omarchy defaults: horizontal workspace swipes use
+Super+Tab/Super+Shift+Tab, swipe up opens the Omarchy menu, swipe down toggles
+the scratchpad, pinch opens Apps, and spread toggles the scratchpad. GNOME and
+KDE retain the portable Meta+Ctrl+Arrow, Meta+Tab, Meta+D, and Meta+A mappings.
+
+## File transfer and uninstall
+
+File continuity supports regular files, including empty and multiple files.
+Directories and symbolic links are intentionally ignored.
+
+Uninstalling stops the receiver and removes package-owned binaries, service,
+launcher, and uinput rules. It preserves the user's workspace configuration,
+Secret Service credential, and `unispace` group for safe reinstall. Remove the
+local membership first when that data should also be deleted:
+
+```sh
+unispace-linux unpair
+sudo apt remove unispace-linux   # Ubuntu
+sudo dnf remove unispace-linux   # Fedora
+```
 
 ## Build and test
 
