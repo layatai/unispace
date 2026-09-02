@@ -186,7 +186,9 @@ final class UniSpaceUITests: XCTestCase {
 
         app.staticTexts["section-devices"].click()
         XCTAssertTrue(app.staticTexts["Via controller"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.staticTexts["3 of 3 devices online"].exists)
+        let count = app.staticTexts["online-device-count"]
+        XCTAssertTrue(count.waitForExistence(timeout: 5))
+        XCTAssertEqual(count.value as? String, "3 of 3 devices online")
         XCTAssertFalse(app.buttons["Retry connection to Office PC"].exists)
         XCTAssertFalse(app.staticTexts["The trusted peer is temporarily unavailable"].exists)
         app.terminate()
