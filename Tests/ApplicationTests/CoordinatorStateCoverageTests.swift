@@ -162,7 +162,7 @@ final class CoordinatorStateCoverageTests: XCTestCase {
         XCTAssertTrue(hysteresis.allows(transition))
     }
 
-    func testPeerTransportDefaultRealtimeLaneUsesReliableFallback() async throws {
+    func testPeerTransportDefaultRealtimeLaneReportsUnavailableWithoutSending() async throws {
         let transport = ReliableOnlyTransport()
         let controllerID = DeviceID()
         let targetID = DeviceID()
@@ -183,10 +183,11 @@ final class CoordinatorStateCoverageTests: XCTestCase {
         )
 
         let usedRealtime = try await transport.sendRealtime(frame, to: targetID)
+        transport.reconnectRealtime(to: targetID)
 
         XCTAssertFalse(usedRealtime)
-        XCTAssertEqual(transport.frames, [frame.reliableFallback])
-        XCTAssertEqual(transport.targets, [targetID])
+        XCTAssertTrue(transport.frames.isEmpty)
+        XCTAssertTrue(transport.targets.isEmpty)
     }
 
     func testHeartbeatLoopAndReceiverWatchdogUseInjectedClock() async throws {
@@ -215,9 +216,10 @@ final class CoordinatorStateCoverageTests: XCTestCase {
         )
         let epoch = await controller.makeLocalController()
         await receiver.observeControllerClaim(epoch)
+        let receiverDisplay = display(deviceID: receiverID)
         try await controller.activate(
             target: receiverID,
-            displayID: DisplayID(),
+            displayID: receiverDisplay.id,
             entryEdge: .left,
             normalizedPosition: 0.5
         )
@@ -241,14 +243,14 @@ final class CoordinatorStateCoverageTests: XCTestCase {
         let activation = InputActivation(
             sessionID: sessionID,
             epoch: epoch,
-            targetDisplayID: DisplayID(),
+            targetDisplayID: receiverDisplay.id,
             entryEdge: .right,
             normalizedPosition: 0.5
         )
         let activationAccepted = await receiver.receiveActivation(
             activation,
             from: controllerID,
-            targetDisplay: nil
+            targetDisplay: receiverDisplay
         )
         XCTAssertTrue(activationAccepted)
         let wrongHeartbeatAccepted = await receiver.receiveHeartbeat(
@@ -395,16 +397,17 @@ final class CoordinatorStateCoverageTests: XCTestCase {
         let epoch = ControllerEpoch(generation: 1, controllerID: controllerID)
         let sessionID = SessionID()
         await coordinator.observeControllerClaim(epoch)
+        let targetDisplay = display(deviceID: localID)
         let activated = await coordinator.receiveActivation(
             .init(
                 sessionID: sessionID,
                 epoch: epoch,
-                targetDisplayID: DisplayID(),
+                targetDisplayID: targetDisplay.id,
                 entryEdge: .left,
                 normalizedPosition: 0.5
             ),
             from: controllerID,
-            targetDisplay: nil
+            targetDisplay: targetDisplay
         )
         XCTAssertTrue(activated)
 
@@ -501,6 +504,13 @@ final class ManualMonotonicClock: MonotonicClock, @unchecked Sendable {
     var pendingSleepCount: Int { lock.withLock { waiters.count } }
     func nowNanoseconds() -> UInt64 { lock.withLock { value } }
 
+    func hasPendingSleep(for duration: Duration) -> Bool {
+        lock.withLock {
+            let deadline = value &+ Self.nanoseconds(duration)
+            return waiters.values.contains { $0.deadline == deadline }
+        }
+    }
+
     func sleep(for duration: Duration) async throws {
         let id = UUID()
         try await withTaskCancellationHandler {
@@ -530,6 +540,10 @@ final class ManualMonotonicClock: MonotonicClock, @unchecked Sendable {
         due.forEach { $0.resume() }
     }
 
+    func advanceWithoutWakingSleepers(by nanoseconds: UInt64) {
+        lock.withLock { value &+= nanoseconds }
+    }
+
     private static func nanoseconds(_ duration: Duration) -> UInt64 {
         let components = duration.components
         let seconds = UInt64(max(components.seconds, 0))
@@ -548,6 +562,7 @@ private final class ReliableOnlyTransport: PeerTransport, @unchecked Sendable {
 
     func start(localDevice: DeviceDescriptor, workspace: WorkspaceSnapshot, key: Data) async throws {}
     func stop() async {}
+    func reconnect(to deviceID: DeviceID) {}
     func events() -> AsyncStream<PeerEvent> { stream }
     func send(_ envelope: ControlEnvelope, to deviceID: DeviceID) async throws {}
     func send(_ frame: InputFrame, to deviceID: DeviceID) async throws {
@@ -569,6 +584,7 @@ private final class CoordinatorTransportSpy: PeerTransport, @unchecked Sendable 
 
     func start(localDevice: DeviceDescriptor, workspace: WorkspaceSnapshot, key: Data) async throws {}
     func stop() async {}
+    func reconnect(to deviceID: DeviceID) {}
     func events() -> AsyncStream<PeerEvent> { stream }
     func send(_ envelope: ControlEnvelope, to deviceID: DeviceID) async throws {
         if let controlError { throw controlError }
@@ -592,6 +608,7 @@ private final class BlockingInputTransport: PeerTransport, @unchecked Sendable {
 
     func start(localDevice: DeviceDescriptor, workspace: WorkspaceSnapshot, key: Data) async throws {}
     func stop() async {}
+    func reconnect(to deviceID: DeviceID) {}
     func events() -> AsyncStream<PeerEvent> { stream }
 
     func send(_ envelope: ControlEnvelope, to deviceID: DeviceID) async throws {

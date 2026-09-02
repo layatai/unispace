@@ -73,7 +73,7 @@ public actor FileTransferCoordinator {
         self.pasteboard = pasteboard
         self.limits = limits
         var captured: AsyncStream<FileTransferCoordinatorEvent>.Continuation?
-        stream = AsyncStream { captured = $0 }
+        stream = AsyncStream(bufferingPolicy: .bufferingNewest(128)) { captured = $0 }
         continuation = captured!
     }
 
@@ -103,6 +103,7 @@ public actor FileTransferCoordinator {
         self.localDevice = localDevice
         self.workspace = workspace
         connectedPeers.removeAll()
+        yield(.connections(connectedPeers))
         automaticDestination = nil
         records.removeAll()
         lastPasteboardChangeCount = nil
@@ -121,8 +122,12 @@ public actor FileTransferCoordinator {
         transferTasks.removeAll()
         transferTaskTokens.removeAll()
         connectedPeers.removeAll()
+        yield(.connections(connectedPeers))
         automaticDestination = nil
         pendingPasteboardSelection = nil
+        transport.setDesiredPeer(nil)
+        await store.suspendAll()
+        await sourceProvider.suspendAll()
         await transport.stop()
     }
 
@@ -150,10 +155,14 @@ public actor FileTransferCoordinator {
 
     public func setAutomaticDestination(_ deviceID: DeviceID?) async {
         guard deviceID != localDevice?.id else {
+            guard automaticDestination != nil else { return }
             automaticDestination = nil
+            transport.setDesiredPeer(nil)
             return
         }
+        guard automaticDestination != deviceID else { return }
         automaticDestination = deviceID
+        transport.setDesiredPeer(deviceID)
         await offerPendingPasteboardSelectionIfPossible()
     }
 
@@ -270,7 +279,7 @@ public actor FileTransferCoordinator {
             await sourceProvider.removeOutgoingTransfer(transferID)
         }
         records.removeValue(forKey: transferID)
-        continuation.yield(.removed(transferID))
+        yield(.removed(transferID))
     }
 
     public func clearCompleted() async {
@@ -351,11 +360,13 @@ public actor FileTransferCoordinator {
         switch event {
         case let .connected(deviceID):
             connectedPeers.insert(deviceID)
+            yield(.connections(connectedPeers))
             await resumeTransfers(with: deviceID)
             await offerPendingPasteboardSelectionIfPossible()
         case let .disconnected(deviceID):
             connectedPeers.remove(deviceID)
-            pauseTransfers(with: deviceID)
+            yield(.connections(connectedPeers))
+            await pauseTransfers(with: deviceID)
         case let .message(deviceID, envelope):
             do {
                 guard let workspace else { return }
@@ -575,9 +586,35 @@ public actor FileTransferCoordinator {
             return
         }
 
-        setState(.verifying, for: completion.transferID)
+        // Finder publication can fail after every byte is verified. Allow the
+        // sender to retry this terminal step without retransmitting file data.
+        setState(.verifying, for: completion.transferID, enforceTransition: false)
         let urls = try await store.finalizeTransfer(completion.transferID)
-        await pasteboard.publishFiles(urls, transferID: completion.transferID)
+        do {
+            try await pasteboard.publishFilesChecked(urls, transferID: completion.transferID)
+        } catch {
+            let code: FileTransferFailureCode = switch error as? FilePasteboardPublicationError {
+            case .invalidFileSet: .fileUnavailable
+            case .writeRejected, .none: .stagingFailure
+            }
+            record = records[completion.transferID] ?? record
+            record.state = .failed
+            record.failureCode = code
+            record.completedAt = Date()
+            record.stagedURLs = urls
+            record.verifiedOffsets = fullOffsets(for: record.manifest)
+            records[completion.transferID] = record
+            emit(completion.transferID)
+            try await send(
+                .verification(TransferVerification(
+                    transferID: completion.transferID,
+                    accepted: false,
+                    failureCode: code
+                )),
+                to: peer
+            )
+            return
+        }
         record = records[completion.transferID] ?? record
         record.state = .completed
         record.failureCode = nil
@@ -651,7 +688,9 @@ public actor FileTransferCoordinator {
             records[state.transferID] = record
             emit(state.transferID)
             let sourceProvider = self.sourceProvider
-            Task { await sourceProvider.removeOutgoingTransfer(state.transferID) }
+            Task(priority: .utility) {
+                await sourceProvider.removeOutgoingTransfer(state.transferID)
+            }
             return
         }
         let offsets = try validatedOffsets(state.offsets, manifest: record.manifest)
@@ -668,7 +707,7 @@ public actor FileTransferCoordinator {
         cancelTransferTask(transferID)
         let token = UUID()
         transferTaskTokens[transferID] = token
-        transferTasks[transferID] = Task { [weak self] in
+        transferTasks[transferID] = Task(priority: .utility) { [weak self] in
             await self?.streamOutgoingTransfer(transferID, offsets: offsets, taskToken: token)
         }
     }
@@ -763,9 +802,15 @@ public actor FileTransferCoordinator {
         }
     }
 
-    private func pauseTransfers(with peer: DeviceID) {
+    private func pauseTransfers(with peer: DeviceID) async {
         for record in records.values where record.peerDeviceID == peer && !record.state.isTerminal {
             cancelTransferTask(record.manifest.transferID)
+            switch record.direction {
+            case .incoming:
+                await store.suspend(record.manifest.transferID)
+            case .outgoing:
+                await sourceProvider.suspend(record.manifest.transferID)
+            }
             if record.state == .transferring || record.state == .verifying || record.state == .preparing {
                 setState(.paused, for: record.manifest.transferID, enforceTransition: false)
             }
@@ -871,7 +916,12 @@ public actor FileTransferCoordinator {
 
     private func emit(_ transferID: TransferID) {
         guard let snapshot = records[transferID]?.snapshot else { return }
-        continuation.yield(.snapshot(snapshot))
+        yield(.snapshot(snapshot))
+    }
+
+    private func yield(_ event: FileTransferCoordinatorEvent) {
+        guard case .dropped = continuation.yield(event) else { return }
+        continuation.yield(.resync(snapshots()))
     }
 
     private func cancelTransferTask(_ transferID: TransferID) {
@@ -944,6 +994,12 @@ public actor FileTransferCoordinator {
                 return .hashMismatch
             case .workspaceMismatch, .peerMismatch, .unsupportedVersion, .malformedEnvelope:
                 return .protocolViolation
+            }
+        }
+        if let error = error as? FilePasteboardPublicationError {
+            switch error {
+            case .invalidFileSet: return .fileUnavailable
+            case .writeRejected: return .stagingFailure
             }
         }
         if let code = error as? FileTransferFailureCode { return code }

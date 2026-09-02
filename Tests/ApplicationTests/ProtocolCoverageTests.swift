@@ -40,8 +40,10 @@ final class ProtocolCoverageTests: XCTestCase {
                 entryEdge: .left,
                 normalizedPosition: 0.25
             )),
+            .activationResult(sessionID: sessionID, accepted: true),
             .deactivate(sessionID),
             .heartbeat(sessionID: sessionID, timestampNanos: 123),
+            .realtimePointerProgress(.init(sessionID: sessionID, generation: 4, sequence: 9)),
             .boundaryCrossed(
                 sessionID: sessionID,
                 displayID: displayID,
@@ -49,7 +51,8 @@ final class ProtocolCoverageTests: XCTestCase {
                 normalizedPosition: 0.75
             ),
             .releaseAll(sessionID),
-            .rotateWorkspaceKey(Data([1, 2, 3, 4]))
+            .rotateWorkspaceKey(Data([1, 2, 3, 4])),
+            .workspacePresence(.init(epoch: epoch, onlineDeviceIDs: [deviceID]))
         ]
 
         for message in messages {
@@ -156,8 +159,10 @@ final class ProtocolCoverageTests: XCTestCase {
                 entryEdge: .left,
                 normalizedPosition: 0.25
             )),
+            .activationResult(sessionID: sessionID, accepted: false),
             .deactivate(sessionID),
             .heartbeat(sessionID: sessionID, timestampNanos: 123),
+            .realtimePointerProgress(.init(sessionID: sessionID, generation: 4, sequence: 9)),
             .boundaryCrossed(
                 sessionID: sessionID,
                 displayID: displayID,
@@ -165,7 +170,8 @@ final class ProtocolCoverageTests: XCTestCase {
                 normalizedPosition: 0.75
             ),
             .releaseAll(sessionID),
-            .rotateWorkspaceKey(Data([1, 2, 3, 4]))
+            .rotateWorkspaceKey(Data([1, 2, 3, 4])),
+            .workspacePresence(.init(epoch: epoch, onlineDeviceIDs: [deviceID]))
         ]
 
         for message in messages {
@@ -250,6 +256,15 @@ final class ProtocolCoverageTests: XCTestCase {
                 ControlEnvelope(message: .releaseAll(sessionID))
             ).hexString,
             wire["controlReleaseAllFrameHex"]
+        )
+        XCTAssertEqual(
+            try WireFrameCodec.encodePortableControl(
+                ControlEnvelope(message: .activationResult(
+                    sessionID: sessionID,
+                    accepted: true
+                ))
+            ).hexString,
+            wire["controlActivationAcceptedFrameHex"]
         )
     }
 
@@ -380,6 +395,7 @@ final class ProtocolCoverageTests: XCTestCase {
         XCTAssertEqual(portableRealtime.generation, 2)
         XCTAssertEqual(portableRealtime.cumulativeDeltaX, 6)
         XCTAssertEqual(portableRealtime.absoluteY, 9)
+        XCTAssertEqual(PortableInputMapper.map(portableRealtime), realtime)
     }
 
     func testCodecRejectsEveryInvalidHeaderAndProtocolVersion() throws {

@@ -1,0 +1,54 @@
+name: Transfer QoS CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  macos-unit-and-qos:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Verify generated Xcode project is current
+        run: |
+          xcodegen generate
+          git diff --exit-code -- UniSpace.xcodeproj/project.pbxproj
+
+      - name: Run transfer QoS regression tests
+        run: |
+          set -o pipefail
+          mkdir -p .build/test-results
+          xcodebuild test \
+            -project UniSpace.xcodeproj \
+            -scheme UniSpace \
+            -destination 'platform=macOS,arch=arm64' \
+            -resultBundlePath .build/test-results/TransferQoS.xcresult \
+            -only-testing:UniSpaceInfrastructureTests/TransferQoSInfrastructureTests \
+            CODE_SIGNING_ALLOWED=NO 2>&1 | tee .build/test-results/transfer-qos.log
+
+      - name: Run complete non-UI suite
+        run: |
+          set -o pipefail
+          ./Scripts/test.sh --unit 2>&1 | tee .build/test-results/full-unit.log
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: transfer-qos-test-results
+          path: |
+            .build/test-results/*.xcresult
+            .build/test-results/*.log
+          if-no-files-found: warn
+          retention-days: 14

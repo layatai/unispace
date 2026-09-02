@@ -37,6 +37,7 @@ public final class NetworkFileTransferTransport: FileTransferTransport, @uncheck
     private var pendingConnections: [ObjectIdentifier: SecureFileTransferConnection] = [:]
     private var retryAttempts: [DeviceID: Int] = [:]
     private var retryTokens: [DeviceID: UUID] = [:]
+    private var desiredPeerID: DeviceID?
     private var running = false
 
     public init(
@@ -133,13 +134,34 @@ public final class NetworkFileTransferTransport: FileTransferTransport, @uncheck
             self.browser = browser
         }
 
-        for peer in workspace.devices where peer.id != localDevice.id && !peer.peerAddresses.isEmpty {
-            scheduleDirectConnection(to: peer.id, immediately: true)
-        }
     }
 
     public func stop() async {
         stopSynchronously()
+    }
+
+    public func setDesiredPeer(_ deviceID: DeviceID?) {
+        queue.async { [weak self] in
+            guard let self else { return }
+            let cancelled = self.lock.transferWithLock { () -> [SecureFileTransferConnection] in
+                self.desiredPeerID = deviceID
+                let staleRetryIDs = self.retryTokens.keys.filter { $0 != deviceID }
+                for id in staleRetryIDs {
+                    self.retryTokens.removeValue(forKey: id)
+                    self.retryAttempts.removeValue(forKey: id)
+                }
+                let stale = self.pendingConnections.filter {
+                    $0.value.isOutbound && $0.value.expectedDeviceID != deviceID
+                }
+                for (objectID, _) in stale { self.pendingConnections.removeValue(forKey: objectID) }
+                return stale.map(\.value)
+            }
+            cancelled.forEach { $0.cancel() }
+            let shouldDial = deviceID.map { peerID in
+                self.lock.transferWithLock { PeerConnectionPolicy.macCanDial(self.knownPeers[peerID]) }
+            } ?? false
+            if shouldDial, let deviceID { self.scheduleDirectConnection(to: deviceID, immediately: true) }
+        }
     }
 
     public func send(_ envelope: FileTransferEnvelope, to deviceID: DeviceID) async throws {
@@ -163,6 +185,7 @@ public final class NetworkFileTransferTransport: FileTransferTransport, @uncheck
             pendingConnections.removeAll()
             retryAttempts.removeAll()
             retryTokens.removeAll()
+            desiredPeerID = nil
             knownPeers.removeAll()
             localDevice = nil
             workspaceID = nil
@@ -200,7 +223,8 @@ public final class NetworkFileTransferTransport: FileTransferTransport, @uncheck
                   let deviceString = record["device"],
                   let uuid = UUID(uuidString: deviceString) else { continue }
             let deviceID = DeviceID(rawValue: uuid)
-            guard deviceID != configuration.0.id, configuration.0.id < deviceID else { continue }
+            guard deviceID != configuration.0.id,
+                  deviceID == lock.transferWithLock({ desiredPeerID }) else { continue }
 
             let candidate = lock.transferWithLock { () -> DeviceDescriptor? in
                 guard connections[deviceID] == nil,
@@ -324,7 +348,6 @@ public final class NetworkFileTransferTransport: FileTransferTransport, @uncheck
                 newlyConnected = connections[deviceID] == nil
                 connections[deviceID] = secure
             }
-            retryAttempts[deviceID] = 0
             retryTokens.removeValue(forKey: deviceID)
         }
 
@@ -334,6 +357,13 @@ public final class NetworkFileTransferTransport: FileTransferTransport, @uncheck
         }
         replaced?.cancel()
         if newlyConnected { emit(.connected(deviceID)) }
+        queue.asyncAfter(deadline: .now() + 10) { [weak self, weak secure] in
+            guard let self, let secure else { return }
+            self.lock.transferWithLock {
+                guard self.connections[deviceID] === secure else { return }
+                self.retryAttempts[deviceID] = 0
+            }
+        }
     }
 
     private func remove(
@@ -361,13 +391,14 @@ public final class NetworkFileTransferTransport: FileTransferTransport, @uncheck
     private func scheduleDirectConnection(to deviceID: DeviceID, immediately: Bool) {
         let schedule: (UUID, TimeInterval)? = lock.transferWithLock {
             guard running,
+                  desiredPeerID == deviceID,
+                  PeerConnectionPolicy.macCanDial(knownPeers[deviceID]),
                   connections[deviceID] == nil,
                   retryTokens[deviceID] == nil,
                   let peer = knownPeers[deviceID],
                   !peer.peerAddresses.isEmpty else { return nil }
             let attempt = retryAttempts[deviceID, default: 0]
-            let delays: [TimeInterval] = [1, 2, 4, 8, 15]
-            let delay = immediately ? 0 : delays[min(attempt, delays.count - 1)]
+            let delay = immediately ? 0 : ConnectionRetrySchedule.delay(forAttempt: max(attempt - 1, 0))
             let token = UUID()
             retryTokens[deviceID] = token
             return (token, delay)
@@ -416,6 +447,7 @@ public final class NetworkFileTransferTransport: FileTransferTransport, @uncheck
         tcp.keepaliveIdle = 5
         let parameters = NWParameters(tls: nil, tcp: tcp)
         parameters.includePeerToPeer = true
+        parameters.serviceClass = .background
         return parameters
     }
 }

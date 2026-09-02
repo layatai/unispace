@@ -111,11 +111,15 @@ private struct PortableControlEnvelope: Codable {
         var epoch: ControllerEpoch? = nil
         var activation: InputActivation? = nil
         var sessionID: SessionID? = nil
+        var accepted: Bool? = nil
         var timestampNanos: UInt64? = nil
+        var generation: UInt64? = nil
+        var sequence: UInt64? = nil
         var displayID: DisplayID? = nil
         var edge: DisplayEdge? = nil
         var normalizedPosition: Double? = nil
         var workspaceKey: Data? = nil
+        var workspacePresence: WorkspacePresenceSnapshot? = nil
     }
 
     init(_ envelope: ControlEnvelope) {
@@ -133,12 +137,22 @@ private struct PortableControlEnvelope: Codable {
         case let .activate(activation):
             type = "activate"
             payload = Payload(activation: activation)
+        case let .activationResult(sessionID, accepted):
+            type = "activationResult"
+            payload = Payload(sessionID: sessionID, accepted: accepted)
         case let .deactivate(sessionID):
             type = "deactivate"
             payload = Payload(sessionID: sessionID)
         case let .heartbeat(sessionID, timestampNanos):
             type = "heartbeat"
             payload = Payload(sessionID: sessionID, timestampNanos: timestampNanos)
+        case let .realtimePointerProgress(progress):
+            type = "realtimePointerProgress"
+            payload = Payload(
+                sessionID: progress.sessionID,
+                generation: progress.generation,
+                sequence: progress.sequence
+            )
         case let .boundaryCrossed(sessionID, displayID, edge, normalizedPosition):
             type = "boundaryCrossed"
             payload = Payload(
@@ -153,6 +167,9 @@ private struct PortableControlEnvelope: Codable {
         case let .rotateWorkspaceKey(workspaceKey):
             type = "rotateWorkspaceKey"
             payload = Payload(workspaceKey: workspaceKey)
+        case let .workspacePresence(snapshot):
+            type = "workspacePresence"
+            payload = Payload(workspacePresence: snapshot)
         }
     }
 
@@ -167,6 +184,11 @@ private struct PortableControlEnvelope: Codable {
             message = .controllerClaim(try required(payload.epoch))
         case "activate":
             message = .activate(try required(payload.activation))
+        case "activationResult":
+            message = .activationResult(
+                sessionID: try required(payload.sessionID),
+                accepted: try required(payload.accepted)
+            )
         case "deactivate":
             message = .deactivate(try required(payload.sessionID))
         case "heartbeat":
@@ -174,6 +196,12 @@ private struct PortableControlEnvelope: Codable {
                 sessionID: try required(payload.sessionID),
                 timestampNanos: try required(payload.timestampNanos)
             )
+        case "realtimePointerProgress":
+            message = .realtimePointerProgress(.init(
+                sessionID: try required(payload.sessionID),
+                generation: try required(payload.generation),
+                sequence: try required(payload.sequence)
+            ))
         case "boundaryCrossed":
             message = .boundaryCrossed(
                 sessionID: try required(payload.sessionID),
@@ -185,6 +213,8 @@ private struct PortableControlEnvelope: Codable {
             message = .releaseAll(try required(payload.sessionID))
         case "rotateWorkspaceKey":
             message = .rotateWorkspaceKey(try required(payload.workspaceKey))
+        case "workspacePresence":
+            message = .workspacePresence(try required(payload.workspacePresence))
         default:
             throw ControlProtocolError.malformedFrame
         }

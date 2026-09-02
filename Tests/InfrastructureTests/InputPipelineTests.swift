@@ -110,9 +110,11 @@ final class InputPipelineTests: XCTestCase {
         let associations = LockedValues<Bool>()
         let warped = LockedValues<CGPoint>()
         let handledEvents = LockedValues<InputEvent>()
+        let uptime = LockedUptime()
         let capture = CGEventInputCapture(
             mouseAssociationHandler: associations.append,
             cursorWarpHandler: warped.append,
+            uptimeProvider: uptime.now,
             handler: { event in
                 handledEvents.append(event)
                 return true
@@ -132,6 +134,18 @@ final class InputPipelineTests: XCTestCase {
         XCTAssertFalse(capture.handle(type: .mouseMoved, event: event))
         XCTAssertEqual(handledEvents.values.count, 1)
 
+        let commandC = try XCTUnwrap(CGEvent(
+            keyboardEventSource: nil,
+            virtualKey: 8,
+            keyDown: true
+        ))
+        commandC.flags = [.maskCommand]
+        XCTAssertTrue(capture.handle(type: .keyDown, event: commandC))
+        XCTAssertEqual(Array(handledEvents.values.suffix(2)), [
+            .flags(rawValue: CGEventFlags.maskCommand.rawValue),
+            .key(code: 8, isDown: true, isRepeat: false),
+        ])
+
         let suppressionEvent = try XCTUnwrap(CGEvent(
             mouseEventSource: nil,
             mouseType: .mouseMoved,
@@ -143,6 +157,32 @@ final class InputPipelineTests: XCTestCase {
         XCTAssertTrue(capture.handle(type: .mouseMoved, event: suppressionEvent))
         XCTAssertEqual(associations.values, [false])
         XCTAssertEqual(warped.values.count, 1)
+
+        let anchor = try XCTUnwrap(warped.values.last)
+        let warpEvent = try XCTUnwrap(CGEvent(
+            mouseEventSource: nil,
+            mouseType: .mouseMoved,
+            mouseCursorPosition: anchor,
+            mouseButton: .left
+        ))
+        let handledBeforeWarp = handledEvents.values.count
+        XCTAssertTrue(capture.handle(type: .mouseMoved, event: warpEvent))
+        XCTAssertEqual(handledEvents.values.count, handledBeforeWarp)
+        XCTAssertEqual(warped.values.count, 1)
+
+        let physicalEvent = try XCTUnwrap(CGEvent(
+            mouseEventSource: nil,
+            mouseType: .mouseMoved,
+            mouseCursorPosition: CGPoint(x: anchor.x + 2, y: anchor.y),
+            mouseButton: .left
+        ))
+        XCTAssertTrue(capture.handle(type: .mouseMoved, event: physicalEvent))
+        XCTAssertEqual(handledEvents.values.count, handledBeforeWarp + 1)
+        XCTAssertEqual(warped.values.count, 2)
+
+        uptime.advance(by: 20_000_001)
+        XCTAssertTrue(capture.handle(type: .mouseMoved, event: warpEvent))
+        XCTAssertEqual(handledEvents.values.count, handledBeforeWarp + 2)
         XCTAssertFalse(capture.handle(type: .tapDisabledByTimeout, event: suppressionEvent))
         XCTAssertFalse(capture.handle(type: .tapDisabledByUserInput, event: suppressionEvent))
         capture.stop()
@@ -180,8 +220,10 @@ final class InputPipelineTests: XCTestCase {
         ])
 
         injector.inject(.flags(rawValue: CGEventFlags.maskCommand.rawValue))
-        injector.inject(.key(code: 12, isDown: true, isRepeat: false))
-        injector.inject(.key(code: 12, isDown: false, isRepeat: false))
+        injector.inject(.key(code: 8, isDown: true, isRepeat: false))
+        injector.inject(.key(code: 8, isDown: false, isRepeat: false))
+        injector.inject(.key(code: 9, isDown: true, isRepeat: false))
+        injector.inject(.key(code: 9, isDown: false, isRepeat: false))
         injector.inject(.flags(rawValue: 0))
         injector.inject(.mouseButton(button: .left, isDown: true, clickCount: 2))
         injector.inject(.pointerMove(deltaX: 500, deltaY: 0, absoluteX: 0, absoluteY: 0))
@@ -196,12 +238,17 @@ final class InputPipelineTests: XCTestCase {
 
         let snapshots = posted.values
         XCTAssertTrue(snapshots.allSatisfy { $0.marker == uniSpaceSyntheticEventMarker })
-        XCTAssertTrue(snapshots.contains { $0.type == .keyDown && $0.keyCode == 12 })
+        let shortcutKeyDowns = snapshots.filter {
+            $0.type == .keyDown && ($0.keyCode == 8 || $0.keyCode == 9)
+        }
+        XCTAssertEqual(shortcutKeyDowns.map(\.keyCode), [8, 9])
+        XCTAssertTrue(shortcutKeyDowns.allSatisfy { $0.flags.contains(.maskCommand) })
         XCTAssertTrue(snapshots.contains { $0.type == .leftMouseDown && $0.clickCount == 2 })
         XCTAssertTrue(snapshots.contains { $0.type == .leftMouseDragged && $0.location == CGPoint(x: 100, y: 2) })
         XCTAssertTrue(snapshots.contains { $0.type == .scrollWheel })
         XCTAssertTrue(snapshots.contains { $0.type.rawValue == gestureType.rawValue })
-        XCTAssertTrue(snapshots.contains { $0.type == .keyUp && $0.keyCode == 12 })
+        XCTAssertTrue(snapshots.contains { $0.type == .keyUp && $0.keyCode == 8 })
+        XCTAssertTrue(snapshots.contains { $0.type == .keyUp && $0.keyCode == 9 })
         let commandEvents = snapshots.filter {
             $0.type == .flagsChanged && $0.keyCode == 55
         }
@@ -252,4 +299,11 @@ private final class LockedValues<Value: Sendable>: @unchecked Sendable {
     private var stored: [Value] = []
     var values: [Value] { lock.withLock { stored } }
     func append(_ value: Value) { lock.withLock { stored.append(value) } }
+}
+
+private final class LockedUptime: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: UInt64 = 1
+    func now() -> UInt64 { lock.withLock { value } }
+    func advance(by amount: UInt64) { lock.withLock { value &+= amount } }
 }

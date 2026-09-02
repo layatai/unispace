@@ -57,12 +57,16 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
     private let configuredDirectQUICPort: NWEndpoint.Port
     private let configuredRealtimeListenPort: NWEndpoint.Port
     private let configuredDirectRealtimePort: NWEndpoint.Port
+    private let configuredPointerListenPort: NWEndpoint.Port
+    private let configuredDirectPointerPort: NWEndpoint.Port
     private let enableBonjour: Bool
     private let enableQUIC: Bool
     private let enableRealtime: Bool
     private let authenticationTimeout: TimeInterval
     private let stream: AsyncStream<PeerEvent>
     private let continuation: AsyncStream<PeerEvent>.Continuation
+    private let realtimeInputStream: AsyncStream<PeerEvent>
+    private let realtimeInputContinuation: AsyncStream<PeerEvent>.Continuation
     private var localDevice: DeviceDescriptor?
     private var workspaceID: WorkspaceID?
     private var key: Data?
@@ -78,13 +82,26 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
     private var connections: [DeviceID: SecurePeerConnection] = [:]
     private var pendingConnections: [ObjectIdentifier: SecurePeerConnection] = [:]
     private var discoveredDevices: [DeviceID: DeviceDescriptor] = [:]
+    private var discoveredTCPEndpoints: [DeviceID: NWEndpoint] = [:]
+    private var discoveredQUICEndpoints: [DeviceID: NWEndpoint] = [:]
     private var retryAttempts: [DeviceID: Int] = [:]
     private var retryTokens: [DeviceID: UUID] = [:]
+    private var outboundPeerIDs = Set<DeviceID>()
+    private var desiredRealtimePeerID: DeviceID?
     private var stabilityTokens: [DeviceID: UUID] = [:]
     private var deferredAnnouncements: [ObjectIdentifier: DeferredAnnouncement] = [:]
+    private var supersededConnections = Set<ObjectIdentifier>()
     private var realtimeTransport: QUICRealtimeTransport?
-    private var crossPlatformPointerTransport: CrossPlatformPointerTransport?
+    private var authenticatedPointerTransport: AuthenticatedPointerTransport?
     private var running = false
+    private var eventTracerClosure: (@Sendable (String) -> Void)?
+
+    /// Optional low-overhead monotonic trace sink used to diagnose cross-process
+    /// delivery latency (decoded → yielded → consumed → coordinator).
+    public var eventTracer: (@Sendable (String) -> Void)? {
+        get { lock.withLock { eventTracerClosure } }
+        set { lock.withLock { eventTracerClosure = newValue } }
+    }
 
     public init(
         listenPort: NWEndpoint.Port = NetworkPeerTransport.controlPort,
@@ -93,6 +110,8 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
         directQUICPort: NWEndpoint.Port? = nil,
         realtimeListenPort: NWEndpoint.Port = NetworkPeerTransport.realtimePort,
         directRealtimePort: NWEndpoint.Port = NetworkPeerTransport.realtimePort,
+        pointerListenPort: NWEndpoint.Port = NetworkPeerTransport.crossPlatformPointerPort,
+        directPointerPort: NWEndpoint.Port = NetworkPeerTransport.crossPlatformPointerPort,
         enableBonjour: Bool = true,
         enableQUIC: Bool = true,
         enableRealtime: Bool = true,
@@ -104,6 +123,8 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
         configuredDirectQUICPort = directQUICPort ?? directPort
         configuredRealtimeListenPort = realtimeListenPort
         configuredDirectRealtimePort = directRealtimePort
+        configuredPointerListenPort = pointerListenPort
+        configuredDirectPointerPort = directPointerPort
         self.enableBonjour = enableBonjour
         self.enableQUIC = enableQUIC
         self.enableRealtime = enableRealtime
@@ -111,11 +132,18 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
         var captured: AsyncStream<PeerEvent>.Continuation?
         self.stream = AsyncStream { captured = $0 }
         self.continuation = captured!
+        var capturedRealtimeInput: AsyncStream<PeerEvent>.Continuation?
+        self.realtimeInputStream = AsyncStream { capturedRealtimeInput = $0 }
+        self.realtimeInputContinuation = capturedRealtimeInput!
     }
 
-    deinit { continuation.finish() }
+    deinit {
+        continuation.finish()
+        realtimeInputContinuation.finish()
+    }
 
     public func events() -> AsyncStream<PeerEvent> { stream }
+    public func realtimeInputEvents() -> AsyncStream<PeerEvent> { realtimeInputStream }
 
     public var activeControlPort: NWEndpoint.Port? { lock.withLock { readyControlPort } }
     public var activeQUICPort: NWEndpoint.Port? { lock.withLock { readyQUICPort } }
@@ -214,7 +242,11 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
                     workspace: workspace,
                     key: currentKey
                 )
-                lock.withLock { realtimeTransport = realtime }
+                let desiredPeer = lock.withLock { () -> DeviceID? in
+                    realtimeTransport = realtime
+                    return desiredRealtimePeerID
+                }
+                realtime.setDesiredPeer(desiredPeer, shouldDial: desiredPeer != nil)
             } catch {
                 emit(.health(nil, .init(
                     health: .degraded,
@@ -224,27 +256,102 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
             }
         }
         if enableRealtime,
-           workspace.devices.contains(where: {
-               $0.platform == .windows && $0.capabilities.contains(.udpPointerV2)
-           }) {
+           workspace.devices.contains(where: { $0.capabilities.contains(.udpPointerV2) }) {
             do {
-                let pointerTransport = CrossPlatformPointerTransport()
+                let pointerTransport = AuthenticatedPointerTransport(
+                    listenPort: configuredPointerListenPort,
+                    directPort: configuredDirectPointerPort
+                )
+                pointerTransport.frameHandler = { [weak self] source, frame in
+                    self?.emit(.realtimeInput(source, PortableInputMapper.map(frame)))
+                }
                 try pointerTransport.start(localDevice: localDevice, workspace: workspace, key: currentKey)
-                lock.withLock { crossPlatformPointerTransport = pointerTransport }
+                lock.withLock { authenticatedPointerTransport = pointerTransport }
             } catch {
                 emit(.health(nil, .init(
                     health: .degraded,
                     transport: .tcp,
-                    detail: "Windows UDP pointer lane unavailable; using reliable input"
+                    detail: "UDP pointer lane unavailable; using reliable input"
                 )))
             }
-        }
-        for peer in workspace.devices where peer.id != localDevice.id && !peer.peerAddresses.isEmpty {
-            scheduleDirectConnection(to: peer.id, immediately: true)
         }
     }
 
     public func stop() async { stopSynchronously() }
+
+    public func updateConnectionPolicy(_ policy: PeerConnectionPolicy) {
+        queue.async { [weak self] in
+            guard let self else { return }
+            let result = self.lock.withLock { () -> ([SecurePeerConnection], [DeviceID]) in
+                guard self.running else {
+                    self.outboundPeerIDs = policy.outboundPeerIDs
+                    return ([], [])
+                }
+                self.outboundPeerIDs = policy.outboundPeerIDs
+                let cancelledIDs = self.retryTokens.keys.filter { !policy.outboundPeerIDs.contains($0) }
+                for id in cancelledIDs {
+                    self.retryTokens.removeValue(forKey: id)
+                    self.retryAttempts.removeValue(forKey: id)
+                }
+                let pending = self.pendingConnections.filter {
+                    guard let expected = $0.value.expectedDeviceID else { return false }
+                    return !policy.outboundPeerIDs.contains(expected) && $0.value.isOutbound
+                }
+                for (objectID, _) in pending {
+                    self.pendingConnections.removeValue(forKey: objectID)
+                    self.deferredAnnouncements.removeValue(forKey: objectID)
+                }
+                let staleActive = self.connections.values.filter {
+                    $0.isOutbound && $0.deviceID.map {
+                        !policy.outboundPeerIDs.contains($0)
+                    } == true
+                }
+                let candidates = policy.outboundPeerIDs.filter { self.connections[$0] == nil }
+                return (pending.map(\.value) + staleActive, Array(candidates))
+            }
+            result.0.forEach { $0.cancel() }
+            result.1.forEach { self.scheduleDirectConnection(to: $0, immediately: true) }
+        }
+    }
+
+    public func setRealtimePeer(_ deviceID: DeviceID?, role: RealtimeConnectionRole) {
+        queue.async { [weak self] in
+            guard let self else { return }
+            let lanes = self.lock.withLock { () -> (QUICRealtimeTransport?, AuthenticatedPointerTransport?, Bool) in
+                self.desiredRealtimePeerID = deviceID
+                let supportsUDP = deviceID.flatMap { self.knownPeers[$0] }?.capabilities.contains(.udpPointerV2) == true
+                return (self.realtimeTransport, self.authenticatedPointerTransport, supportsUDP)
+            }
+            let shouldDial = role == .dialer
+            lanes.1?.setDesiredPeer(deviceID, shouldDial: shouldDial)
+            lanes.0?.setDesiredPeer(lanes.2 ? nil : deviceID, shouldDial: shouldDial)
+        }
+    }
+
+    public func reconnect(to deviceID: DeviceID) {
+        queue.async { [weak self] in
+            guard let self else { return }
+            let pending = self.lock.withLock { () -> [SecurePeerConnection] in
+                guard self.running,
+                      self.outboundPeerIDs.contains(deviceID),
+                      self.connections[deviceID] == nil else { return [] }
+                self.retryTokens.removeValue(forKey: deviceID)
+                self.retryAttempts[deviceID] = 0
+                let matches = self.pendingConnections.filter { $0.value.expectedDeviceID == deviceID }
+                for (objectID, _) in matches {
+                    self.pendingConnections.removeValue(forKey: objectID)
+                    self.deferredAnnouncements.removeValue(forKey: objectID)
+                }
+                return matches.map(\.value)
+            }
+            pending.forEach { $0.cancel() }
+            self.scheduleDirectConnection(to: deviceID, immediately: true)
+        }
+    }
+
+    public func reconnectRealtime(to deviceID: DeviceID) {
+        lock.withLock { authenticatedPointerTransport }?.reconnect(to: deviceID)
+    }
 
     public func send(_ envelope: ControlEnvelope, to deviceID: DeviceID) async throws {
         let data = try isWindowsPeer(deviceID)
@@ -264,22 +371,32 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
 
     @discardableResult
     public func sendRealtime(_ frame: RealtimePointerFrame, to deviceID: DeviceID) async throws -> Bool {
+        let supportsUDP = lock.withLock {
+            knownPeers[deviceID]?.capabilities.contains(.udpPointerV2) == true
+        }
+        if supportsUDP,
+           let pointerTransport = lock.withLock({ authenticatedPointerTransport }),
+           try await pointerTransport.send(PortableInputMapper.map(frame), to: deviceID) {
+            return true
+        }
         if isWindowsPeer(deviceID) {
-            let portable = PortableInputMapper.map(frame)
-            if let pointerTransport = lock.withLock({ crossPlatformPointerTransport }),
-               try await pointerTransport.send(portable, to: deviceID) {
-                return true
-            }
-            try await send(data: WireFrameCodec.encodePortableRealtimePointer(portable), to: deviceID)
             return false
         }
         guard let realtime = lock.withLock({ realtimeTransport }) else {
-            try await send(frame.reliableFallback, to: deviceID)
             return false
         }
         if try await realtime.send(frame, to: deviceID) { return true }
-        try await send(frame.reliableFallback, to: deviceID)
         return false
+    }
+
+    public func sendRealtimeImmediately(_ frame: RealtimePointerFrame, to deviceID: DeviceID) -> Bool {
+        let lane = lock.withLock { () -> AuthenticatedPointerTransport? in
+            guard knownPeers[deviceID]?.capabilities.contains(.udpPointerV2) == true else {
+                return nil
+            }
+            return authenticatedPointerTransport
+        }
+        return lane?.sendImmediately(PortableInputMapper.map(frame), to: deviceID) == true
     }
 
     private func send(data: Data, to deviceID: DeviceID) async throws {
@@ -297,9 +414,9 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
     }
 
     private func stopSynchronously() {
-        let values: (NWListener?, NWListener?, NWListener?, NWBrowser?, NWBrowser?, QUICRealtimeTransport?, CrossPlatformPointerTransport?, [SecurePeerConnection]) = lock.withLock {
+        let values: (NWListener?, NWListener?, NWListener?, NWBrowser?, NWBrowser?, QUICRealtimeTransport?, AuthenticatedPointerTransport?, [SecurePeerConnection]) = lock.withLock {
             let active = Array(connections.values) + Array(pendingConnections.values)
-            let values = (listener, quicListener, crossPlatformQUICListener, browser, quicBrowser, realtimeTransport, crossPlatformPointerTransport, active)
+            let values = (listener, quicListener, crossPlatformQUICListener, browser, quicBrowser, realtimeTransport, authenticatedPointerTransport, active)
             listener = nil
             quicListener = nil
             crossPlatformQUICListener = nil
@@ -308,7 +425,7 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
             browser = nil
             quicBrowser = nil
             realtimeTransport = nil
-            crossPlatformPointerTransport = nil
+            authenticatedPointerTransport = nil
             localDevice = nil
             workspaceID = nil
             key = nil
@@ -316,11 +433,16 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
             connections.removeAll()
             pendingConnections.removeAll()
             discoveredDevices.removeAll()
+            discoveredTCPEndpoints.removeAll()
+            discoveredQUICEndpoints.removeAll()
             knownPeers.removeAll()
             retryAttempts.removeAll()
             retryTokens.removeAll()
+            outboundPeerIDs.removeAll()
+            desiredRealtimePeerID = nil
             stabilityTokens.removeAll()
             deferredAnnouncements.removeAll()
+            supersededConnections.removeAll()
             running = false
             return values
         }
@@ -453,6 +575,7 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
         guard let localDevice, let workspaceID else { lock.unlock(); return }
         let previous = Set(discoveredDevices.keys)
         var current: [DeviceID: DeviceDescriptor] = [:]
+        var currentEndpoints: [DeviceID: NWEndpoint] = [:]
         var candidates: [(DeviceDescriptor, NWEndpoint)] = []
         for result in results {
             guard case let .bonjour(record) = result.metadata,
@@ -462,12 +585,14 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
             guard id != localDevice.id else { continue }
             let device = DeviceDescriptor(id: id, name: record["name"] ?? "Mac")
             current[id] = device
-            if localDevice.id < id, connections[id] == nil,
+            currentEndpoints[id] = result.endpoint
+            if outboundPeerIDs.contains(id), connections[id] == nil,
                !pendingConnections.values.contains(where: { $0.expectedDeviceID == id }) {
                 candidates.append((device, result.endpoint))
             }
         }
         discoveredDevices = current
+        discoveredTCPEndpoints = currentEndpoints
         let added = Set(current.keys).subtracting(previous)
         let removed = previous.subtracting(current.keys)
         lock.unlock()
@@ -482,20 +607,24 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
     private func handleQUIC(_ results: Set<NWBrowser.Result>) {
         let candidates = lock.withLock { () -> [(DeviceDescriptor, NWEndpoint)] in
             guard let localDevice, let workspaceID else { return [] }
-            return results.compactMap { result in
+            var currentEndpoints: [DeviceID: NWEndpoint] = [:]
+            let candidates = results.compactMap { result -> (DeviceDescriptor, NWEndpoint)? in
                 guard case let .bonjour(record) = result.metadata,
                       record["workspace"] == workspaceID.rawValue.uuidString,
                       let deviceString = record["device"],
                       let uuid = UUID(uuidString: deviceString) else { return nil }
                 let id = DeviceID(rawValue: uuid)
+                currentEndpoints[id] = result.endpoint
                 guard id != localDevice.id,
-                      localDevice.id < id,
+                      outboundPeerIDs.contains(id),
                       connections[id]?.transportKind != .quic,
                       !pendingConnections.values.contains(where: {
                           $0.expectedDeviceID == id && $0.transportKind == .quic
                       }) else { return nil }
                 return (DeviceDescriptor(id: id, name: record["name"] ?? "Mac"), result.endpoint)
             }
+            discoveredQUICEndpoints = currentEndpoints
+            return candidates
         }
         for (device, endpoint) in candidates {
             connect(to: endpoint, expectedDevice: device, isOutbound: true, transport: .quic)
@@ -628,12 +757,12 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
                 detail: error.localizedDescription
             )))
         case let .failed(error):
-            emit(.health(managed.deviceID ?? expectedDeviceID, .init(
-                health: .reconnecting,
-                transport: managed.transportKind,
-                detail: error.localizedDescription
-            )))
-            remove(managed, objectID: objectID, expectedDeviceID: expectedDeviceID)
+            remove(
+                managed,
+                objectID: objectID,
+                expectedDeviceID: expectedDeviceID,
+                failureDetail: error.localizedDescription
+            )
         case .cancelled:
             remove(managed, objectID: objectID, expectedDeviceID: expectedDeviceID)
         default:
@@ -672,6 +801,17 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
         from deviceID: DeviceID,
         managed: SecurePeerConnection
     ) throws {
+        switch envelope.message {
+        case let .activationResult(sessionID, accepted):
+            eventTracer?("t=\(DispatchTime.now().uptimeNanoseconds) trace decoded activationResult session=\(sessionID) accepted=\(accepted)")
+        case let .heartbeat(sessionID, _):
+            eventTracer?(
+                "t=\(DispatchTime.now().uptimeNanoseconds) trace decoded heartbeat " +
+                    "session=\(sessionID) from=\(deviceID)"
+            )
+        default:
+            break
+        }
         if case let .hello(device) = envelope.message {
             guard device.id == deviceID else { throw PeerTransportError.authenticationFailed }
             lock.withLock {
@@ -808,10 +948,15 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
     private func remove(
         _ managed: SecurePeerConnection,
         objectID: ObjectIdentifier,
-        expectedDeviceID: DeviceID?
+        expectedDeviceID: DeviceID?,
+        failureDetail: String? = nil
     ) {
         var removedActive = false
+        var wasSuperseded = false
+        var retryDeviceID: DeviceID?
+        var shouldRetry = false
         lock.lock()
+        wasSuperseded = supersededConnections.remove(objectID) != nil
         pendingConnections.removeValue(forKey: objectID)
         deferredAnnouncements.removeValue(forKey: objectID)
         let deviceID = managed.deviceID
@@ -820,12 +965,33 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
             stabilityTokens.removeValue(forKey: deviceID)
             removedActive = true
         }
+        let candidateID = deviceID ?? expectedDeviceID
+        if removedActive || deviceID == nil && candidateID.flatMap({ connections[$0] }) == nil {
+            retryDeviceID = candidateID
+        }
+        if let retryDeviceID {
+            shouldRetry = running &&
+                outboundPeerIDs.contains(retryDeviceID) &&
+                Self.hasReconnectRoute(
+                    peer: knownPeers[retryDeviceID],
+                    discoveredPeer: discoveredDevices[retryDeviceID],
+                    tcpEndpoint: discoveredTCPEndpoints[retryDeviceID],
+                    quicEndpoint: discoveredQUICEndpoints[retryDeviceID]
+                )
+        }
         lock.unlock()
+        guard !wasSuperseded else { return }
+        if let retryDeviceID {
+            emit(.health(retryDeviceID, .init(
+                health: shouldRetry ? .reconnecting : .disconnected,
+                transport: managed.transportKind,
+                detail: failureDetail
+            )))
+        }
         if let deviceID, removedActive {
-            emit(.health(deviceID, .init(health: .reconnecting, transport: managed.transportKind)))
             emit(.disconnected(deviceID))
         }
-        if removedActive || deviceID == nil, let retryDeviceID = deviceID ?? expectedDeviceID {
+        if shouldRetry, let retryDeviceID {
             scheduleDirectConnection(to: retryDeviceID, immediately: false)
         }
     }
@@ -846,12 +1012,16 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
     private func scheduleDirectConnection(to deviceID: DeviceID, immediately: Bool) {
         let schedule = lock.withLock { () -> (UUID, TimeInterval)? in
             guard running, connections[deviceID] == nil,
+                  outboundPeerIDs.contains(deviceID),
                   retryTokens[deviceID] == nil,
-                  let peer = knownPeers[deviceID], !peer.peerAddresses.isEmpty else { return nil }
+                  Self.hasReconnectRoute(
+                    peer: knownPeers[deviceID],
+                    discoveredPeer: discoveredDevices[deviceID],
+                    tcpEndpoint: discoveredTCPEndpoints[deviceID],
+                    quicEndpoint: discoveredQUICEndpoints[deviceID]
+                  ) else { return nil }
             let attempt = retryAttempts[deviceID, default: 0]
-            let delays: [TimeInterval] = [0.25, 0.5, 1, 2, 4, 5]
-            let baseDelay = immediately ? 0 : delays[min(attempt, delays.count - 1)]
-            let delay = baseDelay == 0 ? 0 : baseDelay * Double.random(in: 0.85...1.15)
+            let delay = immediately ? 0 : ConnectionRetrySchedule.delay(forAttempt: max(attempt - 1, 0))
             let token = UUID()
             retryTokens[deviceID] = token
             return (token, delay)
@@ -862,36 +1032,74 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
         }
     }
 
+    static func hasReconnectRoute(
+        peer: DeviceDescriptor?,
+        discoveredPeer: DeviceDescriptor?,
+        tcpEndpoint: NWEndpoint?,
+        quicEndpoint: NWEndpoint?
+    ) -> Bool {
+        let knownDevice = peer ?? discoveredPeer
+        guard let knownDevice else { return false }
+        return !knownDevice.peerAddresses.isEmpty || tcpEndpoint != nil || quicEndpoint != nil
+    }
+
     private func attemptDirectConnection(to deviceID: DeviceID, token: UUID) {
-        let target = lock.withLock { () -> (DeviceDescriptor, PeerAddress)? in
+        let target = lock.withLock { () -> (DeviceDescriptor, PeerAddress?, NWEndpoint?, NWEndpoint?)? in
             guard running, retryTokens[deviceID] == token,
                   connections[deviceID] == nil,
                   !pendingConnections.values.contains(where: { $0.expectedDeviceID == deviceID }),
-                  let peer = knownPeers[deviceID], !peer.peerAddresses.isEmpty else {
+                  let peer = knownPeers[deviceID] ?? discoveredDevices[deviceID] else {
                 retryTokens.removeValue(forKey: deviceID)
                 return nil
             }
             retryTokens.removeValue(forKey: deviceID)
             let attempt = retryAttempts[deviceID, default: 0]
             retryAttempts[deviceID] = attempt + 1
-            return (peer, peer.peerAddresses[attempt % peer.peerAddresses.count])
+            let address = peer.peerAddresses.isEmpty ? nil : peer.peerAddresses[attempt % peer.peerAddresses.count]
+            let tcpEndpoint = discoveredTCPEndpoints[deviceID]
+            let quicEndpoint = discoveredQUICEndpoints[deviceID]
+            guard address != nil || tcpEndpoint != nil || quicEndpoint != nil else { return nil }
+            return (peer, address, tcpEndpoint, quicEndpoint)
         }
-        guard let (peer, address) = target else { return }
-        if enableQUIC, configuredDirectQUICPort.rawValue != 0 {
-            let endpoint = NWEndpoint.hostPort(
-                host: NWEndpoint.Host(address.host),
-                port: configuredDirectQUICPort
-            )
+        guard let (peer, address, tcpEndpoint, quicEndpoint) = target else { return }
+        if enableQUIC, let endpoint = quicEndpoint ?? address.map({
+            NWEndpoint.hostPort(host: NWEndpoint.Host($0.host), port: configuredDirectQUICPort)
+        }) {
             connect(to: endpoint, expectedDevice: peer, isOutbound: true, transport: .quic)
             queue.asyncAfter(deadline: .now() + 0.75) { [weak self] in
-                self?.attemptTCPFallback(to: peer, address: address)
+                self?.transitionToTCPFallback(to: peer, endpoint: tcpEndpoint ?? address.map({
+                    NWEndpoint.hostPort(host: NWEndpoint.Host($0.host), port: self?.configuredDirectPort ?? Self.controlPort)
+                }))
             }
-        } else {
+        } else if let address {
             attemptTCPFallback(to: peer, address: address)
+        } else if let tcpEndpoint {
+            attemptTCPFallback(to: peer, endpoint: tcpEndpoint)
         }
     }
 
     private func attemptTCPFallback(to peer: DeviceDescriptor, address: PeerAddress) {
+        attemptTCPFallback(
+            to: peer,
+            endpoint: .hostPort(host: NWEndpoint.Host(address.host), port: configuredDirectPort)
+        )
+    }
+
+    private func transitionToTCPFallback(to peer: DeviceDescriptor, endpoint: NWEndpoint?) {
+        let superseded = lock.withLock { () -> [SecurePeerConnection] in
+            guard running, connections[peer.id] == nil else { return [] }
+            let matches = pendingConnections.filter {
+                $0.value.expectedDeviceID == peer.id && $0.value.transportKind == .quic
+            }
+            supersededConnections.formUnion(matches.keys)
+            return matches.map(\.value)
+        }
+        superseded.forEach { $0.cancel() }
+        attemptTCPFallback(to: peer, endpoint: endpoint)
+    }
+
+    private func attemptTCPFallback(to peer: DeviceDescriptor, endpoint: NWEndpoint?) {
+        guard let endpoint else { return }
         let shouldConnect = lock.withLock {
             running && connections[peer.id] == nil &&
                 !pendingConnections.values.contains(where: {
@@ -899,14 +1107,15 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
                 })
         }
         guard shouldConnect else { return }
-        let endpoint = NWEndpoint.hostPort(
-            host: NWEndpoint.Host(address.host),
-            port: configuredDirectPort
-        )
         connect(to: endpoint, expectedDevice: peer, isOutbound: true, transport: .tcp)
     }
 
-    private func emit(_ event: PeerEvent) { continuation.yield(event) }
+    private func emit(_ event: PeerEvent) {
+        continuation.yield(event)
+        if case .realtimeInput = event {
+            realtimeInputContinuation.yield(event)
+        }
+    }
 
     static func makeParameters() -> NWParameters {
         let tcp = NWProtocolTCP.Options()

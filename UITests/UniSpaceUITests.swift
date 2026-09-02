@@ -134,17 +134,59 @@ final class UniSpaceUITests: XCTestCase {
         let app = launchApp(mode: "--ui-testing-configured")
 
         let launchAtLoginCard = app.switches["launch-at-login"]
+        let diagnosticLoggingCard = app.switches["diagnostic-logging"]
         let leaveWorkspaceButton = app.buttons["leave-workspace"]
         XCTAssertTrue(launchAtLoginCard.waitForExistence(timeout: 5))
+        XCTAssertTrue(diagnosticLoggingCard.waitForExistence(timeout: 5))
         XCTAssertTrue(leaveWorkspaceButton.waitForExistence(timeout: 5))
         let expectedTrailingEdge = leaveWorkspaceButton.frame.maxX
         assertTrailingEdge(of: launchAtLoginCard, equals: expectedTrailingEdge)
+        assertTrailingEdge(of: diagnosticLoggingCard, equals: expectedTrailingEdge)
 
         app.staticTexts["section-continuity"].click()
         let sharingCard = app.switches["clipboard-sharing-toggle"]
         XCTAssertTrue(sharingCard.waitForExistence(timeout: 5))
         dismissSheetIfPresent("Clipboard sharing unavailable", in: app)
         assertTrailingEdge(of: sharingCard, equals: expectedTrailingEdge)
+        app.terminate()
+    }
+
+    @MainActor
+    func testDevicesKeepInboundOnlyPeersOfflineAndExposeNetworkRestart() {
+        let app = launchApp(mode: "--ui-testing-connections")
+
+        app.staticTexts["section-devices"].click()
+        let refresh = app.buttons["refresh-connections"]
+        XCTAssertTrue(refresh.waitForExistence(timeout: 5))
+        XCTAssertFalse(refresh.isEnabled)
+        XCTAssertFalse(app.buttons["Retry connection to Office PC"].exists)
+        XCTAssertTrue(app.staticTexts["Offline"].exists)
+        XCTAssertFalse(app.staticTexts["Reconnecting"].exists)
+        XCTAssertTrue(app.staticTexts["The trusted peer is temporarily unavailable"].exists)
+
+        let connectionActions = app.descendants(matching: .any)["connection-actions"]
+        XCTAssertTrue(connectionActions.waitForExistence(timeout: 5))
+        connectionActions.click()
+        let restart = app.menuItems["Restart Networking…"]
+        XCTAssertTrue(restart.waitForExistence(timeout: 2))
+        restart.click()
+        let restartDialog = app.sheets.firstMatch
+        XCTAssertTrue(app.staticTexts["Restart networking?"].waitForExistence(timeout: 2))
+        XCTAssertTrue(restartDialog.buttons["Restart Networking"].exists)
+        XCTAssertTrue(restartDialog.buttons["Cancel"].exists)
+        restartDialog.buttons["Cancel"].click()
+        app.terminate()
+    }
+
+    @MainActor
+    func testDevicesShowControllerReportedWindowsPresence() {
+        let app = launchApp(mode: "--ui-testing-presence")
+
+        app.staticTexts["section-devices"].click()
+        XCTAssertTrue(app.staticTexts["Via controller"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["3 of 3 devices online"].exists)
+        XCTAssertFalse(app.buttons["Retry connection to Office PC"].exists)
+        XCTAssertFalse(app.staticTexts["The trusted peer is temporarily unavailable"].exists)
         app.terminate()
     }
 
@@ -183,12 +225,14 @@ final class UniSpaceUITests: XCTestCase {
         }
     }
 
+    @MainActor
     private func assertTrailingEdge(
         of element: XCUIElement,
         equals expected: CGFloat,
         file: StaticString = #filePath,
         line: UInt = #line
     ) {
-        XCTAssertEqual(element.frame.maxX, expected, accuracy: 1, file: file, line: line)
+        let actual = element.frame.maxX
+        XCTAssertEqual(actual, expected, accuracy: 1, file: file, line: line)
     }
 }

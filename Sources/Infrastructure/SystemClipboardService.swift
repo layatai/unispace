@@ -85,7 +85,7 @@ public final class SystemClipboardService: ClipboardService {
     private func startMonitoringIfNeeded() {
         guard monitorTask == nil else { return }
         lastObservedChangeCount = pasteboard.changeCount
-        monitorTask = Task { [weak self] in
+        monitorTask = Task(priority: .high) { [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
                 try? await Task.sleep(for: self.pollingInterval)
@@ -99,6 +99,17 @@ public final class SystemClipboardService: ClipboardService {
         let changeCount = pasteboard.changeCount
         guard changeCount != lastObservedChangeCount else { return }
         let items = pasteboard.pasteboardItems ?? []
+
+        // Finder commonly includes a plain-text representation beside each file
+        // URL. File continuity owns that clipboard change; treating the fallback
+        // text as shared clipboard content can race with and replace the file drop.
+        if items.contains(where: {
+            $0.types.contains(.fileURL) ||
+                $0.string(forType: SystemFilePasteboard.originType) != nil
+        }) {
+            lastObservedChangeCount = changeCount
+            return
+        }
 
         do {
             for item in items {

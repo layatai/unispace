@@ -1,6 +1,8 @@
 import Foundation
 import UniSpaceDomain
 
+public let realtimeInputTaskPriority = TaskPriority(rawValue: 33)
+
 public enum PermissionKind: String, CaseIterable, Sendable {
     case inputMonitoring
     case postEvents
@@ -43,6 +45,11 @@ public protocol WorkspaceStore: Sendable {
     func load() throws -> WorkspaceSnapshot?
     func save(_ workspace: WorkspaceSnapshot) throws
     func remove() throws
+}
+
+public protocol ControllerIdentityStore: Sendable {
+    func controllerID(for workspaceID: WorkspaceID) -> DeviceID?
+    func setControllerID(_ deviceID: DeviceID?, for workspaceID: WorkspaceID)
 }
 
 public protocol TrustStore: Sendable {
@@ -104,17 +111,26 @@ public enum PeerEvent: Sendable, Equatable {
 public protocol PeerTransport: Sendable {
     func start(localDevice: DeviceDescriptor, workspace: WorkspaceSnapshot, key: Data) async throws
     func stop() async
+    func updateConnectionPolicy(_ policy: PeerConnectionPolicy)
+    func setRealtimePeer(_ deviceID: DeviceID?, role: RealtimeConnectionRole)
+    func reconnectRealtime(to deviceID: DeviceID)
+    func reconnect(to deviceID: DeviceID)
     func events() -> AsyncStream<PeerEvent>
     func send(_ envelope: ControlEnvelope, to deviceID: DeviceID) async throws
     func send(_ frame: InputFrame, to deviceID: DeviceID) async throws
     @discardableResult
     func sendRealtime(_ frame: RealtimePointerFrame, to deviceID: DeviceID) async throws -> Bool
+    func sendRealtimeImmediately(_ frame: RealtimePointerFrame, to deviceID: DeviceID) -> Bool
 }
 
 public extension PeerTransport {
+    func updateConnectionPolicy(_ policy: PeerConnectionPolicy) {}
+    func setRealtimePeer(_ deviceID: DeviceID?, role: RealtimeConnectionRole) {}
+    func reconnectRealtime(to deviceID: DeviceID) {}
+    func sendRealtimeImmediately(_ frame: RealtimePointerFrame, to deviceID: DeviceID) -> Bool { false }
+
     @discardableResult
     func sendRealtime(_ frame: RealtimePointerFrame, to deviceID: DeviceID) async throws -> Bool {
-        try await send(frame.reliableFallback, to: deviceID)
         return false
     }
 }

@@ -42,6 +42,14 @@ public final class CGEventInputCapture: InputCapture, @unchecked Sendable {
     typealias CursorWarpHandler = @Sendable (CGPoint) -> Void
     typealias PermissionChecker = @Sendable () -> Bool
     typealias EventTapFactory = @Sendable (CGEventMask, UnsafeMutableRawPointer) -> CFMachPort?
+    typealias UptimeProvider = @Sendable () -> UInt64
+
+    private struct PendingCursorWarp {
+        let point: CGPoint
+        let expiresAtNanos: UInt64
+    }
+
+    private static let cursorWarpEventWindowNanos: UInt64 = 20_000_000
 
     static let gestureEventTypes: [CGEventType] = [
         NSEvent.EventType.gesture,
@@ -65,11 +73,13 @@ public final class CGEventInputCapture: InputCapture, @unchecked Sendable {
     private let cursorWarpHandler: CursorWarpHandler
     private let permissionChecker: PermissionChecker
     private let eventTapFactory: EventTapFactory
+    private let uptimeProvider: UptimeProvider
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
     private var callback: (@Sendable (InputEvent) -> Bool)?
     private var suppressionEnabled = false
     private var cursorSuppression = CursorSuppressionState()
+    private var pendingCursorWarp: PendingCursorWarp?
 
     public convenience init() {
         self.init(
@@ -78,7 +88,8 @@ public final class CGEventInputCapture: InputCapture, @unchecked Sendable {
             },
             cursorWarpHandler: { _ = CGWarpMouseCursorPosition($0) },
             permissionChecker: CGPreflightListenEventAccess,
-            eventTapFactory: Self.makeEventTap
+            eventTapFactory: Self.makeEventTap,
+            uptimeProvider: { DispatchTime.now().uptimeNanoseconds }
         )
     }
 
@@ -87,12 +98,14 @@ public final class CGEventInputCapture: InputCapture, @unchecked Sendable {
         cursorWarpHandler: @escaping CursorWarpHandler = { _ = CGWarpMouseCursorPosition($0) },
         permissionChecker: @escaping PermissionChecker = CGPreflightListenEventAccess,
         eventTapFactory: @escaping EventTapFactory = CGEventInputCapture.makeEventTap,
+        uptimeProvider: @escaping UptimeProvider = { DispatchTime.now().uptimeNanoseconds },
         handler: (@Sendable (InputEvent) -> Bool)? = nil
     ) {
         self.mouseAssociationHandler = mouseAssociationHandler
         self.cursorWarpHandler = cursorWarpHandler
         self.permissionChecker = permissionChecker
         self.eventTapFactory = eventTapFactory
+        self.uptimeProvider = uptimeProvider
         callback = handler
     }
 
@@ -150,6 +163,7 @@ public final class CGEventInputCapture: InputCapture, @unchecked Sendable {
         eventTap = nil
         callback = nil
         suppressionEnabled = false
+        pendingCursorWarp = nil
         let associationChanged = cursorSuppression.setEnabled(false, currentPosition: nil)
         if associationChanged { mouseAssociationHandler(true) }
         lock.unlock()
@@ -158,6 +172,7 @@ public final class CGEventInputCapture: InputCapture, @unchecked Sendable {
     public func setSuppressionEnabled(_ enabled: Bool) {
         lock.lock()
         suppressionEnabled = enabled
+        if !enabled { pendingCursorWarp = nil }
         let associationChanged = cursorSuppression.setEnabled(
             enabled,
             currentPosition: CGEvent(source: nil)?.location
@@ -176,17 +191,51 @@ public final class CGEventInputCapture: InputCapture, @unchecked Sendable {
         if event.getIntegerValueField(.eventSourceUserData) == uniSpaceSyntheticEventMarker {
             return false
         }
+        let now = uptimeProvider()
+        lock.lock()
+        let suppress = suppressionEnabled
+        let pendingWarp = pendingCursorWarp
+        let isPointerMotion = Self.isPointerMotion(type)
+        let isCursorWarpEvent = pendingWarp.map {
+            isPointerMotion && now <= $0.expiresAtNanos && Self.isNear(event.location, $0.point)
+        } ?? false
+        if isPointerMotion || pendingWarp.map({ now > $0.expiresAtNanos }) == true {
+            pendingCursorWarp = nil
+        }
+        lock.unlock()
+        if isCursorWarpEvent { return suppress }
         guard let input = Self.convert(type: type, event: event) else { return false }
         lock.lock()
         let callback = callback
-        let suppress = suppressionEnabled
         let restorationPoint = suppress ? cursorSuppression.restorationPoint(for: type) : nil
         lock.unlock()
-        let handled = callback?(input) ?? false
+        var handled = false
+        if type == .keyDown || type == .keyUp {
+            // A modifier transition can be missed while control is crossing an
+            // edge or recovering. Snapshot the flags carried by every key so
+            // shortcuts never depend on a prior flagsChanged frame.
+            handled = callback?(.flags(rawValue: event.flags.rawValue)) ?? false
+        }
+        handled = (callback?(input) ?? false) || handled
         if let restorationPoint {
+            lock.withLock {
+                pendingCursorWarp = PendingCursorWarp(
+                    point: restorationPoint,
+                    expiresAtNanos: now &+ Self.cursorWarpEventWindowNanos
+                )
+            }
             cursorWarpHandler(restorationPoint)
         }
         return handled || suppress
+    }
+
+    private static func isPointerMotion(_ type: CGEventType) -> Bool {
+        type == .mouseMoved || type == .leftMouseDragged ||
+            type == .rightMouseDragged || type == .otherMouseDragged
+    }
+
+    private static func isNear(_ first: CGPoint, _ second: CGPoint) -> Bool {
+        abs(first.x - second.x) <= 1 && abs(first.y - second.y) <= 1
     }
 
     static func convert(type: CGEventType, event: CGEvent) -> InputEvent? {

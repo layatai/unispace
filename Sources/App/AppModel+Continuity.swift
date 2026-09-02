@@ -1,4 +1,5 @@
 import Foundation
+import UniSpaceApplication
 import UniSpaceDomain
 
 extension AppModel {
@@ -9,23 +10,23 @@ extension AppModel {
     }
 
     var continuityTargetID: DeviceID? {
-        if let currentControllerID,
-           currentControllerID != localDeviceID,
-           connectedDevices.contains(currentControllerID) {
-            return currentControllerID
-        }
+        ContinuityDestinationResolver.resolve(
+            localDeviceID: localDeviceID,
+            controllerID: currentControllerID,
+            controlSession: controlSessionSnapshot,
+            devices: devices,
+            connectedDeviceIDs: connectedDevices
+        )
+    }
 
-        let prefix = "Controlling "
-        if statusMessage.hasPrefix(prefix) {
-            let name = String(statusMessage.dropFirst(prefix.count))
-            if let target = continuityCandidateDevices.first(where: { $0.name == name }) {
-                return target.id
-            }
-        }
+    var activeControlPeerID: DeviceID? {
+        guard controlSessionSnapshot.protectsInputLatency,
+              let peerID = controlSessionSnapshot.peerID,
+              connectedDevices.contains(peerID) else { return nil }
+        return peerID
+    }
 
-        if continuityCandidateDevices.count == 1 {
-            return continuityCandidateDevices[0].id
-        }
-        return nil
+    var isRemoteControlSessionActive: Bool {
+        controlSessionSnapshot.protectsInputLatency
     }
 }

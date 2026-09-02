@@ -10,8 +10,14 @@ final class ClipboardInfrastructureTests: XCTestCase {
     func testEncryptedClipboardTransportConnectsAndTransfersUpdate() async throws {
         let workspaceID = WorkspaceID()
         let key = PairingCryptoSession.randomData(count: 32)
-        let server = DeviceDescriptor(id: DeviceID(), name: "Server")
-        let client = DeviceDescriptor(id: DeviceID(), name: "Client")
+        let server = DeviceDescriptor(
+            id: DeviceID(rawValue: UUID(uuidString: "00000000-0000-0000-0000-000000000002")!),
+            name: "Server"
+        )
+        let client = DeviceDescriptor(
+            id: DeviceID(rawValue: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!),
+            name: "Client"
+        )
         let serverWorkspace = WorkspaceSnapshot(
             id: workspaceID,
             name: "Clipboard",
@@ -24,6 +30,7 @@ final class ClipboardInfrastructureTests: XCTestCase {
             enableBonjour: false
         )
         try await serverTransport.start(localDevice: server, workspace: serverWorkspace, key: key)
+        serverTransport.setDesiredPeer(client.id)
         let port = try await waitForPort(serverTransport)
 
         let routedServer = DeviceDescriptor(
@@ -43,6 +50,7 @@ final class ClipboardInfrastructureTests: XCTestCase {
             enableBonjour: false
         )
         let connected = expectation(description: "clipboard channel connected")
+        let clientConnected = expectation(description: "clipboard client connected")
         let received = expectation(description: "clipboard update received")
         let serverTask = Task {
             for await event in serverTransport.events() {
@@ -56,9 +64,17 @@ final class ClipboardInfrastructureTests: XCTestCase {
                 }
             }
         }
+        let clientTask = Task {
+            for await event in clientTransport.events() {
+                if case let .connected(deviceID) = event, deviceID == server.id {
+                    clientConnected.fulfill()
+                }
+            }
+        }
 
         try await clientTransport.start(localDevice: client, workspace: clientWorkspace, key: key)
-        await fulfillment(of: [connected], timeout: 5)
+        clientTransport.setDesiredPeer(server.id)
+        await fulfillment(of: [connected, clientConnected], timeout: 5)
         let representations = [ClipboardRepresentation(kind: .plainText, value: "hello")]
         try await clientTransport.send(
             ClipboardEnvelope(
@@ -98,6 +114,7 @@ final class ClipboardInfrastructureTests: XCTestCase {
         await clientTransport.stop()
         await serverTransport.stop()
         serverTask.cancel()
+        clientTask.cancel()
         XCTAssertNil(clientTransport.activePort)
     }
 
@@ -241,6 +258,84 @@ final class ClipboardInfrastructureTests: XCTestCase {
             contentHash: Data(repeating: 0, count: 32),
             representations: []
         ))
+        service.stop()
+    }
+
+    @MainActor
+    func testSystemClipboardObservesThreeIdenticalLocalCopies() async throws {
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
+        defer { pasteboard.releaseGlobally() }
+        let service = SystemClipboardService(
+            pasteboard: pasteboard,
+            pollingInterval: .seconds(60)
+        )
+        let stream = service.events()
+        var changeCounts = Set<Int>()
+        let expected = [
+            ClipboardRepresentation(kind: .plainText, value: "copy repeatedly")
+        ]
+
+        for copyNumber in 1...3 {
+            pasteboard.clearContents()
+            XCTAssertTrue(pasteboard.setString("copy repeatedly", forType: .string))
+            service.pollNowForTesting()
+
+            let nextObservation = await firstValue(from: stream)
+            let observation = try XCTUnwrap(nextObservation)
+            XCTAssertEqual(
+                observation.representations,
+                expected,
+                "Copy \(copyNumber) should produce the same portable content"
+            )
+            XCTAssertTrue(
+                changeCounts.insert(observation.changeCount).inserted,
+                "Copy \(copyNumber) should have a distinct pasteboard change count"
+            )
+        }
+
+        service.stop()
+    }
+
+    @MainActor
+    func testSystemClipboardAppliesThreeIdenticalRemoteUpdatesWithoutEcho() async {
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
+        defer { pasteboard.releaseGlobally() }
+        let service = SystemClipboardService(
+            pasteboard: pasteboard,
+            pollingInterval: .seconds(60)
+        )
+        let stream = service.events()
+        let representations = [
+            ClipboardRepresentation(kind: .plainText, value: "paste repeatedly")
+        ]
+        var changeCounts = Set<Int>()
+
+        for revision in UInt64(1)...3 {
+            let payload = ClipboardPayload(
+                originDeviceID: DeviceID(),
+                revision: revision,
+                contentHash: ClipboardSyncEngine.contentHash(for: representations),
+                representations: representations
+            )
+            service.apply(payload)
+
+            XCTAssertEqual(pasteboard.string(forType: .string), "paste repeatedly")
+            XCTAssertEqual(
+                pasteboard.pasteboardItems?.first?.string(
+                    forType: SystemClipboardService.originType
+                ),
+                payload.payloadID.rawValue.uuidString
+            )
+            XCTAssertTrue(
+                changeCounts.insert(pasteboard.changeCount).inserted,
+                "Remote update \(revision) should republish identical text"
+            )
+
+            service.pollNowForTesting()
+            let echoed = await firstValue(from: stream, timeout: .milliseconds(100))
+            XCTAssertNil(echoed, "Remote update \(revision) must not be sent back")
+        }
+
         service.stop()
     }
 

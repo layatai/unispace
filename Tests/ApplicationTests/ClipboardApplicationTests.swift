@@ -4,6 +4,38 @@ import XCTest
 import UniSpaceDomain
 
 final class ClipboardApplicationTests: XCTestCase {
+    func testFrameCodecMatchesWindowsGoldenVector() throws {
+        let workspaceID = WorkspaceID(rawValue: UUID(uuidString: "00112233-4455-6677-8899-AABBCCDDEEFF")!)
+        let senderID = DeviceID(rawValue: UUID(uuidString: "10213243-5465-7687-98A9-BACBDCEDFE0F")!)
+        let representations = [ClipboardRepresentation(kind: .plainText, value: "interop")]
+        let payload = ClipboardPayload(
+            payloadID: ClipboardPayloadID(rawValue: UUID(uuidString: "11223344-5566-7788-99AA-BBCCDDEEFF00")!),
+            originDeviceID: senderID,
+            revision: 42,
+            timestamp: Date(timeIntervalSince1970: 0),
+            contentHash: ClipboardSyncEngine.contentHash(for: representations),
+            representations: representations
+        )
+        let encoded = try ClipboardFrameCodec.encode(ClipboardEnvelope(
+            workspaceID: workspaceID,
+            senderDeviceID: senderID,
+            payload: payload
+        ))
+        let hex = encoded.map { String(format: "%02x", $0) }.joined()
+        let expected = [
+            "00010100112233445566778899aabbccddeeff102132435465768798a9bacbdcedfe0f0000012f",
+            "7b22636f6e74656e7448617368223a22596b59454e714e6a754c4c4368516f6b66793543797778334e",
+            "53696b6f326b6c42743669686f4153384b343d222c226f726967696e4465766963654944223a7b2272",
+            "617756616c7565223a2231303231333234332d353436352d373638372d393841392d4241434244434544",
+            "46453046227d2c227061796c6f61644944223a7b2272617756616c7565223a2231313232333334342d35",
+            "3536362d373738382d393941412d424243434444454546463030227d2c22726570726573656e74617469",
+            "6f6e73223a5b7b226b696e64223a22706c61696e54657874222c2276616c7565223a22696e7465726f",
+            "70227d5d2c227265766973696f6e223a34322c2274696d657374616d70223a22313937302d30312d3031",
+            "5430303a30303a30305a227d",
+        ].joined()
+        XCTAssertEqual(hex, expected)
+    }
+
     @MainActor
     func testFrameCodecRoundTripsAndRejectsMalformedFrames() throws {
         let fixture = ClipboardTestFixture()
@@ -144,14 +176,24 @@ final class ClipboardApplicationTests: XCTestCase {
         }
         XCTAssertTrue(sent)
 
-        fixture.clipboard.emit(ClipboardObservation(
-            changeCount: 2,
-            representations: [ClipboardRepresentation(kind: .plainText, value: "copied locally")]
-        ))
-        let resent = await eventually {
-            fixture.transport.sentEnvelopes.count == 2
+        for copyNumber in 2...3 {
+            fixture.clipboard.emit(ClipboardObservation(
+                changeCount: copyNumber,
+                representations: [
+                    ClipboardRepresentation(kind: .plainText, value: "copied locally")
+                ]
+            ))
+            let resent = await eventually {
+                fixture.transport.sentEnvelopes.count == copyNumber
+            }
+            XCTAssertTrue(resent, "Copy \(copyNumber) should be sent")
         }
-        XCTAssertTrue(resent)
+
+        let payloads = fixture.transport.sentEnvelopes.map(\.payload)
+        XCTAssertEqual(Set(payloads.map(\.payloadID)).count, 3)
+        XCTAssertEqual(Set(payloads.map(\.contentHash)).count, 1)
+        XCTAssertEqual(Set(payloads.map(\.revision)).count, 3)
+        XCTAssertEqual(payloads.map(\.revision), payloads.map(\.revision).sorted())
         await fixture.coordinator.stop()
     }
 
@@ -183,6 +225,111 @@ final class ClipboardApplicationTests: XCTestCase {
         let retried = await eventually { fixture.transport.sendAttemptCount == 2 }
         XCTAssertTrue(retried)
         XCTAssertEqual(fixture.transport.sentEnvelopes.count, 1)
+        await fixture.coordinator.stop()
+    }
+
+    @MainActor
+    func testCoordinatorRetriesPendingClipboardAfterReconnectWithoutAnotherCopy() async throws {
+        let fixture = ClipboardTestFixture()
+        fixture.transport.failuresRemaining = 1
+        try await fixture.start()
+        await fixture.coordinator.setSharingEnabled(true)
+        fixture.transport.emit(.connected(fixture.remote.id))
+        await fixture.coordinator.setAutomaticDestination(fixture.remote.id)
+        let connected = await eventually {
+            await fixture.coordinator.connectedDeviceIDs().contains(fixture.remote.id)
+        }
+        XCTAssertTrue(connected)
+
+        let representations = [
+            ClipboardRepresentation(kind: .plainText, value: "retry after reconnect")
+        ]
+        fixture.clipboard.emit(ClipboardObservation(
+            changeCount: 1,
+            representations: representations
+        ))
+        let failed = await eventually { fixture.transport.sendAttemptCount == 1 }
+        XCTAssertTrue(failed)
+
+        fixture.transport.emit(.disconnected(fixture.remote.id))
+        let disconnected = await eventually {
+            let connectedDeviceIDs = await fixture.coordinator.connectedDeviceIDs()
+            return !connectedDeviceIDs.contains(fixture.remote.id)
+        }
+        XCTAssertTrue(disconnected)
+        fixture.transport.emit(.connected(fixture.remote.id))
+
+        let retried = await eventually { fixture.transport.sendAttemptCount == 2 }
+        XCTAssertTrue(retried)
+        XCTAssertEqual(fixture.transport.sentEnvelopes.map(\.payload.representations), [
+            representations
+        ])
+        await fixture.coordinator.stop()
+    }
+
+    @MainActor
+    func testCoordinatorClaimsFirstAuthenticatedSenderWhenNoPeerIsActive() async throws {
+        let fixture = ClipboardTestFixture()
+        try await fixture.start()
+        await fixture.coordinator.setSharingEnabled(true)
+        fixture.transport.emit(.connected(fixture.remote.id))
+        fixture.transport.emit(.connected(fixture.otherRemote.id))
+        let connected = await eventually {
+            await fixture.coordinator.connectedDeviceIDs().count == 2
+        }
+        XCTAssertTrue(connected)
+
+        fixture.transport.emit(.update(
+            fixture.remote.id,
+            fixture.envelope(from: fixture.remote, text: "claimed", revision: 1)
+        ))
+
+        let applied = await eventually {
+            fixture.clipboard.appliedPayloads.map(\.plainText) == ["claimed"]
+        }
+        XCTAssertTrue(applied)
+        let activeDestination = await fixture.coordinator.automaticDestinationDeviceID()
+        XCTAssertEqual(activeDestination, fixture.remote.id)
+        await fixture.coordinator.stop()
+    }
+
+    @MainActor
+    func testCoordinatorFollowsLatestAuthenticatedSender() async throws {
+        let fixture = ClipboardTestFixture()
+        try await fixture.start()
+        await fixture.coordinator.setSharingEnabled(true)
+        fixture.transport.emit(.connected(fixture.remote.id))
+        fixture.transport.emit(.connected(fixture.otherRemote.id))
+        await fixture.coordinator.setAutomaticDestination(fixture.remote.id)
+        let connected = await eventually {
+            await fixture.coordinator.connectedDeviceIDs() == [
+                fixture.remote.id,
+                fixture.otherRemote.id,
+            ]
+        }
+        XCTAssertTrue(connected)
+
+        fixture.transport.emit(.update(
+            fixture.otherRemote.id,
+            fixture.envelope(from: fixture.otherRemote, text: "new active", revision: 1)
+        ))
+        let firstApplied = await eventually {
+            fixture.clipboard.appliedPayloads.map(\.plainText) == ["new active"]
+        }
+        XCTAssertTrue(firstApplied)
+        let firstDestination = await fixture.coordinator.automaticDestinationDeviceID()
+        XCTAssertEqual(firstDestination, fixture.otherRemote.id)
+
+        fixture.transport.emit(.update(
+            fixture.remote.id,
+            fixture.envelope(from: fixture.remote, text: "active again", revision: 2)
+        ))
+        let secondApplied = await eventually {
+            fixture.clipboard.appliedPayloads.map(\.plainText) == ["new active", "active again"]
+        }
+        XCTAssertTrue(secondApplied)
+        let secondDestination = await fixture.coordinator.automaticDestinationDeviceID()
+        XCTAssertEqual(secondDestination, fixture.remote.id)
         await fixture.coordinator.stop()
     }
 
@@ -298,6 +445,7 @@ private enum ClipboardTestError: Error { case failed }
 private final class ClipboardTestFixture {
     let local = DeviceDescriptor(id: DeviceID(), name: "Local")
     let remote = DeviceDescriptor(id: DeviceID(), name: "Remote")
+    let otherRemote = DeviceDescriptor(id: DeviceID(), name: "Other Remote")
     let workspace: WorkspaceSnapshot
     let transport = ClipboardTransportSpy()
     let clipboard = ClipboardServiceSpy()
@@ -308,7 +456,7 @@ private final class ClipboardTestFixture {
             id: WorkspaceID(),
             name: "Clipboard",
             localDeviceID: local.id,
-            devices: [local, remote]
+            devices: [local, remote, otherRemote]
         )
         coordinator = ClipboardCoordinator(transport: transport, clipboard: clipboard)
     }
@@ -322,9 +470,17 @@ private final class ClipboardTestFixture {
     }
 
     func envelope(text: String, revision: UInt64 = 1) -> ClipboardEnvelope {
+        envelope(from: remote, text: text, revision: revision)
+    }
+
+    func envelope(
+        from sender: DeviceDescriptor,
+        text: String,
+        revision: UInt64 = 1
+    ) -> ClipboardEnvelope {
         let representations = [ClipboardRepresentation(kind: .plainText, value: text)]
         let payload = ClipboardPayload(
-            originDeviceID: remote.id,
+            originDeviceID: sender.id,
             revision: revision,
             timestamp: Date(timeIntervalSince1970: 10),
             contentHash: ClipboardSyncEngine.contentHash(for: representations),
@@ -332,7 +488,7 @@ private final class ClipboardTestFixture {
         )
         return ClipboardEnvelope(
             workspaceID: workspace.id,
-            senderDeviceID: remote.id,
+            senderDeviceID: sender.id,
             payload: payload
         )
     }

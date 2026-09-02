@@ -11,8 +11,13 @@ public enum FileTransferTransportEvent: Sendable, Equatable {
 public protocol FileTransferTransport: Sendable {
     func start(localDevice: DeviceDescriptor, workspace: WorkspaceSnapshot, key: Data) async throws
     func stop() async
+    func setDesiredPeer(_ deviceID: DeviceID?)
     func events() -> AsyncStream<FileTransferTransportEvent>
     func send(_ envelope: FileTransferEnvelope, to deviceID: DeviceID) async throws
+}
+
+public extension FileTransferTransport {
+    func setDesiredPeer(_ deviceID: DeviceID?) {}
 }
 
 public struct PreparedOutgoingTransfer: Sendable, Equatable {
@@ -41,7 +46,14 @@ public protocol FileSourceProvider: Sendable {
     ) async throws -> Data
 
     func recoverOutgoingTransfers(limits: FileTransferLimits) async throws -> [PreparedOutgoingTransfer]
+    func suspend(_ transferID: TransferID) async
+    func suspendAll() async
     func removeOutgoingTransfer(_ transferID: TransferID) async
+}
+
+public extension FileSourceProvider {
+    func suspend(_ transferID: TransferID) async {}
+    func suspendAll() async {}
 }
 
 public protocol TransferStore: Sendable {
@@ -52,9 +64,16 @@ public protocol TransferStore: Sendable {
     func finalizeTransfer(_ transferID: TransferID) async throws -> [URL]
     func completedURLs(for transferID: TransferID) async throws -> [URL]
     func recoverIncomingTransfers(limits: FileTransferLimits) async throws -> [RecoveredIncomingTransfer]
+    func suspend(_ transferID: TransferID) async
+    func suspendAll() async
     func cancel(_ transferID: TransferID) async
     func remove(_ transferID: TransferID) async
     func removeExpired(now: Date, limits: FileTransferLimits) async
+}
+
+public extension TransferStore {
+    func suspend(_ transferID: TransferID) async {}
+    func suspendAll() async {}
 }
 
 public struct RecoveredIncomingTransfer: Sendable, Equatable {
@@ -72,7 +91,18 @@ public struct RecoveredIncomingTransfer: Sendable, Equatable {
         self.completedURLs = completedURLs
     }
 
-    public var isCompleted: Bool { !completedURLs.isEmpty }
+    /// A multi-file transfer is recoverably complete only when every manifest
+    /// entry has a distinct materialized URL with the expected destination name.
+    /// Treating one finalized entry as a completed transfer can expose a partial
+    /// Finder selection after a crash between entries.
+    public var isCompleted: Bool {
+        guard completedURLs.count == manifest.entries.count else { return false }
+        let expectedNames = Set(manifest.entries.map(\.filename))
+        let actualNames = Set(completedURLs.map(\.lastPathComponent))
+        return expectedNames.count == manifest.entries.count &&
+            actualNames.count == completedURLs.count &&
+            expectedNames == actualNames
+    }
 }
 
 public struct PasteboardFileSelection: Sendable, Equatable {
@@ -85,10 +115,28 @@ public struct PasteboardFileSelection: Sendable, Equatable {
     }
 }
 
+public enum FilePasteboardPublicationError: Error, Equatable, Sendable {
+    case invalidFileSet
+    case writeRejected
+}
+
 @MainActor
 public protocol FilePasteboard: AnyObject, Sendable {
     func events() -> AsyncStream<PasteboardFileSelection>
+
+    /// Legacy fire-and-forget publication entry point retained for existing
+    /// adapters and test doubles. Production coordinators use the checked form.
     func publishFiles(_ urls: [URL], transferID: TransferID)
+
+    /// Publishes receiver-local files and reports validation or platform write
+    /// failures so the sender is never told a failed Finder write succeeded.
+    func publishFilesChecked(_ urls: [URL], transferID: TransferID) throws
+}
+
+public extension FilePasteboard {
+    func publishFilesChecked(_ urls: [URL], transferID: TransferID) throws {
+        publishFiles(urls, transferID: transferID)
+    }
 }
 
 public struct FileTransferSnapshot: Identifiable, Sendable, Equatable {
@@ -144,6 +192,8 @@ public struct FileTransferSnapshot: Identifiable, Sendable, Equatable {
 public enum FileTransferCoordinatorEvent: Sendable, Equatable {
     case snapshot(FileTransferSnapshot)
     case removed(TransferID)
+    case resync([FileTransferSnapshot])
+    case connections(Set<DeviceID>)
 }
 
 public enum FileTransferCoordinatorError: Error, LocalizedError, Equatable, Sendable {

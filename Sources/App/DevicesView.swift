@@ -9,6 +9,7 @@ struct DevicesView: View {
     @State private var pendingRemoval: DeviceDescriptor?
     @State private var addressDevice: DeviceDescriptor?
     @State private var connectionAddress = ""
+    @State private var confirmsNetworkRestart = false
 
     private let capacity = 4
 
@@ -19,7 +20,30 @@ struct DevicesView: View {
                     title: "Devices",
                     detail: "\(model.devices.count) of \(capacity) devices paired in this workspace."
                 ) {
-                    capacityMeter
+                    HStack(spacing: 8) {
+                        Button {
+                            model.refreshConnections()
+                        } label: {
+                            Label("Refresh Connections", systemImage: "arrow.clockwise")
+                        }
+                        .controlSize(.small)
+                        .disabled(!model.hasReconnectableDevices)
+                        .accessibilityIdentifier("refresh-connections")
+
+                        Menu {
+                            Button("Restart Networking…") {
+                                confirmsNetworkRestart = true
+                            }
+                        } label: {
+                            Image(systemName: "ellipsis.circle")
+                        }
+                        .menuStyle(.borderlessButton)
+                        .help("Connection actions")
+                        .accessibilityLabel("Connection actions")
+                        .accessibilityIdentifier("connection-actions")
+
+                        capacityMeter
+                    }
                 }
 
                 LazyVStack(spacing: 10) {
@@ -58,6 +82,18 @@ struct DevicesView: View {
         .sheet(item: $addressDevice) { device in
             connectionAddressSheet(device)
         }
+        .confirmationDialog(
+            "Restart networking?",
+            isPresented: $confirmsNetworkRestart,
+            titleVisibility: .visible
+        ) {
+            Button("Restart Networking", role: .destructive) {
+                model.restartNetworking()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Every device will disconnect briefly. Any active remote-control session will end and input will return to this Mac.")
+        }
     }
 
     /// Local Mac first, then everything else alphabetically — a stable order
@@ -83,12 +119,14 @@ struct DevicesView: View {
 
     private func deviceCard(_ device: DeviceDescriptor) -> some View {
         let isLocal = device.id == model.localDeviceID
-        let isOnline = isLocal || model.connectedDevices.contains(device.id)
+        let isDirectlyConnected = model.connectedDevices.contains(device.id)
+        let isOnline = model.onlineDeviceIDs.contains(device.id)
+        let isViaController = !isLocal && !isDirectlyConnected && isOnline
         let isController = device.id == model.currentControllerID
         let connection = model.connectionSnapshots[device.id]
-        let connectionColor: Color = connection?.health == .degraded || connection?.health == .reconnecting
-            ? .orange
-            : .green
+        let connectionColor = isViaController
+            ? Color.green
+            : connectionColor(isOnline: isOnline, connection: connection)
 
         return HStack(spacing: 14) {
             IconTile(
@@ -113,10 +151,16 @@ struct DevicesView: View {
 
                 HStack(spacing: 6) {
                     Circle()
-                        .fill(isOnline ? connectionColor : Color.secondary.opacity(0.6))
+                        .fill(connectionColor)
                         .frame(width: 7, height: 7)
-                    Text(isOnline ? "Available" : "Offline")
-                    if isOnline, !isLocal, let connection {
+                    Text(isViaController ? "Available" : connectionStatus(
+                        isOnline: isOnline,
+                        connection: connection
+                    ))
+                    if isViaController {
+                        Text("·")
+                        Text("Via controller")
+                    } else if !isLocal, let connection {
                         Text("·")
                         Text(connectionDescription(connection))
                     }
@@ -125,6 +169,13 @@ struct DevicesView: View {
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
+
+                if !isLocal, !isViaController, let detail = connection?.detail, !detail.isEmpty {
+                    Text(detail)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
             }
 
             Spacer(minLength: 12)
@@ -134,6 +185,17 @@ struct DevicesView: View {
             }
 
             if !isLocal {
+                if !isOnline, model.canReconnect(to: device.id) {
+                    Button {
+                        model.reconnect(to: device.id)
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Retry connection now")
+                    .accessibilityLabel("Retry connection to \(device.name)")
+                }
+
                 Button {
                     connectionAddress = device.peerAddresses.first?.host ?? ""
                     addressDevice = device
@@ -224,9 +286,25 @@ struct DevicesView: View {
 
     private func connectionDescription(_ connection: ConnectionSnapshot) -> String {
         var parts = [connection.transport.rawValue.uppercased()]
-        if connection.health == .degraded { parts.append("Slow") }
-        if connection.health == .reconnecting { parts.append("Reconnecting") }
         if let latency = connection.latencyMilliseconds { parts.append("\(latency) ms") }
         return parts.joined(separator: " · ")
+    }
+
+    private func connectionStatus(isOnline: Bool, connection: ConnectionSnapshot?) -> String {
+        switch connection?.health {
+        case .connecting: "Connecting"
+        case .reconnecting: "Reconnecting"
+        case .degraded: isOnline ? "Slow" : "Reconnecting"
+        case .healthy: isOnline ? "Available" : "Connecting"
+        case .disconnected, nil: isOnline ? "Available" : "Offline"
+        }
+    }
+
+    private func connectionColor(isOnline: Bool, connection: ConnectionSnapshot?) -> Color {
+        switch connection?.health {
+        case .connecting, .reconnecting, .degraded: .orange
+        case .healthy where isOnline: .green
+        default: .secondary.opacity(0.6)
+        }
     }
 }

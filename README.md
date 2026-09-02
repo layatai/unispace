@@ -66,6 +66,11 @@ keyboard and pointer focus to the controller. A later reconnect restores device
 availability but never silently reclaims focus; move through the configured edge
 again to start a new session.
 
+UniSpace automatically retries trusted peers over Bonjour and stored Tailscale
+addresses. On **Devices**, use **Refresh Connections** to retry only offline
+devices, or **Retry Now** on one device. **Restart Networking…** is the
+disruptive fallback: it briefly disconnects every peer and ends active control.
+
 File transfers use a separate encrypted TCP content session. A content-session
 interruption pauses and resumes from receiver-verified offsets without terminating
 keyboard or pointer control.
@@ -109,6 +114,9 @@ Compatible versions also share text and links and transfer regular files between
 macOS and Windows. See [Docs/FileTransfer.md](Docs/FileTransfer.md) for file-transfer
 protocol, staging, recovery, and compatibility details.
 
+Connection ownership, continuity isolation, and performance release gates are
+documented in [Docs/performance-regression-remediation.md](Docs/performance-regression-remediation.md).
+
 Directories, macOS packages, symbolic links, reparse points, special files, screen
 sharing, Windows-to-Mac control, an internet relay, Touch ID or power-button forwarding,
 login/UAC secure-desktop control, Secure Input bypasses, and live cross-device drag
@@ -129,6 +137,8 @@ continuation remain intentionally unsupported.
 ./Scripts/test.sh --unit   # deterministic unit, protocol, transport, and simulated E2E tests
 ./Scripts/test.sh --input-smoke # signed TCC/event-tap check; requires both input permissions
 ./Scripts/build.sh --universal
+./Scripts/simulate.sh           # two headless nodes with protocol-latency gates
+./Scripts/simulate.sh shell     # interactive two-node fault-injection shell
 ```
 
 The full and unit modes write an `.xcresult` bundle under `.build/test-results` and enforce the coverage floors in `Config/Coverage.json`. The native input smoke test is opt-in because macOS grants Input Monitoring and Accessibility to the signed test process separately.
@@ -136,6 +146,14 @@ The full and unit modes write an `.xcresult` bundle under `.build/test-results` 
 The generated Xcode project is derived from `project.yml`; edit the YAML and regenerate instead of hand-editing `project.pbxproj`.
 
 The Windows receiver and its tests are maintained in the companion Macifier repository. Cross-platform file-transfer codec fixtures must pass in both Swift and .NET before release.
+
+The simulator launches two isolated CLI node processes over loopback and uses
+named pasteboards, so it does not open windows or modify the general pasteboard.
+It generates an ephemeral workspace key in mode-`0600` temporary configuration
+files and never reads or writes Keychain.
+Its scripted run checks control activation, input latency, clipboard delivery,
+Finder-style file transfer, and restart recovery. Pointer p95 is compared with
+the idle baseline and any latency or delivery stall above 50 ms fails the run.
 
 </details>
 

@@ -104,7 +104,7 @@ struct WorkspaceView: View {
                 VStack(alignment: .leading, spacing: 1) {
                     Text(model.isLocalController ? "Controlling" : "Receiving")
                         .font(.caption.weight(.semibold))
-                    Text("\(model.connectedDevices.count + 1) of \(max(model.devices.count, 1)) devices online")
+                    Text("\(model.onlineDeviceIDs.count) of \(max(model.devices.count, 1)) devices online")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
@@ -169,6 +169,7 @@ struct GeneralView: View {
                 statusHero
                 permissionsSection
                 startupSection
+                diagnosticsSection
                 shortcutTip
                 workspaceSection
             }
@@ -323,6 +324,31 @@ struct GeneralView: View {
             Spacer(minLength: 0)
         }
         .card()
+    }
+
+    private var diagnosticsSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            sectionLabel("Troubleshooting", systemImage: "stethoscope")
+            Toggle(isOn: Binding(
+                get: { model.diagnosticLoggingEnabled },
+                set: { model.setDiagnosticLogging($0) }
+            )) {
+                HStack(spacing: 12) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Diagnostic logging")
+                            .font(.body.weight(.medium))
+                        Text("Records connection and control state only. Log: \(model.diagnosticLogURL.path)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 0)
+                }
+            }
+            .toggleStyle(.switch)
+            .card()
+            .accessibilityIdentifier("diagnostic-logging")
+        }
     }
 
     private var workspaceSection: some View {

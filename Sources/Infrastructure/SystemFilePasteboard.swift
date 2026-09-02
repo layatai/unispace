@@ -11,6 +11,7 @@ public final class SystemFilePasteboard: FilePasteboard {
 
     private let pasteboard: NSPasteboard
     private let pollingInterval: Duration
+    private let fileManager: FileManager
     private let stream: AsyncStream<PasteboardFileSelection>
     private let continuation: AsyncStream<PasteboardFileSelection>.Continuation
     private var monitorTask: Task<Void, Never>?
@@ -18,10 +19,12 @@ public final class SystemFilePasteboard: FilePasteboard {
 
     public init(
         pasteboard: NSPasteboard = .general,
-        pollingInterval: Duration = .milliseconds(350)
+        pollingInterval: Duration = .milliseconds(350),
+        fileManager: FileManager = .default
     ) {
         self.pasteboard = pasteboard
         self.pollingInterval = pollingInterval
+        self.fileManager = fileManager
         lastObservedChangeCount = pasteboard.changeCount
         var captured: AsyncStream<PasteboardFileSelection>.Continuation?
         stream = AsyncStream { captured = $0 }
@@ -39,20 +42,39 @@ public final class SystemFilePasteboard: FilePasteboard {
     }
 
     public func publishFiles(_ urls: [URL], transferID: TransferID) {
-        guard !urls.isEmpty else { return }
-        let items: [NSPasteboardItem] = urls.map { url in
+        try? publishFilesChecked(urls, transferID: transferID)
+    }
+
+    public func publishFilesChecked(_ urls: [URL], transferID: TransferID) throws {
+        guard let urls = validatedLocalFiles(urls) else {
+            throw FilePasteboardPublicationError.invalidFileSet
+        }
+        let items: [NSPasteboardItem] = try urls.map { url in
             let item = NSPasteboardItem()
-            item.setString(url.absoluteString, forType: .fileURL)
-            item.setString(transferID.rawValue.uuidString, forType: Self.originType)
+            guard item.setString(url.absoluteString, forType: .fileURL),
+                  item.setString(
+                      transferID.rawValue.uuidString,
+                      forType: Self.originType
+                  ) else {
+                throw FilePasteboardPublicationError.writeRejected
+            }
             return item
         }
+
         pasteboard.clearContents()
-        pasteboard.writeObjects(items)
+        guard pasteboard.writeObjects(items) else {
+            throw FilePasteboardPublicationError.writeRejected
+        }
         lastObservedChangeCount = pasteboard.changeCount
+    }
+
+    func pollNowForTesting() {
+        poll()
     }
 
     private func startMonitoringIfNeeded() {
         guard monitorTask == nil else { return }
+        lastObservedChangeCount = pasteboard.changeCount
         monitorTask = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
@@ -66,23 +88,60 @@ public final class SystemFilePasteboard: FilePasteboard {
     private func poll() {
         let changeCount = pasteboard.changeCount
         guard changeCount != lastObservedChangeCount else { return }
-        lastObservedChangeCount = changeCount
         let items = pasteboard.pasteboardItems ?? []
-        guard !items.contains(where: { $0.string(forType: Self.originType) != nil }) else {
+
+        // A completed incoming transfer writes its own marker. Consuming it as a
+        // new Finder copy would immediately offer the same files back to the peer.
+        if items.contains(where: { $0.string(forType: Self.originType) != nil }) {
+            lastObservedChangeCount = changeCount
+            return
+        }
+
+        // Do not interpret a plain-text `file://` string as a Finder file copy.
+        guard items.contains(where: { $0.types.contains(.fileURL) }) else {
+            lastObservedChangeCount = changeCount
             return
         }
 
         var urls: [URL] = []
         var seen = Set<URL>()
         for item in items {
-            guard let value = item.string(forType: .fileURL),
+            guard item.types.contains(.fileURL),
+                  let value = item.string(forType: .fileURL),
                   let url = URL(string: value),
                   url.isFileURL else { continue }
             let normalized = url.standardizedFileURL
             guard seen.insert(normalized).inserted else { continue }
             urls.append(normalized)
         }
+
+        lastObservedChangeCount = changeCount
         guard !urls.isEmpty else { return }
         continuation.yield(PasteboardFileSelection(changeCount: changeCount, urls: urls))
     }
+
+    /// Only publish a complete set of existing regular files. This keeps Finder
+    /// from receiving a partially valid selection when one staged URL was removed
+    /// or replaced between transfer verification and pasteboard publication.
+    private func validatedLocalFiles(_ urls: [URL]) -> [URL]? {
+        guard !urls.isEmpty else { return nil }
+        var normalized: [URL] = []
+        var seen = Set<URL>()
+
+        for candidate in urls {
+            guard candidate.isFileURL else { return nil }
+            let url = candidate.standardizedFileURL
+            guard seen.insert(url).inserted else { continue }
+            guard fileManager.fileExists(atPath: url.path),
+                  let values = try? url.resourceValues(forKeys: [
+                      .isRegularFileKey,
+                      .isSymbolicLinkKey,
+                  ]),
+                  values.isRegularFile == true,
+                  values.isSymbolicLink != true else { return nil }
+            normalized.append(url)
+        }
+        return normalized.isEmpty ? nil : normalized
+    }
+
 }

@@ -8,6 +8,34 @@ import UniSpaceApplication
 import UniSpaceDomain
 
 final class InfrastructureTests: XCTestCase {
+    func testDiagnosticLogRecordsOnlyWhileEnabled() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let suite = "UniSpaceDiagnosticLogTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer {
+            defaults.removePersistentDomain(forName: suite)
+            try? FileManager.default.removeItem(at: root)
+        }
+        let log = DiagnosticLog(rootURL: root, defaults: defaults)
+
+        log.record("disabled message")
+        log.flush()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: log.fileURL.path))
+
+        log.setEnabled(true)
+        log.record("session started")
+        log.flush()
+        var contents = try String(contentsOf: log.fileURL, encoding: .utf8)
+        XCTAssertTrue(contents.contains("Diagnostic logging enabled"))
+        XCTAssertTrue(contents.contains("session started"))
+
+        log.setEnabled(false)
+        log.record("hidden message")
+        log.flush()
+        contents = try String(contentsOf: log.fileURL, encoding: .utf8)
+        XCTAssertFalse(contents.contains("hidden message"))
+    }
+
     func testCursorSuppressionKeepsItsFirstAnchorUntilReleased() {
         let firstAnchor = CGPoint(x: 1512, y: 500)
         var state = CursorSuppressionState()
@@ -478,6 +506,8 @@ final class InfrastructureTests: XCTestCase {
         let clientConnected = expectation(description: "client connected directly")
         let capabilitiesReceived = expectation(description: "peer capabilities received")
         let controlReceived = expectation(description: "control transferred")
+        let serverDisconnected = expectation(description: "passive server reports client offline")
+        let serverHealth = ConnectionHealthRecorder()
         let serverEvents = Task {
             for await event in server.events() {
                 switch event {
@@ -492,6 +522,9 @@ final class InfrastructureTests: XCTestCase {
                     default:
                         break
                     }
+                case .health(let id, let snapshot) where id == clientID:
+                    serverHealth.append(snapshot.health)
+                    if snapshot.health == .disconnected { serverDisconnected.fulfill() }
                 default:
                     break
                 }
@@ -503,6 +536,7 @@ final class InfrastructureTests: XCTestCase {
             }
         }
         try await client.start(localDevice: clientDevice, workspace: clientWorkspace, key: key)
+        client.updateConnectionPolicy(.init(outboundPeerIDs: [serverID]))
         await fulfillment(of: [serverConnected, clientConnected, capabilitiesReceived], timeout: 8)
         try await client.send(
             ControlEnvelope(message: .controllerClaim(.init(generation: 1, controllerID: clientID))),
@@ -510,6 +544,9 @@ final class InfrastructureTests: XCTestCase {
         )
         await fulfillment(of: [controlReceived], timeout: 3)
         await client.stop()
+        await fulfillment(of: [serverDisconnected], timeout: 3)
+        XCTAssertTrue(serverHealth.values.contains(.disconnected))
+        XCTAssertFalse(serverHealth.values.contains(.reconnecting))
         await server.stop()
         serverEvents.cancel()
         clientEvents.cancel()
@@ -597,6 +634,7 @@ final class InfrastructureTests: XCTestCase {
         }
 
         try await client.start(localDevice: clientDevice, workspace: clientWorkspace, key: key)
+        client.updateConnectionPolicy(.init(outboundPeerIDs: [serverID]))
         await fulfillment(of: [serverConnected, clientConnected], timeout: 8)
         try await client.send(
             ControlEnvelope(message: .controllerClaim(.init(generation: 1, controllerID: clientID))),
@@ -625,6 +663,7 @@ final class InfrastructureTests: XCTestCase {
         )
         let server = QUICRealtimeTransport(listenPort: .any, directPort: .any, enableBonjour: false)
         try server.start(localDevice: serverDevice, workspace: serverWorkspace, key: key)
+        server.setDesiredPeer(clientID, shouldDial: false)
         let port = try await waitForRealtimePort(of: server)
 
         let routedServer = DeviceDescriptor(
@@ -660,6 +699,7 @@ final class InfrastructureTests: XCTestCase {
             if source == clientID, incoming == frame { received.fulfill() }
         }
         try client.start(localDevice: clientDevice, workspace: clientWorkspace, key: key)
+        client.setDesiredPeer(serverID, shouldDial: true)
 
         var sent = false
         for _ in 0..<100 where !sent {
@@ -729,6 +769,7 @@ final class InfrastructureTests: XCTestCase {
             }
         }
         try await client.start(localDevice: clientDevice, workspace: clientWorkspace, key: key)
+        client.updateConnectionPolicy(.init(outboundPeerIDs: [serverID]))
         await fulfillment(of: [firstConnection], timeout: 8)
         await firstServer.stop()
         await fulfillment(of: [disconnected], timeout: 5)
@@ -809,6 +850,7 @@ final class InfrastructureTests: XCTestCase {
         }
 
         try await client.start(localDevice: clientDevice, workspace: clientWorkspace, key: key)
+        client.updateConnectionPolicy(.init(outboundPeerIDs: [serverID]))
         await fulfillment(of: [firstConnection], timeout: 8)
         await firstServer.stop()
         await fulfillment(of: [disconnected], timeout: 5)
@@ -827,6 +869,152 @@ final class InfrastructureTests: XCTestCase {
         await client.stop()
         await replacementServer.stop()
         clientEvents.cancel()
+    }
+
+    func testTrustedTransportRecognizesBonjourOnlyReconnectRoute() {
+        let peer = DeviceDescriptor(id: DeviceID(), name: "Bonjour Peer")
+        let endpoint = NWEndpoint.service(
+            name: "Bonjour Peer",
+            type: NetworkPeerTransport.serviceType,
+            domain: "local.",
+            interface: nil
+        )
+
+        XCTAssertTrue(NetworkPeerTransport.hasReconnectRoute(
+            peer: peer,
+            discoveredPeer: nil,
+            tcpEndpoint: endpoint,
+            quicEndpoint: nil
+        ))
+        XCTAssertFalse(NetworkPeerTransport.hasReconnectRoute(
+            peer: peer,
+            discoveredPeer: nil,
+            tcpEndpoint: nil,
+            quicEndpoint: nil
+        ))
+    }
+
+    func testManualReconnectCancelsPendingAttemptAndRetriesImmediately() async throws {
+        let queue = DispatchQueue(label: "UniSpaceInfrastructureTests.ManualReconnect")
+        let acceptedConnections = NWConnectionRetainer()
+        let listener = try NWListener(using: NetworkPeerTransport.makeParameters(), on: .any)
+        let listenerReady = expectation(description: "unresponsive peer listening")
+        listener.stateUpdateHandler = { state in
+            if case .ready = state { listenerReady.fulfill() }
+        }
+        listener.newConnectionHandler = { connection in
+            acceptedConnections.append(connection)
+            connection.start(queue: queue)
+        }
+        listener.start(queue: queue)
+        await fulfillment(of: [listenerReady], timeout: 3)
+        let port = try XCTUnwrap(listener.port)
+
+        let workspaceID = WorkspaceID()
+        let localID = DeviceID()
+        let peerID = DeviceID()
+        let localDevice = DeviceDescriptor(id: localID, name: "Local")
+        let peerDevice = DeviceDescriptor(
+            id: peerID,
+            name: "Pending Peer",
+            peerAddresses: [try PeerAddress("127.0.0.1")]
+        )
+        let workspace = WorkspaceSnapshot(
+            id: workspaceID,
+            name: "Manual reconnect",
+            localDeviceID: localID,
+            devices: [localDevice, peerDevice]
+        )
+        let transport = NetworkPeerTransport(
+            listenPort: .any,
+            directPort: port,
+            enableBonjour: false,
+            enableQUIC: false,
+            authenticationTimeout: 5
+        )
+        let firstAttempt = expectation(description: "initial connection attempt")
+        let immediateRetry = expectation(description: "manual retry starts immediately")
+        let tracker = ConnectionExpectationTracker()
+        let events = Task {
+            for await event in transport.events() {
+                if case let .health(id, snapshot) = event,
+                   id == peerID, snapshot.health == .connecting {
+                    if tracker.recordConnection() == 1 { firstAttempt.fulfill() }
+                    else { immediateRetry.fulfill() }
+                }
+            }
+        }
+
+        try await transport.start(
+            localDevice: localDevice,
+            workspace: workspace,
+            key: PairingCryptoSession.randomData(count: 32)
+        )
+        transport.updateConnectionPolicy(.init(outboundPeerIDs: [peerID]))
+        await fulfillment(of: [firstAttempt], timeout: 2)
+        transport.reconnect(to: peerID)
+        await fulfillment(of: [immediateRetry], timeout: 1)
+
+        await transport.stop()
+        listener.cancel()
+        acceptedConnections.cancelAll()
+        events.cancel()
+    }
+
+    func testTrustedTransportWaitsForOutboundOwnershipBeforeDialing() async throws {
+        let queue = DispatchQueue(label: "UniSpaceInfrastructureTests.Ownership")
+        let acceptedConnections = NWConnectionRetainer()
+        let listener = try NWListener(using: NetworkPeerTransport.makeParameters(), on: .any)
+        let listenerReady = expectation(description: "ownership listener ready")
+        listener.stateUpdateHandler = { state in
+            if case .ready = state { listenerReady.fulfill() }
+        }
+        listener.newConnectionHandler = { connection in
+            acceptedConnections.append(connection)
+            connection.start(queue: queue)
+        }
+        listener.start(queue: queue)
+        await fulfillment(of: [listenerReady], timeout: 3)
+        let port = try XCTUnwrap(listener.port)
+
+        let localID = DeviceID()
+        let peerID = DeviceID()
+        let local = DeviceDescriptor(id: localID, name: "Passive")
+        let peer = DeviceDescriptor(
+            id: peerID,
+            name: "Owned peer",
+            peerAddresses: [try PeerAddress("127.0.0.1")]
+        )
+        let workspace = WorkspaceSnapshot(
+            id: WorkspaceID(),
+            name: "Ownership",
+            localDeviceID: localID,
+            devices: [local, peer]
+        )
+        let transport = NetworkPeerTransport(
+            listenPort: .any,
+            directPort: port,
+            enableBonjour: false,
+            enableQUIC: false,
+            enableRealtime: false
+        )
+        try await transport.start(
+            localDevice: local,
+            workspace: workspace,
+            key: PairingCryptoSession.randomData(count: 32)
+        )
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(acceptedConnections.count, 0)
+
+        transport.updateConnectionPolicy(.init(outboundPeerIDs: [peerID]))
+        for _ in 0..<100 where acceptedConnections.count == 0 {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(acceptedConnections.count, 1)
+
+        await transport.stop()
+        listener.cancel()
+        acceptedConnections.cancelAll()
     }
 
     func testTrustedTransportRetriesWhenReachablePeerNeverAuthenticates() async throws {
@@ -870,11 +1058,16 @@ final class InfrastructureTests: XCTestCase {
         let retried = expectation(description: "connection retried after authentication timeout")
         retried.expectedFulfillmentCount = 2
         retried.assertForOverFulfill = false
+        let reconnecting = expectation(description: "owned route reports reconnecting")
+        reconnecting.assertForOverFulfill = false
         let events = Task {
             for await event in transport.events() {
                 if case let .health(id, snapshot) = event,
                    id == peerID, snapshot.health == .connecting {
                     retried.fulfill()
+                } else if case let .health(id, snapshot) = event,
+                          id == peerID, snapshot.health == .reconnecting {
+                    reconnecting.fulfill()
                 }
             }
         }
@@ -884,7 +1077,8 @@ final class InfrastructureTests: XCTestCase {
             workspace: workspace,
             key: PairingCryptoSession.randomData(count: 32)
         )
-        await fulfillment(of: [retried], timeout: 3)
+        transport.updateConnectionPolicy(.init(outboundPeerIDs: [peerID]))
+        await fulfillment(of: [retried, reconnecting], timeout: 3)
 
         await transport.stop()
         listener.cancel()
@@ -1427,7 +1621,7 @@ final class InfrastructureTests: XCTestCase {
         await transport.stop()
     }
 
-    func testCrossPlatformPointerLaneAuthenticatesAndDeliversLatestState() async throws {
+    func testAuthenticatedPointerLaneReplacesRestartedWindowsRoute() async throws {
         let workspaceID = WorkspaceID()
         let key = PairingCryptoSession.randomData(count: 32)
         let macID = DeviceID()
@@ -1445,10 +1639,10 @@ final class InfrastructureTests: XCTestCase {
             localDeviceID: macID,
             devices: [mac, windows]
         )
-        let transport = CrossPlatformPointerTransport(listenPort: .any)
+        let transport = AuthenticatedPointerTransport(listenPort: .any)
         try transport.start(localDevice: mac, workspace: workspace, key: key)
         defer { transport.stop() }
-        let pointerPort = try await waitForCrossPlatformPointerPort(of: transport)
+        let pointerPort = try await waitForAuthenticatedPointerPort(of: transport)
 
         let rawClient = NWConnection(
             host: "127.0.0.1",
@@ -1510,7 +1704,169 @@ final class InfrastructureTests: XCTestCase {
         let sentToUnknownDevice = try await transport.send(frame, to: DeviceID())
         XCTAssertFalse(sentToUnknownDevice)
         await fulfillment(of: [received], timeout: 3)
+
+        let restartedRawClient = NWConnection(
+            host: "127.0.0.1",
+            port: pointerPort,
+            using: .udp
+        )
+        let restartedClient = SecurePeerConnection(
+            connection: restartedRawClient,
+            localDeviceID: windowsID,
+            workspaceID: workspaceID,
+            workspaceKey: key,
+            expectedDeviceID: macID,
+            isOutbound: true,
+            transportKind: .tcp,
+            isDatagram: true,
+            securityProfile: .pointerV2
+        )
+        defer { restartedClient.cancel() }
+        let restartedAuthenticated = expectation(description: "Restarted Windows pointer lane authenticated")
+        let restartedReceived = expectation(description: "Restarted Windows pointer lane received state")
+        restartedClient.authenticatedHandler = { deviceID in
+            XCTAssertEqual(deviceID, macID)
+            restartedAuthenticated.fulfill()
+        }
+        let restartedFrame = PortableRealtimePointerFrame(
+            workspaceID: frame.workspaceID,
+            sessionID: frame.sessionID,
+            controllerID: frame.controllerID,
+            epoch: frame.epoch,
+            generation: frame.generation + 1,
+            sequence: 0,
+            deltaX: 1,
+            deltaY: 2,
+            cumulativeDeltaX: 1,
+            cumulativeDeltaY: 2,
+            absoluteX: frame.absoluteX,
+            absoluteY: frame.absoluteY,
+            timestampNanos: frame.timestampNanos + 1
+        )
+        restartedClient.frameHandler = { kind, payload in
+            guard kind == .realtimePointerBinaryV2,
+                  let decoded = try? WireFrameCodec.decodePortableRealtimePointer(payload),
+                  decoded == restartedFrame else { return }
+            restartedReceived.fulfill()
+        }
+        restartedRawClient.start(queue: DispatchQueue(label: "UniSpaceInfrastructureTests.RestartedWindowsPointer"))
+        await fulfillment(of: [restartedAuthenticated], timeout: 3)
+
+        sent = false
+        for _ in 0..<50 where !sent {
+            sent = try await transport.send(restartedFrame, to: windowsID)
+            if !sent { try await Task.sleep(for: .milliseconds(20)) }
+        }
+        XCTAssertTrue(sent)
+        await fulfillment(of: [restartedReceived], timeout: 3)
         transport.stop()
+    }
+
+    func testAuthenticatedPointerLaneLetsMacControllerDialReceiver() async throws {
+        let workspaceID = WorkspaceID()
+        let key = PairingCryptoSession.randomData(count: 32)
+        let controllerID = DeviceID()
+        let receiverID = DeviceID()
+        let controller = DeviceDescriptor(
+            id: controllerID,
+            name: "Controller",
+            capabilities: [.udpPointerV2],
+            platform: .macOS
+        )
+        let receiver = DeviceDescriptor(
+            id: receiverID,
+            name: "Receiver",
+            capabilities: [.udpPointerV2],
+            platform: .macOS
+        )
+        let receiverWorkspace = WorkspaceSnapshot(
+            id: workspaceID,
+            name: "Pointer",
+            localDeviceID: receiverID,
+            devices: [controller, receiver]
+        )
+        let receiverTransport = AuthenticatedPointerTransport(
+            listenPort: .any,
+            directPort: .any
+        )
+        try receiverTransport.start(localDevice: receiver, workspace: receiverWorkspace, key: key)
+        defer { receiverTransport.stop() }
+        let receiverPort = try await waitForAuthenticatedPointerPort(of: receiverTransport)
+
+        let routedReceiver = DeviceDescriptor(
+            id: receiverID,
+            name: receiver.name,
+            peerAddresses: [try PeerAddress("127.0.0.1")],
+            capabilities: [.udpPointerV2],
+            platform: .macOS
+        )
+        let controllerWorkspace = WorkspaceSnapshot(
+            id: workspaceID,
+            name: "Pointer",
+            localDeviceID: controllerID,
+            devices: [controller, routedReceiver]
+        )
+        let controllerTransport = AuthenticatedPointerTransport(
+            listenPort: .any,
+            directPort: receiverPort
+        )
+        defer { controllerTransport.stop() }
+        let received = expectation(description: "Mac receiver got pointer state")
+        let frame = PortableRealtimePointerFrame(
+            workspaceID: workspaceID,
+            sessionID: SessionID(),
+            controllerID: controllerID,
+            epoch: .init(generation: 1, controllerID: controllerID),
+            generation: 2,
+            sequence: 3,
+            deltaX: 4,
+            deltaY: -5,
+            cumulativeDeltaX: 14,
+            cumulativeDeltaY: -15,
+            absoluteX: 640,
+            absoluteY: 480,
+            timestampNanos: 6
+        )
+        try controllerTransport.start(
+            localDevice: controller,
+            workspace: controllerWorkspace,
+            key: key
+        )
+        controllerTransport.setDesiredPeer(receiverID, shouldDial: true)
+
+        var prewarmed = false
+        for _ in 0..<100 where !prewarmed {
+            prewarmed = try await controllerTransport.send(frame, to: receiverID)
+            if !prewarmed { try await Task.sleep(for: .milliseconds(20)) }
+        }
+        XCTAssertTrue(prewarmed, "The receiver rejected UDP that overtook activation")
+        receiverTransport.setDesiredPeer(controllerID, shouldDial: false)
+        let activeFrame = PortableRealtimePointerFrame(
+            workspaceID: frame.workspaceID,
+            sessionID: frame.sessionID,
+            controllerID: frame.controllerID,
+            epoch: frame.epoch,
+            generation: frame.generation,
+            sequence: frame.sequence + 1,
+            deltaX: frame.deltaX,
+            deltaY: frame.deltaY,
+            cumulativeDeltaX: frame.cumulativeDeltaX,
+            cumulativeDeltaY: frame.cumulativeDeltaY,
+            absoluteX: frame.absoluteX,
+            absoluteY: frame.absoluteY,
+            timestampNanos: frame.timestampNanos
+        )
+        receiverTransport.frameHandler = { source, incoming in
+            if source == controllerID, incoming == activeFrame { received.fulfill() }
+        }
+
+        var sent = false
+        for _ in 0..<100 where !sent {
+            sent = try await controllerTransport.send(activeFrame, to: receiverID)
+            if !sent { try await Task.sleep(for: .milliseconds(20)) }
+        }
+        XCTAssertTrue(sent, "The controller-owned UDP lane did not authenticate")
+        await fulfillment(of: [received], timeout: 3)
     }
 
     private func display(id: DisplayID, deviceID: DeviceID) -> DisplayDescriptor {
@@ -1562,6 +1918,17 @@ private final class StringRecorder: @unchecked Sendable {
     }
 }
 
+private final class ConnectionHealthRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storedValues: [ConnectionHealth] = []
+
+    var values: [ConnectionHealth] { lock.withLock { storedValues } }
+
+    func append(_ value: ConnectionHealth) {
+        lock.withLock { storedValues.append(value) }
+    }
+}
+
 private func waitForPort(of transport: NetworkPeerTransport) async throws -> NWEndpoint.Port {
     for _ in 0..<100 {
         if let port = transport.activeControlPort { return port }
@@ -1586,14 +1953,14 @@ private func waitForRealtimePort(of transport: QUICRealtimeTransport) async thro
     throw XCTSkip("Realtime QUIC listener did not become ready")
 }
 
-private func waitForCrossPlatformPointerPort(
-    of transport: CrossPlatformPointerTransport
+private func waitForAuthenticatedPointerPort(
+    of transport: AuthenticatedPointerTransport
 ) async throws -> NWEndpoint.Port {
     for _ in 0..<100 {
         if let port = transport.activePort { return port }
         try await Task.sleep(for: .milliseconds(20))
     }
-    throw InfrastructureTestFailure.listenerNotReady("Windows pointer listener")
+    throw InfrastructureTestFailure.listenerNotReady("Authenticated pointer listener")
 }
 
 private enum InfrastructureTestFailure: Error {
@@ -1640,6 +2007,8 @@ private final class SecureConnectionRetainer: @unchecked Sendable {
 private final class NWConnectionRetainer: @unchecked Sendable {
     private let lock = NSLock()
     private var connections: [NWConnection] = []
+
+    var count: Int { lock.withLock { connections.count } }
 
     func append(_ connection: NWConnection) {
         lock.withLock { connections.append(connection) }
