@@ -442,13 +442,13 @@ pub fn decode_realtime_pointer(payload: &[u8]) -> Result<(WireKind, RealtimePoin
     };
     let generation = r.u64()?;
     let sequence = r.u64()?;
+    let timestamp_nanos = r.u64()?;
     let dx = r.f64()?;
     let dy = r.f64()?;
     let cumulative_x = r.f64()?;
     let cumulative_y = r.f64()?;
     let absolute_x = r.f64()?;
     let absolute_y = r.f64()?;
-    let timestamp_nanos = r.u64()?;
     r.end()?;
     Ok((
         kind,
@@ -481,6 +481,7 @@ pub fn encode_realtime_pointer(value: &RealtimePointerFrame) -> Result<Vec<u8>> 
     out.extend_from_slice(value.epoch.controller_id.as_bytes());
     out.extend_from_slice(&value.generation.to_be_bytes());
     out.extend_from_slice(&value.sequence.to_be_bytes());
+    out.extend_from_slice(&value.timestamp_nanos.to_be_bytes());
     for field in [
         value.dx,
         value.dy,
@@ -491,7 +492,6 @@ pub fn encode_realtime_pointer(value: &RealtimePointerFrame) -> Result<Vec<u8>> 
     ] {
         out.extend_from_slice(&field.to_bits().to_be_bytes());
     }
-    out.extend_from_slice(&value.timestamp_nanos.to_be_bytes());
     frame(WireKind::RealtimePointerBinaryV2, &out)
 }
 
@@ -516,7 +516,7 @@ mod tests {
     }
 
     #[test]
-    fn realtime_pointer_round_trips() -> Result<()> {
+    fn realtime_pointer_matches_swift_field_order_and_round_trips() -> Result<()> {
         let value = RealtimePointerFrame {
             workspace_id: Uuid::new_v4(),
             session_id: Uuid::new_v4(),
@@ -535,7 +535,18 @@ mod tests {
             absolute_y: 300.0,
             timestamp_nanos: 123_456,
         };
-        let (kind, decoded) = decode_realtime_pointer(&encode_realtime_pointer(&value)?).unwrap();
+        let encoded = encode_realtime_pointer(&value)?;
+        let (_, payload) = decode_frame(&encoded)?;
+        let timestamp_offset = 2 + 16 * 3 + 8 + 16 + 8 + 8;
+        assert_eq!(
+            &payload[timestamp_offset..timestamp_offset + 8],
+            &value.timestamp_nanos.to_be_bytes()
+        );
+        assert_eq!(
+            &payload[timestamp_offset + 8..timestamp_offset + 16],
+            &value.dx.to_bits().to_be_bytes()
+        );
+        let (kind, decoded) = decode_realtime_pointer(&encoded).unwrap();
         assert_eq!(kind, WireKind::RealtimePointerBinaryV2);
         assert_eq!(decoded, value);
         Ok(())
