@@ -36,6 +36,11 @@ enum Instance {
 }
 
 #[tauri::command]
+fn ping() -> String {
+    format!("pong {}", std::process::id())
+}
+
+#[tauri::command]
 async fn state() -> observe::ReceiverSnapshot {
     match tokio::time::timeout(Duration::from_millis(150), read_live_snapshot()).await {
         Ok(Ok(snapshot)) => snapshot,
@@ -409,6 +414,7 @@ fn main() -> Result<()> {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            ping,
             state,
             begin_pairing,
             confirm_pairing,

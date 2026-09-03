@@ -1008,9 +1008,17 @@
     listenFn("receiver-status", (event) => apply(event.payload));
     async function refresh() {
       try {
-        apply(await invoke("state"));
+        const pong = await Promise.race([
+          invoke("ping"),
+          new Promise((_, reject) => setTimeout(() => reject(new Error("IPC timeout")), 1500)),
+        ]);
+        apply(await Promise.race([
+          invoke("state"),
+          new Promise((_, reject) => setTimeout(() => reject(new Error("state IPC timeout")), 1500)),
+        ]));
+        $("pair-error").textContent = `IPC ok (${pong})`;
       } catch (error) {
-        $("pair-error").textContent = String(error);
+        $("pair-error").textContent = `IPC: ${error}`;
       }
     }
     refresh();
