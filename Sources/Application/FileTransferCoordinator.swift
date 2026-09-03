@@ -786,9 +786,8 @@ public actor FileTransferCoordinator {
         for record in matching {
             switch record.direction {
             case .outgoing:
-                if record.state == .awaitingAcceptance || record.state == .offered {
-                    try? await send(.offer(TransferOffer(manifest: record.manifest)), to: peer)
-                } else {
+                try? await send(.offer(TransferOffer(manifest: record.manifest)), to: peer)
+                if record.state != .awaitingAcceptance && record.state != .offered {
                     try? await send(
                         .resumeQuery(TransferResumeQuery(transferID: record.manifest.transferID)),
                         to: peer

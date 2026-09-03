@@ -219,8 +219,7 @@ impl UinputSink {
     }
     fn wheel(&mut self, dx: f64, dy: f64) -> Result<()> {
         let mut events = Vec::new();
-        let x = dx.round() as i32;
-        let y = (-dy).round() as i32;
+        let (x, y) = wheel_axes(dx, dy);
         if x != 0 {
             events.push(LinuxEvent::new(
                 EventType::RELATIVE.0,
@@ -426,6 +425,13 @@ fn hid_to_linux(usage: u16) -> Option<KeyCode> {
     Some(KeyCode::new(code))
 }
 
+/// Portable scroll signs match the controller capture and the Windows injector.
+/// macOS Natural Scrolling is already applied in the CGEvent point deltas; do
+/// not invert again on Linux.
+fn wheel_axes(dx: f64, dy: f64) -> (i32, i32) {
+    (dx.round() as i32, dy.round() as i32)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -433,5 +439,11 @@ mod tests {
     fn maps_hid_keys() {
         assert_eq!(hid_to_linux(0x04), Some(KeyCode::KEY_A));
         assert_eq!(hid_to_linux(0xe3), Some(KeyCode::KEY_LEFTMETA));
+    }
+
+    #[test]
+    fn wheel_axes_keep_controller_scroll_signs() {
+        assert_eq!(wheel_axes(2.0, -3.0), (2, -3));
+        assert_eq!(wheel_axes(-1.4, 0.6), (-1, 1));
     }
 }

@@ -33,6 +33,74 @@ enum Instance {
     AlreadyRunning,
 }
 
+/// What the window needs to know to dress like the desktop it runs on.
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DesktopInfo {
+    /// "gnome" (also the fallback for unknown desktops) or "kde".
+    id: String,
+    /// The desktop's colour-scheme preference, or None when it has none and
+    /// the webview's own `prefers-color-scheme` should decide.
+    dark: Option<bool>,
+}
+
+fn desktop_id() -> String {
+    let raw = std::env::var("XDG_CURRENT_DESKTOP")
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if raw.contains("kde") || raw.contains("plasma") || raw.contains("lxqt") {
+        "kde".into()
+    } else {
+        "gnome".into()
+    }
+}
+
+/// Ask the desktop whether it is in dark mode. Both probes are cheap, and a
+/// missing tool or an unset key simply means "no preference".
+fn desktop_prefers_dark(id: &str) -> Option<bool> {
+    if id == "kde" {
+        for tool in ["kreadconfig6", "kreadconfig5"] {
+            let Ok(output) = Command::new(tool)
+                .args(["--file", "kdeglobals", "--group", "General", "--key", "ColorScheme"])
+                .output()
+            else {
+                continue;
+            };
+            if !output.status.success() {
+                continue;
+            }
+            let scheme = String::from_utf8_lossy(&output.stdout).to_ascii_lowercase();
+            if !scheme.trim().is_empty() {
+                return Some(scheme.contains("dark"));
+            }
+        }
+        return None;
+    }
+    let output = Command::new("gsettings")
+        .args(["get", "org.gnome.desktop.interface", "color-scheme"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let scheme = String::from_utf8_lossy(&output.stdout).to_ascii_lowercase();
+    if scheme.contains("prefer-dark") {
+        Some(true)
+    } else if scheme.contains("prefer-light") {
+        Some(false)
+    } else {
+        // "default" means the user has expressed no preference.
+        None
+    }
+}
+
+#[tauri::command]
+fn desktop() -> DesktopInfo {
+    let id = desktop_id();
+    let dark = desktop_prefers_dark(&id);
+    DesktopInfo { id, dark }
+}
+
 #[tauri::command]
 fn ping() -> String {
     format!("pong {}", std::process::id())
@@ -47,7 +115,10 @@ fn local_state() -> observe::ReceiverSnapshot {
 
 #[tauri::command]
 async fn state() -> observe::ReceiverSnapshot {
-    match tokio::time::timeout(Duration::from_millis(150), read_live_snapshot()).await {
+    // Generous enough that an ordinarily busy socket does not produce a
+    // fallback snapshot: a fallback reports "disconnected" with no transfers,
+    // so a spurious one repaints the whole window.
+    match tokio::time::timeout(Duration::from_millis(750), read_live_snapshot()).await {
         Ok(Ok(snapshot)) => snapshot,
         Ok(Err(error)) => observe::fallback_snapshot(Some(format!(
             "The receiver service is not reporting status ({error}); showing its last known state."
@@ -318,6 +389,8 @@ fn set_close_only_layout(widget: &gtk::Widget) {
 fn attach_wayland_chrome_heal(window: &tauri::WebviewWindow) {
     #[cfg(target_os = "linux")]
     strip_wayland_minmax_buttons(window);
+    #[cfg(not(target_os = "linux"))]
+    let _ = window;
     // Intentionally no Focused→heal hook: it made the window non-clickable.
 }
 
@@ -375,9 +448,8 @@ async fn pump_status(app: tauri::AppHandle) {
 }
 
 fn push_snapshot(app: &tauri::AppHandle, snapshot: observe::ReceiverSnapshot) {
-    let _ = app.emit("receiver-status", &snapshot);
-    // Eval fallback for broken webkit2gtk IPC — but only when state changes.
-    // Re-running apply on every line rebuilds the DOM and eats clicks.
+    // Emit and eval only when JSON changes. Duplicate status lines were
+    // re-running apply, remounting the React tree, and eating clicks.
     let Ok(json) = serde_json::to_string(&snapshot) else {
         return;
     };
@@ -393,6 +465,7 @@ fn push_snapshot(app: &tauri::AppHandle, snapshot: observe::ReceiverSnapshot) {
         }
         *prev = json.clone();
     }
+    let _ = app.emit("receiver-status", &snapshot);
     if let Some(window) = app.get_webview_window("main") {
         let script = format!(
             "(function(){{try{{if(typeof window.__unispaceApply==='function')window.__unispaceApply({json});}}catch(e){{}}}})();"
@@ -425,42 +498,15 @@ fn main() -> Result<()> {
             let Ok(json) = serde_json::to_string(&snapshot) else {
                 return;
             };
+            // The desktop identity has to be there before the first paint, or
+            // the window flashes the wrong theme.
+            let desktop_json = serde_json::to_string(&desktop()).unwrap_or_else(|_| "null".into());
             let direct = format!(
                 "(function(){{try{{\
                   var s={json};\
+                  window.__unispaceDesktop={desktop_json};\
                   window.__unispaceBoot=s;\
-                  window.__unispaceSetPanel=window.__unispaceSetPanel||function(name){{\
-                    var ids=['home','transfers','clipboard'];\
-                    if(ids.indexOf(name)<0)return;\
-                    document.querySelectorAll('nav button').forEach(function(b){{\
-                      b.classList.toggle('active', b.getAttribute('data-panel')===name);\
-                    }});\
-                    ids.forEach(function(id){{\
-                      var el=document.getElementById('panel-'+id);\
-                      if(!el)return;\
-                      if(id===name)el.classList.remove('hidden'); else el.classList.add('hidden');\
-                    }});\
-                  }};\
-                  if(s&&s.paired){{\
-                    var w=document.getElementById('welcome');\
-                    var c=document.getElementById('confirm');\
-                    var h=document.getElementById('shell');\
-                    if(w)w.classList.add('hidden');\
-                    if(c)c.classList.add('hidden');\
-                    if(h)h.classList.remove('hidden');\
-                    var n=document.getElementById('workspace-name');\
-                    if(n)n.textContent=s.workspaceName||'UniSpace';\
-                    var d=document.getElementById('status-detail');\
-                    if(d)d.textContent='Connected to '+(s.controllerName||'Mac');\
-                    var cn=document.getElementById('controller-name');\
-                    if(cn)cn.textContent=s.controllerName||'Mac';\
-                    var ha=document.getElementById('host-address');\
-                    if(ha)ha.textContent=s.hostAddress||'—';\
-                    var pill=document.getElementById('clipboard-pill');\
-                    var st=document.getElementById('clipboard-state');\
-                    if(pill){{pill.textContent=s.clipboard?'Enabled':'Waiting';pill.className='pill '+(s.clipboard?'positive':'warning');}}\
-                    if(st)st.textContent=s.clipboard?('Sharing text and links with '+(s.controllerName||'Mac')+'.'):'Waiting for the clipboard channel.';\
-                  }}\
+                  if(typeof window.__unispaceSyncTheme==='function')window.__unispaceSyncTheme();\
                   if(typeof window.__unispaceApply==='function')window.__unispaceApply(s);\
                 }}catch(e){{}}}})();"
             );
@@ -498,6 +544,7 @@ fn main() -> Result<()> {
         .invoke_handler(tauri::generate_handler![
             ping,
             local_state,
+            desktop,
             state,
             begin_pairing,
             confirm_pairing,

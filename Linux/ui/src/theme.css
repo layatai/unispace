@@ -1,0 +1,216 @@
+/*
+ * Native desktop themes.
+ *
+ * The receiver runs on GNOME and KDE, so it carries both palettes and picks one
+ * at startup from XDG_CURRENT_DESKTOP (see `main.tsx` and `desktop()` in
+ * src/bin/ui.rs). Values follow libadwaita and Breeze rather than a web
+ * palette: same accents, same surfaces, same corner radii, same control
+ * heights, so the window sits alongside the desktop's own applications.
+ *
+ *   [data-desktop="gnome"]  Adwaita   (default; also used for unknown desktops)
+ *   [data-desktop="kde"]    Breeze
+ *   [data-theme="dark"]     dark variant of whichever is active
+ */
+
+:root {
+  color-scheme: light;
+
+  /* ---- Adwaita, light ------------------------------------------------- */
+  --font-ui: "Adwaita Sans", Cantarell, Inter, system-ui, sans-serif;
+  --font-code: "Adwaita Mono", "Source Code Pro", "DejaVu Sans Mono", monospace;
+
+  /* GTK control metrics. Adwaita buttons are 34px; compact ones 26px. */
+  --control-h: 34px;
+  --control-h-sm: 26px;
+  --headerbar-h: 47px;
+  --control-weight: 700;
+
+  --r-sm: 4px;
+  --r-md: 5px;
+  --r-lg: 6px; /* buttons, switcher items */
+  --r-xl: 12px; /* cards, boxed lists */
+  --r-2xl: 16px;
+  --r-3xl: 20px;
+  --r-4xl: 24px;
+
+  --bg: #fafafa; /* window_bg_color */
+  --headerbar: #ffffff; /* headerbar_bg_color */
+  --surface: #ffffff; /* view_bg_color, card_bg_color */
+  --surface-2: rgb(0 0 6 / 6%); /* hover / secondary fill */
+  --ink: rgb(0 0 6 / 85%); /* window_fg_color */
+  --ink-3: rgb(0 0 6 / 55%); /* dimmed label */
+  --border-c: rgb(0 0 6 / 12%);
+  --separator: rgb(0 0 6 / 10%);
+
+  --accent-bg: #3584e4; /* accent_bg_color */
+  --accent-fg: #ffffff;
+  --accent-text: #1c71d8; /* accent_color, readable on light */
+  --accent-soft: rgb(53 132 228 / 12%);
+
+  --danger-bg: #e01b24;
+  --danger-text: #c01c28;
+
+  --ok-fg: #1b8553; /* success_color */
+  --ok-bg: rgb(46 194 126 / 15%);
+  --ok-dot: #2ec27e;
+  --warn-fg: #9c6e03; /* warning_color */
+  --warn-bg: rgb(229 165 10 / 18%);
+  --warn-dot: #e5a50a;
+
+  --button-bg: #ffffff;
+  --button-border: rgb(0 0 6 / 12%);
+  --switcher-active: rgb(0 0 6 / 10%);
+  --focus-ring: var(--accent-bg);
+  --card-shadow:
+    0 0 0 1px rgb(0 0 6 / 3%), 0 1px 3px 1px rgb(0 0 6 / 7%),
+    0 2px 6px 2px rgb(0 0 6 / 3%);
+  --scrollbar-thumb: rgb(0 0 6 / 26%);
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  /* ---- Adwaita, dark -------------------------------------------------- */
+  --bg: #242424;
+  --headerbar: #303030;
+  --surface: #303030;
+  --surface-2: rgb(255 255 255 / 10%);
+  --ink: #ffffff;
+  --ink-3: rgb(255 255 255 / 65%);
+  --border-c: rgb(255 255 255 / 12%);
+  --separator: rgb(255 255 255 / 10%);
+
+  --accent-bg: #3584e4;
+  --accent-fg: #ffffff;
+  --accent-text: #78aeed;
+  --accent-soft: rgb(120 174 237 / 18%);
+
+  --danger-bg: #c01c28;
+  --danger-text: #ff7b63;
+
+  --ok-fg: #8ff0a4;
+  --ok-bg: rgb(143 240 164 / 15%);
+  --ok-dot: #8ff0a4;
+  --warn-fg: #f8e45c;
+  --warn-bg: rgb(248 228 92 / 15%);
+  --warn-dot: #f8e45c;
+
+  --button-bg: rgb(255 255 255 / 10%);
+  --button-border: transparent;
+  --switcher-active: rgb(255 255 255 / 14%);
+  --card-shadow: 0 0 0 1px rgb(0 0 0 / 25%);
+  --scrollbar-thumb: rgb(255 255 255 / 30%);
+}
+
+/* ---- Breeze, light ---------------------------------------------------- */
+[data-desktop="kde"] {
+  --font-ui: "Noto Sans", "Oxygen Sans", "DejaVu Sans", system-ui, sans-serif;
+  --font-code: "Hack", "Noto Sans Mono", "DejaVu Sans Mono", monospace;
+
+  --control-h: 30px;
+  --control-h-sm: 24px;
+  --headerbar-h: 44px;
+  --control-weight: 400;
+
+  --r-sm: 2px;
+  --r-md: 3px;
+  --r-lg: 4px;
+  --r-xl: 6px;
+  --r-2xl: 8px;
+  --r-3xl: 10px;
+  --r-4xl: 12px;
+
+  --bg: #eff0f1; /* BackgroundNormal */
+  --headerbar: #eff0f1;
+  --surface: #fcfcfc; /* View background */
+  --surface-2: rgb(35 38 41 / 7%);
+  --ink: #232629; /* ForegroundNormal */
+  --ink-3: rgb(35 38 41 / 62%);
+  --border-c: #bdc3c7;
+  --separator: rgb(35 38 41 / 12%);
+
+  --accent-bg: #3daee9; /* Breeze highlight */
+  --accent-fg: #ffffff;
+  --accent-text: #2980b9;
+  --accent-soft: rgb(61 174 233 / 16%);
+
+  --danger-bg: #da4453;
+  --danger-text: #c0392b;
+
+  --ok-fg: #1e8c50;
+  --ok-bg: rgb(39 174 96 / 16%);
+  --ok-dot: #27ae60;
+  --warn-fg: #b35900;
+  --warn-bg: rgb(246 116 0 / 16%);
+  --warn-dot: #f67400;
+
+  --button-bg: #fcfcfc;
+  --button-border: #bdc3c7;
+  --switcher-active: rgb(61 174 233 / 20%);
+  --card-shadow: 0 0 0 1px rgb(35 38 41 / 12%);
+  --scrollbar-thumb: rgb(35 38 41 / 30%);
+}
+
+/* ---- Breeze, dark ----------------------------------------------------- */
+[data-desktop="kde"][data-theme="dark"] {
+  --bg: #2a2e32;
+  --headerbar: #31363b;
+  --surface: #1b1e20;
+  --surface-2: rgb(252 252 252 / 10%);
+  --ink: #fcfcfc;
+  --ink-3: rgb(252 252 252 / 65%);
+  --border-c: rgb(252 252 252 / 16%);
+  --separator: rgb(252 252 252 / 12%);
+
+  --accent-bg: #3daee9;
+  --accent-fg: #ffffff;
+  --accent-text: #61c1ef;
+  --accent-soft: rgb(61 174 233 / 22%);
+
+  --danger-bg: #da4453;
+  --danger-text: #ed8377;
+
+  --ok-fg: #4ed88a;
+  --ok-bg: rgb(78 216 138 / 15%);
+  --ok-dot: #4ed88a;
+  --warn-fg: #f7a56b;
+  --warn-bg: rgb(247 165 107 / 15%);
+  --warn-dot: #f7a56b;
+
+  --button-bg: rgb(252 252 252 / 10%);
+  --button-border: rgb(252 252 252 / 16%);
+  --switcher-active: rgb(61 174 233 / 30%);
+  --card-shadow: 0 0 0 1px rgb(0 0 0 / 35%);
+  --scrollbar-thumb: rgb(252 252 252 / 30%);
+}
+
+/* ---- shadcn/Tailwind semantic names ----------------------------------- */
+:root {
+  --radius: var(--r-lg);
+  --background: var(--bg);
+  --foreground: var(--ink);
+  --card: var(--surface);
+  --card-foreground: var(--ink);
+  --popover: var(--surface);
+  --popover-foreground: var(--ink);
+  --primary: var(--accent-bg);
+  --primary-foreground: var(--accent-fg);
+  --secondary: var(--surface-2);
+  --secondary-foreground: var(--ink);
+  --muted: var(--surface-2);
+  --muted-foreground: var(--ink-3);
+  --accent: var(--surface-2);
+  --accent-foreground: var(--ink);
+  --destructive: var(--danger-text);
+  --border: var(--border-c);
+  --input: var(--border-c);
+  --ring: var(--focus-ring);
+  --sidebar: var(--surface);
+  --sidebar-foreground: var(--ink);
+  --sidebar-primary: var(--accent-bg);
+  --sidebar-primary-foreground: var(--accent-fg);
+  --sidebar-accent: var(--surface-2);
+  --sidebar-accent-foreground: var(--ink);
+  --sidebar-border: var(--border-c);
+  --sidebar-ring: var(--focus-ring);
+}

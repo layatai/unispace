@@ -4,7 +4,10 @@
   "version": "1.2.0",
   "identifier": "com.layatai.unispace.linux",
   "build": {
-    "frontendDist": "./ui"
+    "frontendDist": "./ui/dist",
+    "devUrl": "http://localhost:1420",
+    "beforeDevCommand": "pnpm --dir ui dev",
+    "beforeBuildCommand": "pnpm --dir ui build"
   },
   "app": {
     "withGlobalTauri": true,
@@ -20,7 +23,7 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost https://ipc.localhost; img-src 'self' data:; style-src 'self' 'unsafe-inline'"
     }
   },
   "bundle": {
