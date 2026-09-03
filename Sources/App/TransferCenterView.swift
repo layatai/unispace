@@ -182,7 +182,10 @@ private struct TransferRow: View {
     @ViewBuilder
     private var actions: some View {
         switch transfer.state {
-        case .offered, .awaitingAcceptance, .preparing, .transferring, .paused, .verifying:
+        case .offered, .awaitingAcceptance, .preparing, .transferring, .verifying:
+            Button("Cancel", role: .destructive, action: onCancel)
+        case .paused:
+            Button("Retry", action: onRetry)
             Button("Cancel", role: .destructive, action: onCancel)
         case .failed:
             Button("Retry", action: onRetry)

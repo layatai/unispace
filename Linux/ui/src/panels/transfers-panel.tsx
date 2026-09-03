@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { memo, useState } from "react";
 import { ArrowDownToLine, ArrowUpFromLine, Folder } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -10,11 +10,11 @@ import type { TransferSnapshot } from "@/lib/types";
 import { useReceiverStore } from "@/state/receiver-store";
 
 export function TransfersPanel() {
-  const snapshot = useReceiverStore((state) => state.snapshot);
+  const transfers = useReceiverStore((state) => state.snapshot.transfers) ?? [];
+  const files = useReceiverStore((state) => state.snapshot.files);
   const transferError = useReceiverStore((state) => state.transferError);
   const setTransferError = useReceiverStore((state) => state.setTransferError);
   const [busy, setBusy] = useState(false);
-  const transfers = snapshot.transfers ?? [];
 
   async function sendFiles() {
     setTransferError("");
@@ -39,14 +39,14 @@ export function TransfersPanel() {
         </p>
       </header>
       <div className="flex flex-wrap items-center gap-2.5">
-        <Button disabled={!snapshot.files || busy} onClick={() => void sendFiles()}>
+        <Button disabled={!files || busy} onClick={() => void sendFiles()}>
           Send Files…
         </Button>
         <Button variant="outline" onClick={() => void commands.openFolder()}>
           Open received folder
         </Button>
         <p className="min-w-[180px] flex-1 text-[13px] text-muted-foreground">
-          {snapshot.files ? "File transfer is ready." : "Waiting for the file-transfer channel."}
+          {files ? "File transfer is ready." : "Waiting for the file-transfer channel."}
         </p>
       </div>
       {transfers.length === 0 ? (
@@ -75,7 +75,7 @@ export function TransfersPanel() {
   );
 }
 
-function TransferCard({ transfer }: { transfer: TransferSnapshot }) {
+const TransferCard = memo(function TransferCard({ transfer }: { transfer: TransferSnapshot }) {
   const percent = transferPercent(transfer);
   const incoming = transfer.direction === "incoming";
   const Icon = incoming ? ArrowDownToLine : ArrowUpFromLine;
@@ -129,4 +129,4 @@ function TransferCard({ transfer }: { transfer: TransferSnapshot }) {
       </CardContent>
     </Card>
   );
-}
+});

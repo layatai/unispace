@@ -10,16 +10,17 @@ import { useReceiverStore } from "@/state/receiver-store";
 import { UnpairDialog } from "@/panels/unpair-dialog";
 
 export function HomePanel() {
-  const snapshot = useReceiverStore((state) => state.snapshot);
+  const receiving = useReceiverStore((state) => state.snapshot.receiving);
+  const control = useReceiverStore((state) => state.snapshot.control);
+  const controllerName = useReceiverStore((state) => state.snapshot.controllerName);
+  const hostAddress = useReceiverStore((state) => state.snapshot.hostAddress);
+  const serviceRunning = useReceiverStore((state) => state.snapshot.serviceRunning);
+  const uinputReady = useReceiverStore((state) => state.snapshot.uinputReady);
   const homeError = useReceiverStore((state) => state.homeError);
   const setHomeError = useReceiverStore((state) => state.setHomeError);
   const [busy, setBusy] = useState<string | null>(null);
   const [unpairOpen, setUnpairOpen] = useState(false);
-  const detail = connectionDetail(
-    snapshot.receiving,
-    snapshot.control,
-    snapshot.controllerName,
-  );
+  const detail = connectionDetail(receiving, control, controllerName);
 
   async function run(name: string, action: () => Promise<void>) {
     setHomeError("");
@@ -44,17 +45,17 @@ export function HomePanel() {
           <StatusRow
             icon={<Monitor className="size-4" />}
             title="Controller"
-            detail={snapshot.controllerName || "Mac"}
-            value={snapshot.hostAddress || "—"}
+            detail={controllerName || "Mac"}
+            value={hostAddress || "—"}
           />
           <StatusRow
             icon={<Settings className="size-4" />}
             title="Receiver service"
             detail="Keeps this PC reachable from the paired Mac."
-            value={snapshot.serviceRunning ? "Running" : "Stopped"}
-            ok={snapshot.serviceRunning}
+            value={serviceRunning ? "Running" : "Stopped"}
+            ok={serviceRunning}
             action={
-              snapshot.serviceRunning ? (
+              serviceRunning ? (
                 <Button
                   variant="ghost"
                   size="sm"
@@ -78,14 +79,14 @@ export function HomePanel() {
             icon={<Pointer className="size-4" />}
             title="Input access"
             detail={
-              snapshot.uinputReady
+              uinputReady
                 ? "Required to move the pointer and type."
                 : "Sign out and back in, then restart the receiver to pick up the unispace group."
             }
-            value={snapshot.uinputReady ? "Allowed" : "Needs access"}
-            ok={snapshot.uinputReady}
+            value={uinputReady ? "Allowed" : "Needs access"}
+            ok={uinputReady}
             action={
-              snapshot.uinputReady && snapshot.serviceRunning ? null : (
+              uinputReady && serviceRunning ? null : (
                 <Button
                   size="sm"
                   disabled={busy !== null}

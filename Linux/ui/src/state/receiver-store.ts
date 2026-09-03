@@ -30,6 +30,40 @@ export interface ReceiverStore {
 
 let lastKey = "";
 
+function sameTransfer(left: ReceiverSnapshot["transfers"][number], right: ReceiverSnapshot["transfers"][number]): boolean {
+  return (
+    left.id === right.id &&
+    left.direction === right.direction &&
+    left.displayName === right.displayName &&
+    left.bytesDone === right.bytesDone &&
+    left.bytesTotal === right.bytesTotal &&
+    left.state === right.state &&
+    (left.directory ?? "") === (right.directory ?? "")
+  );
+}
+
+function shareTransfers(
+  prev: ReceiverSnapshot["transfers"] | undefined,
+  next: ReceiverSnapshot["transfers"] | undefined,
+): ReceiverSnapshot["transfers"] {
+  const before = prev ?? [];
+  const after = next ?? [];
+  if (before.length === after.length && before.every((item, index) => sameTransfer(item, after[index]))) {
+    return before;
+  }
+  return after.map((item) => {
+    const old = before.find((transfer) => transfer.id === item.id);
+    return old && sameTransfer(old, item) ? old : item;
+  });
+}
+
+function shareSnapshot(prev: ReceiverSnapshot, next: ReceiverSnapshot): ReceiverSnapshot {
+  return {
+    ...next,
+    transfers: shareTransfers(prev.transfers, next.transfers),
+  };
+}
+
 export const useReceiverStore = create<ReceiverStore>((set, get) => ({
   snapshot: unpairedSnapshot(),
   phase: "welcome",
@@ -44,16 +78,19 @@ export const useReceiverStore = create<ReceiverStore>((set, get) => ({
     const key = JSON.stringify(next);
     if (key === lastKey) return;
     lastKey = key;
+    const prev = get();
     const phase = next.paired
       ? "shell"
-      : get().phase === "confirm"
+      : prev.phase === "confirm"
         ? "confirm"
         : "welcome";
+    const notice = next.notice ?? "";
+    const noticeChanged = (prev.snapshot.notice ?? "") !== (next.notice ?? "");
     set({
-      snapshot: next,
+      snapshot: shareSnapshot(prev.snapshot, next),
       phase,
-      pairError: next.paired || phase === "confirm" ? "" : (next.notice ?? ""),
-      homeError: next.paired ? (next.notice ?? "") : "",
+      pairError: next.paired || phase === "confirm" ? "" : notice,
+      homeError: next.paired ? (noticeChanged ? notice : prev.homeError) : "",
     });
   },
   setPanel: (panel) => {

@@ -377,9 +377,8 @@ async fn pump_status(app: tauri::AppHandle) {
 }
 
 fn push_snapshot(app: &tauri::AppHandle, snapshot: observe::ReceiverSnapshot) {
-    let _ = app.emit("receiver-status", &snapshot);
-    // Eval fallback for broken webkit2gtk IPC — but only when state changes.
-    // Re-running apply on every line rebuilds the DOM and eats clicks.
+    // Emit and eval only when JSON changes. Duplicate status lines were
+    // re-running apply, remounting the React tree, and eating clicks.
     let Ok(json) = serde_json::to_string(&snapshot) else {
         return;
     };
@@ -395,6 +394,7 @@ fn push_snapshot(app: &tauri::AppHandle, snapshot: observe::ReceiverSnapshot) {
         }
         *prev = json.clone();
     }
+    let _ = app.emit("receiver-status", &snapshot);
     if let Some(window) = app.get_webview_window("main") {
         let script = format!(
             "(function(){{try{{if(typeof window.__unispaceApply==='function')window.__unispaceApply({json});}}catch(e){{}}}})();"

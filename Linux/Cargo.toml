@@ -21,7 +21,9 @@ path = "src/bin/ui.rs"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+# cargo-first shipping (not `tauri build`). Without this, generate_context
+# treats every binary as `tauri dev` and loads build.devUrl (localhost:1420).
+tauri = { version = "2", features = ["custom-protocol"] }
 gtk = "0.18"
 anyhow = "1.0"
 arboard = { version = "3.6", default-features = false, features = ["wayland-data-control"] }

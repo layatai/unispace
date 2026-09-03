@@ -109,6 +109,7 @@ Keep `withGlobalTauri: true`. Set a tight production CSP in `tauri.conf.json` (`
 Today `cargo build --bin unispace-linux-ui` embeds `./ui` with no Node toolchain. Tauri `beforeBuildCommand` is **not** enough: this repo builds via Cargo, and `bundle.active` is false.
 
 - Point `frontendDist` at `./ui/dist`. Add `devUrl` + `beforeDevCommand` for `tauri dev` only.
+- Enable Tauri’s `custom-protocol` feature in `Linux/Cargo.toml`. This repo ships with `cargo build --release`, not `tauri build`; without that feature every cargo binary is treated as `tauri dev` and opens `http://localhost:1420`.
 - `Linux/build.rs`: if `UNISPACE_SKIP_UI_BUILD` is unset, run `pnpm install --frozen-lockfile` when `ui/node_modules` is missing, then `pnpm build`, then `tauri_build::build()`. Fail with a clear “install Node LTS and pnpm” message.
 - `.github/workflows/linux-receiver-ci.yml`: current Node LTS + latest pnpm, then `pnpm install --frozen-lockfile` + `pnpm test` + `pnpm build` in `Linux/ui` **before** cargo fmt/test/clippy.
 - Gitignore `Linux/ui/node_modules` and `Linux/ui/dist`; commit `pnpm-lock.yaml`.

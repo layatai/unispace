@@ -41,4 +41,57 @@ describe("receiver store", () => {
     useReceiverStore.getState().apply(unpairedSnapshot());
     expect(useReceiverStore.getState().phase).toBe("confirm");
   });
+
+  it("keeps Home errors and transfer identity when only receiving changes", () => {
+    const transfers = [
+      {
+        id: "in-1",
+        direction: "incoming" as const,
+        displayName: "notes.txt",
+        bytesDone: 12,
+        bytesTotal: 40,
+        state: "transferring" as const,
+      },
+    ];
+    useReceiverStore.getState().apply({ ...paired, transfers });
+    useReceiverStore.getState().setHomeError("keep me");
+    const first = useReceiverStore.getState().snapshot.transfers;
+    useReceiverStore.getState().apply({
+      ...paired,
+      transfers: [{ ...transfers[0] }],
+      receiving: true,
+    });
+    expect(useReceiverStore.getState().homeError).toBe("keep me");
+    expect(useReceiverStore.getState().snapshot.transfers).toBe(first);
+    expect(useReceiverStore.getState().snapshot.receiving).toBe(true);
+  });
+
+  it("reuses unchanged transfer objects when another job progresses", () => {
+    const incoming = {
+      id: "in-1",
+      direction: "incoming" as const,
+      displayName: "notes.txt",
+      bytesDone: 12,
+      bytesTotal: 40,
+      state: "transferring" as const,
+    };
+    const outgoing = {
+      id: "out-1",
+      direction: "outgoing" as const,
+      displayName: "shot.png",
+      bytesDone: 1,
+      bytesTotal: 8,
+      state: "transferring" as const,
+    };
+    useReceiverStore.getState().apply({ ...paired, transfers: [incoming, outgoing] });
+    const [firstIncoming, firstOutgoing] = useReceiverStore.getState().snapshot.transfers;
+    useReceiverStore.getState().apply({
+      ...paired,
+      transfers: [incoming, { ...outgoing, bytesDone: 4 }],
+    });
+    const [nextIncoming, nextOutgoing] = useReceiverStore.getState().snapshot.transfers;
+    expect(nextIncoming).toBe(firstIncoming);
+    expect(nextOutgoing).not.toBe(firstOutgoing);
+    expect(nextOutgoing.bytesDone).toBe(4);
+  });
 });

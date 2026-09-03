@@ -5,9 +5,10 @@ import { Card, CardContent } from "@/components/ui/card";
 import { useReceiverStore } from "@/state/receiver-store";
 
 export function ClipboardPanel() {
-  const snapshot = useReceiverStore((state) => state.snapshot);
-  const controller = snapshot.controllerName || "Mac";
-  const on = snapshot.clipboard;
+  const clipboard = useReceiverStore((state) => state.snapshot.clipboard);
+  const controllerName = useReceiverStore((state) => state.snapshot.controllerName);
+  const controller = controllerName || "Mac";
+  const on = clipboard;
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-auto p-5">
       <header>
