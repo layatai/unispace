@@ -1,10 +1,17 @@
-use anyhow::Result;
-use std::path::PathBuf;
-use std::process::Command;
-use std::time::Duration;
-use tauri::Emitter;
+use anyhow::{Context, Result};
+use std::{
+    io::Write,
+    os::unix::{
+        fs::PermissionsExt,
+        net::{UnixListener, UnixStream},
+    },
+    path::{Path, PathBuf},
+    process::Command,
+    time::Duration,
+};
+use tauri::{Emitter, Manager, WindowEvent};
 use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::net::UnixStream;
+use tokio::net::UnixStream as TokioUnixStream;
 use unispace_linux::{
     config::Configuration, host, observe, pairing::PendingPairing, service,
 };
@@ -23,6 +30,11 @@ struct PairingResult {
 
 type PendingSlot = tokio::sync::Mutex<Option<PendingPairing>>;
 
+enum Instance {
+    Primary(UnixListener),
+    AlreadyRunning,
+}
+
 #[tauri::command]
 async fn state() -> observe::ReceiverSnapshot {
     match tokio::time::timeout(Duration::from_millis(150), read_live_snapshot()).await {
@@ -32,7 +44,7 @@ async fn state() -> observe::ReceiverSnapshot {
 }
 
 async fn read_live_snapshot() -> Result<observe::ReceiverSnapshot, String> {
-    let stream = UnixStream::connect(observe::socket_path())
+    let stream = TokioUnixStream::connect(observe::socket_path())
         .await
         .map_err(|error| error.to_string())?;
     let mut lines = BufReader::new(stream).lines();
@@ -140,9 +152,123 @@ fn open_folder(path: String) -> Result<(), String> {
     Ok(())
 }
 
+fn ui_socket_path() -> PathBuf {
+    observe::socket_path().with_file_name("ui.sock")
+}
+
+fn notify_existing(path: &Path) -> bool {
+    let Ok(mut stream) = UnixStream::connect(path) else {
+        return false;
+    };
+    stream.write_all(b"focus\n").is_ok()
+}
+
+fn claim_instance() -> Result<Instance> {
+    let path = ui_socket_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+        let mut permissions = std::fs::metadata(parent)?.permissions();
+        permissions.set_mode(0o700);
+        std::fs::set_permissions(parent, permissions)?;
+    }
+    if notify_existing(&path) {
+        return Ok(Instance::AlreadyRunning);
+    }
+    let _ = std::fs::remove_file(&path);
+    match UnixListener::bind(&path) {
+        Ok(listener) => {
+            let mut permissions = std::fs::metadata(&path)?.permissions();
+            permissions.set_mode(0o600);
+            std::fs::set_permissions(&path, permissions)?;
+            listener.set_nonblocking(true)?;
+            Ok(Instance::Primary(listener))
+        }
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::AddrInUse | std::io::ErrorKind::AlreadyExists
+            ) =>
+        {
+            if notify_existing(&path) {
+                Ok(Instance::AlreadyRunning)
+            } else {
+                Err(error).context("claim UI instance socket")
+            }
+        }
+        Err(error) => Err(error).context("claim UI instance socket"),
+    }
+}
+
+fn focus_main(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+        heal_wayland_chrome(&window);
+    }
+}
+
+/// Tao 0.35's Wayland CSD leaves minimize/maximize/close unresponsive until the
+/// surface gets a fresh configure (tauri#13440 / #11856). On Omarchy/Hyprland
+/// tiled windows, `set_size` is ignored — toggling resizable still forces one.
+fn heal_wayland_chrome(window: &tauri::WebviewWindow) {
+    if std::env::var_os("WAYLAND_DISPLAY").is_none() {
+        return;
+    }
+    let _ = window.set_resizable(false);
+    let _ = window.set_resizable(true);
+    // Extra nudge when the compositor honors client resizes (floating windows).
+    if let Ok(size) = window.outer_size() {
+        let nudged = tauri::PhysicalSize {
+            width: size.width.saturating_add(1).max(2),
+            height: size.height.max(1),
+        };
+        let _ = window.set_size(nudged);
+        let _ = window.set_size(size);
+    }
+}
+
+fn attach_wayland_chrome_heal(window: &tauri::WebviewWindow) {
+    let win = window.clone();
+    window.on_window_event(move |event| {
+        if matches!(event, WindowEvent::Focused(true)) {
+            heal_wayland_chrome(&win);
+        }
+    });
+}
+
+/// Prefer Plasma's server-side decorations. Tiling compositors often have no
+/// titlebar buttons of their own, so leave GTK CSD there and heal hit-testing.
+fn prefer_server_decorations() {
+    if std::env::var_os("WAYLAND_DISPLAY").is_none() || std::env::var_os("GTK_CSD").is_some() {
+        return;
+    }
+    let desktop = std::env::var("XDG_CURRENT_DESKTOP")
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if desktop.contains("kde") || desktop.contains("plasma") {
+        // SAFETY: called before GTK/Tauri initialization; no concurrent env readers.
+        unsafe { std::env::set_var("GTK_CSD", "0") };
+    }
+}
+
+async fn serve_focus(listener: tokio::net::UnixListener, app: tauri::AppHandle) {
+    loop {
+        let Ok((stream, _)) = listener.accept().await else {
+            continue;
+        };
+        let mut lines = BufReader::new(stream).lines();
+        while let Ok(Some(line)) = lines.next_line().await {
+            if line.trim() == "focus" {
+                focus_main(&app);
+            }
+        }
+    }
+}
+
 async fn pump_status(app: tauri::AppHandle) {
     loop {
-        match UnixStream::connect(observe::socket_path()).await {
+        match TokioUnixStream::connect(observe::socket_path()).await {
             Ok(stream) => {
                 let mut lines = BufReader::new(stream).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
@@ -160,16 +286,47 @@ async fn pump_status(app: tauri::AppHandle) {
 }
 
 fn main() -> Result<()> {
+    prefer_server_decorations();
+
+    let listener = match claim_instance()? {
+        Instance::AlreadyRunning => return Ok(()),
+        Instance::Primary(listener) => listener,
+    };
+
     let address = Configuration::load()
         .map(|configuration| configuration.host_address)
         .unwrap_or_default();
     tauri::Builder::default()
         .manage(tokio::sync::Mutex::new(Option::<PendingPairing>::None))
         .manage(tokio::sync::Mutex::new(address))
-        .setup(|app| {
+        .setup(move |app| {
             let handle = app.handle().clone();
+            let focus_handle = app.handle().clone();
+            let heal_handle = app.handle().clone();
+            if let Some(window) = app.get_webview_window("main") {
+                attach_wayland_chrome_heal(&window);
+            }
             tauri::async_runtime::spawn(async move {
                 pump_status(handle).await;
+            });
+            tauri::async_runtime::spawn(async move {
+                let listener = match tokio::net::UnixListener::from_std(listener) {
+                    Ok(listener) => listener,
+                    Err(error) => {
+                        tracing::warn!(%error, "UI instance socket unavailable");
+                        return;
+                    }
+                };
+                serve_focus(listener, focus_handle).await;
+            });
+            // Heal after map; tiled Hyprland needs the resizable toggle, not size.
+            tauri::async_runtime::spawn(async move {
+                for delay_ms in [80_u64, 250, 600] {
+                    tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+                    if let Some(window) = heal_handle.get_webview_window("main") {
+                        heal_wayland_chrome(&window);
+                    }
+                }
             });
             Ok(())
         })

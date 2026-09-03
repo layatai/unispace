@@ -344,6 +344,30 @@ impl Drop for UinputSink {
     }
 }
 
+/// No-op sink used when `/dev/uinput` is unavailable (missing group / session).
+/// Keeps pairing, clipboard, and file transfer alive; the UI surfaces `uinputReady`.
+pub struct NullInputSink;
+
+impl InputSink for NullInputSink {
+    fn activate(
+        &mut self,
+        _width: f64,
+        _height: f64,
+        _edge: DisplayEdge,
+        _normalized_position: f64,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    fn inject(&mut self, _event: &InputEvent) -> Result<()> {
+        Ok(())
+    }
+
+    fn release_all(&mut self) -> Result<()> {
+        Ok(())
+    }
+}
+
 fn hid_to_linux(usage: u16) -> Option<KeyCode> {
     let code = match usage {
         0x04..=0x1d => [

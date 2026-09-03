@@ -5,8 +5,9 @@ use std::{
     process::Command,
 };
 use unispace_linux::{
-    clipboard, config::Configuration, files, host, input::UinputSink, observe,
-    pairing::PendingPairing, receiver, service, status,
+    clipboard, config::Configuration, files, host,
+    input::{InputSink, NullInputSink, UinputSink},
+    observe, pairing::PendingPairing, receiver, service, status,
 };
 
 #[derive(Parser)]
@@ -60,16 +61,22 @@ async fn main() -> Result<()> {
                 .and_then(|device| device.displays.first())
                 .cloned()
                 .context("local display missing from the paired workspace")?;
-            receiver::run(
-                configuration,
-                UinputSink::open(
-                    gesture_bindings,
-                    display.frame.width as i32,
-                    display.frame.height as i32,
-                )?,
-                hub,
-            )
-            .await
+            let width = display.frame.width as i32;
+            let height = display.frame.height as i32;
+            match UinputSink::open(gesture_bindings, width, height) {
+                Ok(input) => {
+                    hub.set_uinput_ready(true);
+                    run_receiver(configuration, input, hub).await
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        %error,
+                        "uinput unavailable; control input disabled until this session has the unispace group (sign out and back in)"
+                    );
+                    hub.set_uinput_ready(false);
+                    run_receiver(configuration, NullInputSink, hub).await
+                }
+            }
         }
         CommandKind::Status => {
             match Configuration::load() {
@@ -88,6 +95,14 @@ async fn main() -> Result<()> {
             Ok(())
         }
     }
+}
+
+async fn run_receiver(
+    configuration: Configuration,
+    input: impl InputSink + 'static,
+    hub: observe::StatusHub,
+) -> Result<()> {
+    receiver::run(configuration, input, hub).await
 }
 
 async fn pair(address: String) -> Result<()> {
