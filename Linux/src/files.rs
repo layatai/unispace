@@ -31,9 +31,13 @@ const MAX_TRANSFER: u64 = 1_099_511_627_776;
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Manifest {
+    #[serde(rename = "transferID")]
     transfer_id: Identifier,
+    #[serde(rename = "workspaceID")]
     workspace_id: Identifier,
+    #[serde(rename = "sourceDeviceID")]
     source_device_id: Identifier,
+    #[serde(rename = "destinationDeviceID")]
     destination_device_id: Identifier,
     entries: Vec<Entry>,
 }
@@ -42,6 +46,7 @@ struct Manifest {
 struct Entry {
     id: Identifier,
     filename: String,
+    #[serde(rename = "byteCount")]
     byte_count: u64,
     sha256: String,
 }
