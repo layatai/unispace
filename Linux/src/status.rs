@@ -7,7 +7,50 @@ impl StatusTray {
         if let Ok(exe) = std::env::current_exe()
             && let Some(dir) = exe.parent()
         {
-            let _ = Command::new(dir.join("unispace-linux-ui")).spawn();
+            let ui = dir.join("unispace-linux-ui");
+            // Preferred: launch inside the user session; the systemd user
+            // manager carries the desktop environment the webview needs.
+            if Command::new("systemd-run")
+                .args([
+                    "--user",
+                    "--collect",
+                    "--unit=unispace-ui",
+                    &ui.to_string_lossy(),
+                ])
+                .status()
+                .map(|status| status.success())
+                .unwrap_or(false)
+            {
+                return;
+            }
+            // Fallback: derive the session environment ourselves — a daemon
+            // launched over SSH has no WAYLAND_DISPLAY/DBUS and the window
+            // would silently never appear.
+            let mut command = Command::new(&ui);
+            let uid = unsafe { libc::getuid() };
+            let runtime = std::env::var("XDG_RUNTIME_DIR")
+                .unwrap_or_else(|_| format!("/run/user/{uid}"));
+            command.env("XDG_RUNTIME_DIR", &runtime);
+            if std::env::var_os("WAYLAND_DISPLAY").is_none()
+                && std::env::var_os("DISPLAY").is_none()
+                && let Some(wayland) = std::fs::read_dir(&runtime)
+                    .ok()
+                    .and_then(|entries| {
+                        entries.flatten()
+                            .map(|entry| entry.file_name())
+                            .find(|name| name.to_string_lossy().starts_with("wayland-"))
+                    })
+            {
+                command.env("WAYLAND_DISPLAY", wayland);
+                command.env("DISPLAY", ":0");
+            }
+            if std::env::var_os("DBUS_SESSION_BUS_ADDRESS").is_none() {
+                command.env(
+                    "DBUS_SESSION_BUS_ADDRESS",
+                    format!("unix:path={runtime}/bus"),
+                );
+            }
+            let _ = command.spawn();
         }
     }
 }
