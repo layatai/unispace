@@ -4928,6 +4928,7 @@ dependencies = [
  "directories",
  "evdev",
  "futures",
+ "gtk",
  "hex",
  "hkdf",
  "hmac",

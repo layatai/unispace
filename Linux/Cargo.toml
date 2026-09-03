@@ -22,6 +22,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = [] }
+gtk = "0.18"
 anyhow = "1.0"
 arboard = { version = "3.6", default-features = false, features = ["wayland-data-control"] }
 base64 = "0.22"

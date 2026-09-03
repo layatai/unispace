@@ -226,9 +226,50 @@ fn heal_wayland_chrome(window: &tauri::WebviewWindow) {
         let _ = window.set_size(nudged);
         let _ = window.set_size(size);
     }
+    // Tao rewrites the header to menu:minimize,maximize,close on resizable
+    // notify — strip min/max again so Omarchy only keeps close.
+    strip_wayland_minmax_buttons(window);
+}
+
+/// Tao's Wayland header hardcodes min/max buttons; Omarchy has no use for them.
+fn strip_wayland_minmax_buttons(window: &tauri::WebviewWindow) {
+    if std::env::var_os("WAYLAND_DISPLAY").is_none() {
+        return;
+    }
+    let window = window.clone();
+    let _ = window.clone().run_on_main_thread(move || {
+        use gtk::prelude::*;
+        let Ok(gtk_window) = window.gtk_window() else {
+            return;
+        };
+        let Some(titlebar) = gtk_window.titlebar() else {
+            return;
+        };
+        set_close_only_layout(&titlebar);
+    });
+}
+
+fn set_close_only_layout(widget: &gtk::Widget) {
+    use gtk::prelude::*;
+    if let Ok(header) = widget.clone().downcast::<gtk::HeaderBar>() {
+        header.set_decoration_layout(Some(":close"));
+        return;
+    }
+    if let Some(bin) = widget.downcast_ref::<gtk::Bin>() {
+        if let Some(child) = bin.child() {
+            set_close_only_layout(&child);
+        }
+        return;
+    }
+    if let Some(container) = widget.downcast_ref::<gtk::Container>() {
+        for child in container.children() {
+            set_close_only_layout(&child);
+        }
+    }
 }
 
 fn attach_wayland_chrome_heal(window: &tauri::WebviewWindow) {
+    strip_wayland_minmax_buttons(window);
     let win = window.clone();
     window.on_window_event(move |event| {
         if matches!(event, WindowEvent::Focused(true)) {
