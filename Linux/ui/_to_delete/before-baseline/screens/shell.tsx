@@ -1,14 +1,11 @@
 import { Link2 } from "lucide-react";
-import { StatusPill, connectionLabel, connectionTone } from "@/components/status-pill";
+import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { connectionDetail } from "@/lib/format";
 import { ClipboardPanel } from "@/panels/clipboard-panel";
 import { HomePanel } from "@/panels/home-panel";
 import { TransfersPanel } from "@/panels/transfers-panel";
 import { useReceiverStore } from "@/state/receiver-store";
-
-const panelClass =
-  "flex min-h-0 flex-1 flex-col overflow-hidden data-[state=inactive]:hidden";
 
 export function Shell() {
   const panel = useReceiverStore((state) => state.panel);
@@ -27,13 +24,25 @@ export function Shell() {
           <TabsTrigger value="transfers">Transfers</TabsTrigger>
           <TabsTrigger value="clipboard">Clipboard</TabsTrigger>
         </TabsList>
-        <TabsContent value="home" forceMount className={panelClass}>
+        <TabsContent
+          value="home"
+          forceMount
+          className="flex min-h-0 flex-1 flex-col overflow-hidden data-[state=inactive]:hidden"
+        >
           <HomePanel />
         </TabsContent>
-        <TabsContent value="transfers" forceMount className={panelClass}>
+        <TabsContent
+          value="transfers"
+          forceMount
+          className="flex min-h-0 flex-1 flex-col overflow-hidden data-[state=inactive]:hidden"
+        >
           <TransfersPanel />
         </TabsContent>
-        <TabsContent value="clipboard" forceMount className={panelClass}>
+        <TabsContent
+          value="clipboard"
+          forceMount
+          className="flex min-h-0 flex-1 flex-col overflow-hidden data-[state=inactive]:hidden"
+        >
           <ClipboardPanel />
         </TabsContent>
       </Tabs>
@@ -48,31 +57,20 @@ function ShellStatus() {
   const controllerName = useReceiverStore((state) => state.snapshot.controllerName);
   const name = workspaceName || "UniSpace";
   const detail = connectionDetail(receiving, control, controllerName);
+  const status = receiving ? "Receiving" : control === "connected" ? "Connected" : "Waiting";
 
   return (
-    // Fixed height: the title and the detail line both change with status, and
-    // a header that grows by a line drags the tabs and every panel with it.
-    <header className="flex h-[76px] shrink-0 items-center gap-3.5 border-b px-5">
-      <div className="grid size-11 shrink-0 place-items-center rounded-[13px] border border-primary/20 bg-primary/10 text-primary">
+    <header className="flex items-center gap-3.5 px-5 pt-5 pb-3.5">
+      <div className="grid size-11 place-items-center rounded-[13px] border border-primary/20 bg-primary/10 text-primary">
         <Link2 className="size-5" aria-hidden="true" />
       </div>
-      <div className="min-w-0 flex-1">
-        <h1 className="truncate text-xl font-bold tracking-tight" title={name}>
-          {name}
-        </h1>
-        <p
-          className="mt-0.5 truncate text-[13px] text-muted-foreground"
-          title={detail}
-          aria-live="polite"
-        >
-          {detail}
-        </p>
+      <div className="min-w-0">
+        <h1 className="text-xl font-bold tracking-tight">{name}</h1>
+        <p className="mt-0.5 text-[13px] text-muted-foreground">{detail}</p>
       </div>
-      <StatusPill
-        tone={connectionTone(receiving, control)}
-        label={connectionLabel(receiving, control)}
-        className="w-[7rem]"
-      />
+      <div className="ml-auto">
+        <Badge variant={receiving ? "default" : "secondary"}>{status}</Badge>
+      </div>
     </header>
   );
 }

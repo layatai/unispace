@@ -8,57 +8,27 @@ import {
   type ReceiverSnapshot,
 } from "@/lib/types";
 
-/**
- * Where a snapshot came from.
- *
- * `local` is the config-only fallback (`local_state`, and the boot snapshot the
- * window evaluates before React mounts). It knows the workspace, the service
- * unit and uinput access, but it always reports `control: "disconnected"`, no
- * clipboard, no files and no transfers, because it never talks to the running
- * receiver. `live` is the receiver's own status line.
- *
- * Applying a `local` snapshot on top of a `live` one repaints the whole shell
- * as "Waiting", empties Transfers and re-adds the Restart button — which is
- * what made the window jump every couple of seconds.
- */
-export type SnapshotSource = "live" | "local";
-
-/**
- * A degraded snapshot (config-only, or a live read that timed out) has to be
- * seen this many times in a row before it replaces a good one. A single slow
- * status read is a blip, not a state change, and acting on it makes the UI
- * flicker.
- */
-const DEGRADED_STRIKES = 2;
-
 export interface ReceiverStore {
   snapshot: ReceiverSnapshot;
   phase: Phase;
   panel: Panel;
   offer: Offer | null;
-  /** True once the receiver itself has reported status at least once. */
-  live: boolean;
   pairError: string;
   confirmError: string;
-  /** Errors raised by something the user just did (Start, Stop, Unpair…). */
   homeError: string;
-  /** System notices carried on snapshots (service down, status read failed). */
-  homeNotice: string;
   transferError: string;
-  apply: (next: unknown, source?: SnapshotSource) => void;
+  apply: (next: unknown) => void;
   setPanel: (panel: Panel) => void;
   setOffer: (offer: Offer) => void;
   setPhase: (phase: Phase) => void;
   setPairError: (message: string) => void;
   setConfirmError: (message: string) => void;
   setHomeError: (message: string) => void;
-  setHomeNotice: (message: string) => void;
   setTransferError: (message: string) => void;
   resetUnpaired: () => void;
 }
 
 let lastKey = "";
-let degradedStreak = 0;
 
 function sameTransfer(left: ReceiverSnapshot["transfers"][number], right: ReceiverSnapshot["transfers"][number]): boolean {
   return (
@@ -99,45 +69,28 @@ export const useReceiverStore = create<ReceiverStore>((set, get) => ({
   phase: "welcome",
   panel: "home",
   offer: null,
-  live: false,
   pairError: "",
   confirmError: "",
   homeError: "",
-  homeNotice: "",
   transferError: "",
-  apply: (next, source = "live") => {
+  apply: (next) => {
     if (!isReceiverSnapshot(next)) return;
-    const prev = get();
-    const notice = next.notice ?? "";
-    // A snapshot carrying a notice is the receiver saying "this is my best
-    // guess", whichever command produced it.
-    const degraded = source === "local" || notice !== "";
-
-    if (!degraded) {
-      degradedStreak = 0;
-    } else if (prev.live) {
-      degradedStreak += 1;
-      if (degradedStreak < DEGRADED_STRIKES) {
-        // Hold the last good picture; only surface why it may be stale.
-        if (prev.homeNotice !== notice) set({ homeNotice: notice });
-        return;
-      }
-    }
-
     const key = JSON.stringify(next);
     if (key === lastKey) return;
     lastKey = key;
+    const prev = get();
     const phase = next.paired
       ? "shell"
       : prev.phase === "confirm"
         ? "confirm"
         : "welcome";
+    const notice = next.notice ?? "";
+    const noticeChanged = (prev.snapshot.notice ?? "") !== (next.notice ?? "");
     set({
       snapshot: shareSnapshot(prev.snapshot, next),
       phase,
-      live: prev.live || !degraded,
       pairError: next.paired || phase === "confirm" ? "" : notice,
-      homeNotice: next.paired ? notice : "",
+      homeError: next.paired ? (noticeChanged ? notice : prev.homeError) : "",
     });
   },
   setPanel: (panel) => {
@@ -150,20 +103,16 @@ export const useReceiverStore = create<ReceiverStore>((set, get) => ({
   setPairError: (pairError) => set({ pairError }),
   setConfirmError: (confirmError) => set({ confirmError }),
   setHomeError: (homeError) => set({ homeError }),
-  setHomeNotice: (homeNotice) => set({ homeNotice }),
   setTransferError: (transferError) => set({ transferError }),
   resetUnpaired: () => {
     lastKey = "";
-    degradedStreak = 0;
     set({
       snapshot: unpairedSnapshot(),
       phase: "welcome",
       offer: null,
-      live: false,
       pairError: "",
       confirmError: "",
       homeError: "",
-      homeNotice: "",
       transferError: "",
     });
   },
@@ -177,24 +126,20 @@ export function installApplyBridge(): void {
     useReceiverStore.getState().setPanel(name as Panel);
   };
   if (window.__unispaceBoot) {
-    // The boot snapshot is read from the configuration file, not the receiver.
-    useReceiverStore.getState().apply(window.__unispaceBoot, "local");
+    useReceiverStore.getState().apply(window.__unispaceBoot);
   }
 }
 
 export function resetStoreForTests(): void {
   lastKey = "";
-  degradedStreak = 0;
   useReceiverStore.setState({
     snapshot: unpairedSnapshot(),
     phase: "welcome",
     panel: "home",
     offer: null,
-    live: false,
     pairError: "",
     confirmError: "",
     homeError: "",
-    homeNotice: "",
     transferError: "",
   });
 }

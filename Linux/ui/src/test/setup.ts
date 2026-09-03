@@ -1,4 +1,5 @@
-import { beforeEach, vi } from "vitest";
+import { cleanup } from "@testing-library/react";
+import { afterEach, beforeEach, vi } from "vitest";
 import { resetStoreForTests } from "@/state/receiver-store";
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -12,4 +13,8 @@ vi.mock("@tauri-apps/api/event", () => ({
 
 beforeEach(() => {
   resetStoreForTests();
+});
+
+afterEach(() => {
+  cleanup();
 });

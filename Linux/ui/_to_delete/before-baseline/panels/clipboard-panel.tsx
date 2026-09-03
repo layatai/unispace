@@ -1,5 +1,6 @@
 import { Clipboard } from "lucide-react";
-import { StatusPill } from "@/components/status-pill";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { useReceiverStore } from "@/state/receiver-store";
 
@@ -17,7 +18,7 @@ export function ClipboardPanel() {
         </p>
       </header>
       <Card>
-        <CardContent className="grid grid-cols-[2.75rem_minmax(0,1fr)_8rem] items-center gap-3.5">
+        <CardContent className="grid grid-cols-[44px_1fr_auto] items-start gap-3.5">
           <div
             className={
               on
@@ -28,26 +29,22 @@ export function ClipboardPanel() {
           >
             <Clipboard className="size-4" />
           </div>
-          <div className="min-w-0">
+          <div>
             <h3 className="text-base font-semibold">Sharing</h3>
-            {/* One reserved line: the two messages differ in length, and the
-                shorter one used to shrink the card as the channel reconnected. */}
-            <p
-              className="mt-1 line-clamp-2 min-h-8 text-[13px] text-muted-foreground"
-              aria-live="polite"
-            >
+            <p className="mt-1 text-[13px] text-muted-foreground">
               {on
                 ? `Sharing text and links with ${controller}.`
-                : "Waiting for the clipboard channel to reconnect."}
+                : "Reconnecting the clipboard channel."}
             </p>
           </div>
-          <StatusPill
-            tone={on ? "active" : "warn"}
-            label={on ? "Enabled" : "Reconnecting"}
-            className="w-full"
-          />
+          <Badge variant={on ? "default" : "secondary"}>{on ? "Enabled" : "Reconnecting"}</Badge>
         </CardContent>
       </Card>
+      {!on ? (
+        <Alert>
+          <AlertDescription>Waiting for the clipboard channel.</AlertDescription>
+        </Alert>
+      ) : null}
       <p className="text-xs text-muted-foreground">
         Text and links sync automatically. Regular files continue through Transfers.
       </p>

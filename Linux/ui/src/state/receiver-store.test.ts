@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { unpairedSnapshot } from "@/lib/types";
-import { useReceiverStore } from "./receiver-store";
+import { resetStoreForTests, useReceiverStore } from "./receiver-store";
 
 const paired = {
   ...unpairedSnapshot(),
@@ -9,10 +9,15 @@ const paired = {
   controllerName: "taimb2",
   hostAddress: "taimb2.tailnet",
   control: "connected" as const,
-  notice: "socket slow",
 };
 
+const live = { ...paired, receiving: true, clipboard: true, files: true };
+
 describe("receiver store", () => {
+  beforeEach(() => {
+    resetStoreForTests();
+  });
+
   it("moves unpaired snapshots to welcome and routes the notice to the pair form", () => {
     useReceiverStore.getState().apply(unpairedSnapshot("offline"));
     const state = useReceiverStore.getState();
@@ -22,18 +27,18 @@ describe("receiver store", () => {
   });
 
   it("moves paired snapshots to shell and routes the notice to Home", () => {
-    useReceiverStore.getState().apply(paired);
+    useReceiverStore.getState().apply({ ...paired, notice: "socket slow" });
     const state = useReceiverStore.getState();
     expect(state.phase).toBe("shell");
-    expect(state.homeError).toBe("socket slow");
+    expect(state.homeNotice).toBe("socket slow");
     expect(state.pairError).toBe("");
   });
 
   it("does not reapply an identical snapshot", () => {
     useReceiverStore.getState().apply(paired);
-    useReceiverStore.getState().setHomeError("keep me");
+    useReceiverStore.getState().setHomeNotice("keep me");
     useReceiverStore.getState().apply(paired);
-    expect(useReceiverStore.getState().homeError).toBe("keep me");
+    expect(useReceiverStore.getState().homeNotice).toBe("keep me");
   });
 
   it("stays on confirm while unpaired if pairing is in progress", () => {
@@ -42,7 +47,7 @@ describe("receiver store", () => {
     expect(useReceiverStore.getState().phase).toBe("confirm");
   });
 
-  it("keeps Home errors and transfer identity when only receiving changes", () => {
+  it("keeps action errors and transfer identity when only receiving changes", () => {
     const transfers = [
       {
         id: "in-1",
@@ -93,5 +98,42 @@ describe("receiver store", () => {
     expect(nextIncoming).toBe(firstIncoming);
     expect(nextOutgoing).not.toBe(firstOutgoing);
     expect(nextOutgoing.bytesDone).toBe(4);
+  });
+
+  it("ignores the config-only snapshot once the receiver has reported", () => {
+    useReceiverStore.getState().apply(live);
+    useReceiverStore.getState().apply(paired, "local");
+    const state = useReceiverStore.getState();
+    expect(state.snapshot.receiving).toBe(true);
+    expect(state.snapshot.clipboard).toBe(true);
+    expect(state.live).toBe(true);
+  });
+
+  it("holds the last live state through a single degraded read", () => {
+    useReceiverStore.getState().apply(live);
+    useReceiverStore.getState().apply({ ...paired, notice: "status read timed out" });
+    const state = useReceiverStore.getState();
+    expect(state.snapshot.receiving).toBe(true);
+    expect(state.homeNotice).toBe("status read timed out");
+  });
+
+  it("accepts a degraded state once it repeats", () => {
+    useReceiverStore.getState().apply(live);
+    useReceiverStore.getState().apply({ ...paired, notice: "service is not running" });
+    useReceiverStore.getState().apply({
+      ...paired,
+      notice: "service is not running",
+      serviceRunning: false,
+    });
+    const state = useReceiverStore.getState();
+    expect(state.snapshot.receiving).toBe(false);
+    expect(state.snapshot.serviceRunning).toBe(false);
+  });
+
+  it("takes the config-only snapshot before the receiver has reported", () => {
+    useReceiverStore.getState().apply(paired, "local");
+    expect(useReceiverStore.getState().phase).toBe("shell");
+    expect(useReceiverStore.getState().snapshot.workspaceName).toBe("Studio");
+    expect(useReceiverStore.getState().live).toBe(false);
   });
 });

@@ -1,10 +1,9 @@
 import { memo, useState } from "react";
 import { ArrowDownToLine, ArrowUpFromLine, Folder } from "lucide-react";
-import { StatusMessage } from "@/components/status-message";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { commands } from "@/lib/tauri";
 import { errorMessage, formatBytes, stateLabel, transferPercent } from "@/lib/format";
 import type { TransferSnapshot } from "@/lib/types";
@@ -39,29 +38,14 @@ export function TransfersPanel() {
           Encrypted, resumable file delivery between this PC and the paired Mac.
         </p>
       </header>
-      <div className="flex items-center gap-2.5">
-        <Tooltip>
-          <TooltipTrigger asChild>
-            {/* span keeps the tooltip reachable while the button is disabled */}
-            <span className="inline-flex">
-              <Button disabled={!files || busy} onClick={() => void sendFiles()}>
-                Send Files…
-              </Button>
-            </span>
-          </TooltipTrigger>
-          <TooltipContent>
-            {files
-              ? "Choose files to send to the paired Mac."
-              : "Available once the file-transfer channel connects."}
-          </TooltipContent>
-        </Tooltip>
+      <div className="flex flex-wrap items-center gap-2.5">
+        <Button disabled={!files || busy} onClick={() => void sendFiles()}>
+          Send Files…
+        </Button>
         <Button variant="outline" onClick={() => void commands.openFolder()}>
           Open received folder
         </Button>
-        <p
-          className="min-w-0 flex-1 truncate text-right text-[13px] text-muted-foreground"
-          aria-live="polite"
-        >
+        <p className="min-w-[180px] flex-1 text-[13px] text-muted-foreground">
           {files ? "File transfer is ready." : "Waiting for the file-transfer channel."}
         </p>
       </div>
@@ -82,10 +66,11 @@ export function TransfersPanel() {
           ))}
         </div>
       )}
-      {/* Reserved slot, so an error appearing does not shove the list upward. */}
-      <div className="mt-auto flex min-h-5 items-center justify-end">
-        <StatusMessage text={transferError} tone="error" />
-      </div>
+      {transferError ? (
+        <Alert variant="destructive">
+          <AlertDescription>{transferError}</AlertDescription>
+        </Alert>
+      ) : null}
     </div>
   );
 }
@@ -101,8 +86,8 @@ const TransferCard = memo(function TransferCard({ transfer }: { transfer: Transf
           <div
             className={
               incoming
-                ? "grid size-10 shrink-0 place-items-center rounded-[11px] border border-primary/20 bg-primary/10 text-primary"
-                : "grid size-10 shrink-0 place-items-center rounded-[11px] border bg-muted text-muted-foreground"
+                ? "grid size-10 place-items-center rounded-[11px] border border-primary/20 bg-primary/10 text-primary"
+                : "grid size-10 place-items-center rounded-[11px] border bg-muted text-muted-foreground"
             }
             aria-hidden="true"
           >
@@ -116,11 +101,6 @@ const TransferCard = memo(function TransferCard({ transfer }: { transfer: Transf
               {incoming ? "From Mac" : "To Mac"} · {stateLabel(transfer.state)}
             </span>
           </div>
-          {/* Right-aligned and tabular: the percentage changes every tick and
-              must not resize anything as it goes 9% → 10% → 100%. */}
-          <span className="w-12 shrink-0 text-right text-xs font-semibold tabular-nums">
-            {percent}%
-          </span>
         </div>
         <Progress
           value={percent}
@@ -132,10 +112,8 @@ const TransferCard = memo(function TransferCard({ transfer }: { transfer: Transf
                 : undefined
           }
         />
-        {/* Fixed height: the Open folder button only exists once the transfer
-            completes, and the row must not grow when it appears. */}
-        <div className="flex min-h-7 items-center justify-between gap-3">
-          <span className="text-xs text-muted-foreground tabular-nums">
+        <div className="flex items-center justify-between">
+          <span className="text-xs text-muted-foreground">
             {formatBytes(transfer.bytesDone)} of {formatBytes(transfer.bytesTotal)}
           </span>
           {transfer.directory && transfer.state === "completed" && incoming ? (

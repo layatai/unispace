@@ -47,7 +47,10 @@ fn local_state() -> observe::ReceiverSnapshot {
 
 #[tauri::command]
 async fn state() -> observe::ReceiverSnapshot {
-    match tokio::time::timeout(Duration::from_millis(150), read_live_snapshot()).await {
+    // Generous enough that an ordinarily busy socket does not produce a
+    // fallback snapshot: a fallback reports "disconnected" with no transfers,
+    // so a spurious one repaints the whole window.
+    match tokio::time::timeout(Duration::from_millis(750), read_live_snapshot()).await {
         Ok(Ok(snapshot)) => snapshot,
         Ok(Err(error)) => observe::fallback_snapshot(Some(format!(
             "The receiver service is not reporting status ({error}); showing its last known state."
