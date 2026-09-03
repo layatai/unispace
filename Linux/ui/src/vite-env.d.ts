@@ -16,6 +16,8 @@ declare global {
       };
     };
     __unispaceBoot?: unknown;
+    __unispaceDesktop?: unknown;
+    __unispaceSyncTheme?: () => void;
     __unispaceApply?: (snapshot: unknown) => void;
     __unispaceSetPanel?: (name: string) => void;
   }

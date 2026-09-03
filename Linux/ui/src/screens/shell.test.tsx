@@ -67,6 +67,7 @@ describe("Shell", () => {
     const { container } = renderShell();
     const before = {
       pills: shapes(container, "[data-slot=status-pill]"),
+      values: shapes(container, "[data-slot=row-status]"),
       rows: shapes(container, "[data-slot=status-row]"),
       actions: shapes(container, "[data-slot=row-action]"),
       header: shape(container.querySelector("header") as Element),
@@ -83,6 +84,7 @@ describe("Shell", () => {
     });
 
     expect(shapes(container, "[data-slot=status-pill]")).toEqual(before.pills);
+    expect(shapes(container, "[data-slot=row-status]")).toEqual(before.values);
     expect(shapes(container, "[data-slot=status-row]")).toEqual(before.rows);
     expect(shapes(container, "[data-slot=row-action]")).toEqual(before.actions);
     expect(shape(container.querySelector("header") as Element)).toBe(before.header);

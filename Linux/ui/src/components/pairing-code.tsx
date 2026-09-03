@@ -8,7 +8,7 @@ export function PairingCode({ code }: { code: string }) {
         <span
           key={`${digit}-${index}`}
           className={cn(
-            "grid size-12 place-items-center rounded-lg border bg-muted font-mono text-3xl font-semibold",
+            "grid size-12 place-items-center rounded-[var(--r-md)] border border-border bg-secondary font-mono text-3xl font-bold tabular-nums",
           )}
         >
           {digit}

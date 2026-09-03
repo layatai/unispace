@@ -3,17 +3,17 @@ import { cn } from "@/lib/utils";
 export type StatusTone = "active" | "ready" | "idle" | "warn";
 
 const surface: Record<StatusTone, string> = {
-  active: "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400",
-  ready: "border-primary/25 bg-primary/10 text-primary",
-  idle: "border-border bg-muted text-muted-foreground",
-  warn: "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-500",
+  active: "border-transparent bg-ok-surface text-ok",
+  ready: "border-transparent bg-accent-soft text-accent-text",
+  idle: "border-border bg-secondary text-muted-foreground",
+  warn: "border-transparent bg-warn-surface text-warn",
 };
 
 const dot: Record<StatusTone, string> = {
-  active: "bg-emerald-500",
-  ready: "bg-primary",
+  active: "bg-ok-dot",
+  ready: "bg-[var(--accent-bg)]",
   idle: "bg-muted-foreground/60",
-  warn: "bg-amber-500",
+  warn: "bg-warn-dot",
 };
 
 /**
@@ -38,7 +38,7 @@ export function StatusPill({
       data-slot="status-pill"
       data-tone={tone}
       className={cn(
-        "inline-flex h-6 shrink-0 items-center justify-center gap-1.5 rounded-full border px-2.5 text-xs font-semibold whitespace-nowrap",
+        "inline-flex h-[22px] shrink-0 items-center justify-center gap-1.5 rounded-full border px-2.5 text-xs font-bold whitespace-nowrap",
         surface[tone],
         className,
       )}

@@ -24,7 +24,7 @@ export function StatusMessage({
       aria-live="polite"
       title={text || undefined}
       className={cn(
-        "min-w-0 truncate text-right text-[13px]",
+        "min-w-0 flex-1 truncate text-right text-[13px]",
         tone === "error" ? "text-destructive" : "text-muted-foreground",
         className,
       )}

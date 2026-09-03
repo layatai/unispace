@@ -23,6 +23,7 @@
   --control-h: 34px;
   --control-h-sm: 26px;
   --headerbar-h: 47px;
+  --control-weight: 700;
 
   --r-sm: 4px;
   --r-md: 5px;
@@ -109,6 +110,7 @@
   --control-h: 30px;
   --control-h-sm: 24px;
   --headerbar-h: 44px;
+  --control-weight: 400;
 
   --r-sm: 2px;
   --r-md: 3px;

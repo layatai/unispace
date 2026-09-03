@@ -1,5 +1,6 @@
 import { Clipboard } from "lucide-react";
-import { StatusPill } from "@/components/status-pill";
+import { PreferencesGroup } from "@/components/preferences-group";
+import { RowStatus } from "@/components/row-status";
 import { Card, CardContent } from "@/components/ui/card";
 import { useReceiverStore } from "@/state/receiver-store";
 
@@ -9,48 +10,41 @@ export function ClipboardPanel() {
   const controller = controllerName || "Mac";
   const on = clipboard;
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-auto p-5">
-      <header>
-        <h2 className="text-[22px] font-bold tracking-tight">Clipboard</h2>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Carry text and links between this PC and the active UniSpace peer.
+    <div className="min-h-0 flex-1 overflow-auto">
+      <div className="mx-auto flex min-h-full w-full max-w-[640px] flex-col gap-5 px-6 py-6">
+        <PreferencesGroup
+          title="Clipboard"
+          description="Carry text and links between this PC and the active UniSpace peer."
+        >
+          <Card className="gap-0 py-0">
+            <CardContent className="px-0">
+              <div className="grid grid-cols-[1.25rem_minmax(0,1fr)_8rem] items-center gap-3.5 px-4 py-2">
+                <span className="text-muted-foreground" aria-hidden="true">
+                  <Clipboard className="size-4" />
+                </span>
+                <div className="min-w-0">
+                  <h3 className="truncate text-sm">Sharing</h3>
+                  {/* Reserved lines: the two messages differ in length, and the
+                      shorter one used to shrink the card as it reconnected. */}
+                  <p className="line-clamp-2 min-h-8 text-xs text-muted-foreground" aria-live="polite">
+                    {on
+                      ? `Sharing text and links with ${controller}.`
+                      : "Waiting for the clipboard channel to reconnect."}
+                  </p>
+                </div>
+                <RowStatus
+                  tone={on ? "active" : "warn"}
+                  label={on ? "Enabled" : "Reconnecting"}
+                  className="w-full"
+                />
+              </div>
+            </CardContent>
+          </Card>
+        </PreferencesGroup>
+        <p className="px-1 text-xs text-muted-foreground">
+          Text and links sync automatically. Regular files continue through Transfers.
         </p>
-      </header>
-      <Card>
-        <CardContent className="grid grid-cols-[2.75rem_minmax(0,1fr)_8rem] items-center gap-3.5">
-          <div
-            className={
-              on
-                ? "grid size-11 place-items-center rounded-[11px] border border-emerald-500/30 bg-emerald-500/10 text-emerald-600"
-                : "grid size-11 place-items-center rounded-[11px] border border-amber-500/30 bg-amber-500/10 text-amber-600"
-            }
-            aria-hidden="true"
-          >
-            <Clipboard className="size-4" />
-          </div>
-          <div className="min-w-0">
-            <h3 className="text-base font-semibold">Sharing</h3>
-            {/* One reserved line: the two messages differ in length, and the
-                shorter one used to shrink the card as the channel reconnected. */}
-            <p
-              className="mt-1 line-clamp-2 min-h-8 text-[13px] text-muted-foreground"
-              aria-live="polite"
-            >
-              {on
-                ? `Sharing text and links with ${controller}.`
-                : "Waiting for the clipboard channel to reconnect."}
-            </p>
-          </div>
-          <StatusPill
-            tone={on ? "active" : "warn"}
-            label={on ? "Enabled" : "Reconnecting"}
-            className="w-full"
-          />
-        </CardContent>
-      </Card>
-      <p className="text-xs text-muted-foreground">
-        Text and links sync automatically. Regular files continue through Transfers.
-      </p>
+      </div>
     </div>
   );
 }

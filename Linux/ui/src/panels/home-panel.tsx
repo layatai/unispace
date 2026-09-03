@@ -1,17 +1,14 @@
 import { useState, type ReactNode } from "react";
 import { Loader2, Monitor, Pointer, Settings } from "lucide-react";
+import { PreferencesGroup } from "@/components/preferences-group";
+import { RowStatus } from "@/components/row-status";
 import { StatusMessage } from "@/components/status-message";
-import {
-  StatusPill,
-  connectionLabel,
-  connectionTone,
-  type StatusTone,
-} from "@/components/status-pill";
+import { connectionLabel, connectionTone, type StatusTone } from "@/components/status-pill";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { commands } from "@/lib/tauri";
-import { errorMessage } from "@/lib/format";
+import { connectionDetail, errorMessage } from "@/lib/format";
 import { useReceiverStore } from "@/state/receiver-store";
 import { UnpairDialog } from "@/panels/unpair-dialog";
 
@@ -41,86 +38,86 @@ export function HomePanel() {
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-auto p-5">
-      <header>
-        <h2 className="text-[22px] font-bold tracking-tight">Receiver</h2>
-        {/* Deliberately static: the live detail is in the window header, and
-            repeating it here made two lines of text rewrite on every update. */}
-        <p className="mt-1 text-sm text-muted-foreground">
-          How this PC appears to the paired Mac.
-        </p>
-      </header>
-      <Card className="py-0">
-        <CardContent className="divide-y px-0">
-          <StatusRow
-            icon={<Monitor className="size-4" />}
-            title="Controller"
-            detail={hostAddress ? `${controllerName || "Mac"} · ${hostAddress}` : "Not set"}
-            tone={connectionTone(receiving, control)}
-            label={connectionLabel(receiving, control)}
+    <div className="min-h-0 flex-1 overflow-auto">
+      <div className="mx-auto flex min-h-full w-full max-w-[640px] flex-col gap-5 px-6 py-6">
+        <PreferencesGroup
+          title="Receiver"
+          description={connectionDetail(receiving, control, controllerName)}
+        >
+          <Card className="gap-0 py-0">
+            <CardContent className="divide-y divide-separator px-0">
+              <StatusRow
+                icon={<Monitor className="size-4" />}
+                title="Controller"
+                detail={hostAddress ? `${controllerName || "Mac"} · ${hostAddress}` : "Not set"}
+                tone={connectionTone(receiving, control)}
+                label={connectionLabel(receiving, control)}
+              />
+              <StatusRow
+                icon={<Settings className="size-4" />}
+                title="Receiver service"
+                detail="Keeps this PC reachable from the paired Mac."
+                tone={serviceRunning ? "active" : "warn"}
+                label={serviceRunning ? "Running" : "Stopped"}
+                action={
+                  serviceRunning ? (
+                    <RowAction
+                      label="Stop"
+                      hint="Stop the receiver service on this PC."
+                      variant="outline"
+                      busy={busy === "stop"}
+                      disabled={busy !== null}
+                      onClick={() => void run("stop", () => commands.stopService())}
+                    />
+                  ) : (
+                    <RowAction
+                      label="Start"
+                      hint="Start the receiver service so the Mac can reach this PC."
+                      busy={busy === "start"}
+                      disabled={busy !== null}
+                      onClick={() => void run("start", () => commands.startService())}
+                    />
+                  )
+                }
+              />
+              <StatusRow
+                icon={<Pointer className="size-4" />}
+                title="Input access"
+                detail={
+                  uinputReady
+                    ? "Pointer and keyboard injection is allowed."
+                    : "Sign out and back in, then restart the receiver to pick up the unispace group."
+                }
+                tone={uinputReady ? "active" : "warn"}
+                label={uinputReady ? "Allowed" : "Needs access"}
+                action={
+                  uinputReady && serviceRunning ? null : (
+                    <RowAction
+                      label="Restart"
+                      hint="Restart the receiver so it picks up the current permissions."
+                      variant="outline"
+                      busy={busy === "restart"}
+                      disabled={busy !== null}
+                      onClick={() => void run("restart", () => commands.restartReceiver())}
+                    />
+                  )
+                }
+              />
+            </CardContent>
+          </Card>
+        </PreferencesGroup>
+        {/* Reserved row: the message slot is always here, so a notice arriving
+            or clearing never moves the list above it. */}
+        <div className="flex min-h-[var(--control-h)] items-center justify-between gap-3 px-1">
+          <StatusMessage
+            text={homeError || homeNotice}
+            tone={homeError ? "error" : "notice"}
+            className="text-left"
           />
-          <StatusRow
-            icon={<Settings className="size-4" />}
-            title="Receiver service"
-            detail="Keeps this PC reachable from the paired Mac."
-            tone={serviceRunning ? "active" : "warn"}
-            label={serviceRunning ? "Running" : "Stopped"}
-            action={
-              serviceRunning ? (
-                <RowAction
-                  label="Stop"
-                  hint="Stop the receiver service on this PC."
-                  variant="outline"
-                  busy={busy === "stop"}
-                  disabled={busy !== null}
-                  onClick={() => void run("stop", () => commands.stopService())}
-                />
-              ) : (
-                <RowAction
-                  label="Start"
-                  hint="Start the receiver service so the Mac can reach this PC."
-                  busy={busy === "start"}
-                  disabled={busy !== null}
-                  onClick={() => void run("start", () => commands.startService())}
-                />
-              )
-            }
-          />
-          <StatusRow
-            icon={<Pointer className="size-4" />}
-            title="Input access"
-            detail={
-              uinputReady
-                ? "Pointer and keyboard injection is allowed."
-                : "Sign out and back in, then restart the receiver to pick up the unispace group."
-            }
-            tone={uinputReady ? "active" : "warn"}
-            label={uinputReady ? "Allowed" : "Needs access"}
-            action={
-              uinputReady && serviceRunning ? null : (
-                <RowAction
-                  label="Restart"
-                  hint="Restart the receiver so it picks up the current permissions."
-                  variant="outline"
-                  busy={busy === "restart"}
-                  disabled={busy !== null}
-                  onClick={() => void run("restart", () => commands.restartReceiver())}
-                />
-              )
-            }
-          />
-        </CardContent>
-      </Card>
-      {/* Reserved footer: the message slot is always here, so a notice
-          arriving or clearing never moves the card above it. */}
-      <div className="mt-auto flex min-h-9 items-center justify-between gap-3">
-        <Button variant="ghost" onClick={() => setUnpairOpen(true)}>
-          Unpair…
-        </Button>
-        <StatusMessage
-          text={homeError || homeNotice}
-          tone={homeError ? "error" : "notice"}
-        />
+          <Button variant="outline" onClick={() => setUnpairOpen(true)}>
+            Unpair…
+          </Button>
+        </div>
       </div>
       <UnpairDialog open={unpairOpen} onOpenChange={setUnpairOpen} />
     </div>
@@ -187,33 +184,24 @@ function StatusRow({
     // the title and detail beside it.
     <div
       data-slot="status-row"
-      className="grid grid-cols-[2.5rem_minmax(0,1fr)_13.5rem] items-center gap-3 px-4 py-3"
+      className="grid grid-cols-[1.25rem_minmax(0,1fr)_13rem] items-center gap-3.5 px-4 py-2"
     >
-      <div
-        className={
-          tone === "warn"
-            ? "grid size-10 place-items-center rounded-[11px] border border-amber-500/30 bg-amber-500/10 text-amber-600"
-            : tone === "active"
-              ? "grid size-10 place-items-center rounded-[11px] border border-emerald-500/30 bg-emerald-500/10 text-emerald-600"
-              : "grid size-10 place-items-center rounded-[11px] border border-primary/20 bg-primary/10 text-primary"
-        }
-        aria-hidden="true"
-      >
+      <span className="text-muted-foreground" aria-hidden="true">
         {icon}
-      </div>
+      </span>
       <div className="min-w-0">
-        <h3 className="truncate text-sm font-semibold">{title}</h3>
+        <h3 className="truncate text-sm">{title}</h3>
         {/* Two lines are always reserved: the detail text differs in length
             between states, and one wrapping differently changes the row height. */}
-        <p className="mt-0.5 line-clamp-2 min-h-8 text-xs text-muted-foreground" title={detail}>
+        <p className="line-clamp-2 min-h-8 text-xs text-muted-foreground" title={detail}>
           {detail}
         </p>
       </div>
       <div className="flex items-center justify-end gap-2">
-        <StatusPill tone={tone} label={label} className="w-[7.5rem]" />
+        <RowStatus tone={tone} label={label} className="w-[7.5rem]" />
         <div
           data-slot="row-action"
-          className="relative flex h-7 w-[5rem] shrink-0 items-center justify-end"
+          className="relative flex h-[var(--control-h-sm)] w-[5rem] shrink-0 items-center justify-end"
         >
           {action}
         </div>

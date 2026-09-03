@@ -34,21 +34,18 @@ export function Welcome() {
   }
 
   return (
-    <section className="flex h-full flex-col items-center justify-center bg-[radial-gradient(1100px_380px_at_50%_-8%,color-mix(in_srgb,var(--brand)_12%,transparent),transparent_72%)] px-9 text-center">
-      <p className="mb-4 text-[13px] font-semibold tracking-[0.04em] text-primary uppercase">
-        UniSpace
-      </p>
-      <div className="mb-4 grid size-14 place-items-center rounded-2xl border border-primary/20 bg-primary/10 text-primary">
-        <Link2 className="size-7" aria-hidden="true" />
-      </div>
-      <h1 className="text-[30px] leading-tight font-bold tracking-tight">
+    // The desktop pattern for an empty first-run view (AdwStatusPage): a large
+    // dimmed symbolic icon, a bold title, a dimmed description, then the action.
+    <section className="flex h-full flex-col items-center justify-center px-9 text-center">
+      <Link2 className="size-16 text-muted-foreground/55" aria-hidden="true" />
+      <h1 className="mt-5 text-[24px] leading-tight font-bold">
         One keyboard. Every device.
       </h1>
       <p className="mt-2 max-w-md text-[15px] text-muted-foreground">
         Pair this Linux PC with the Mac whose keyboard you want to use, over your LAN or
         private Tailscale network.
       </p>
-      <Card className="mt-7 w-full max-w-md text-left">
+      <Card className="mt-6 w-full max-w-sm text-left">
         <CardContent className="flex flex-col gap-3">
           <Label htmlFor="address" className="sr-only">
             Controller Mac hostname or Tailscale address

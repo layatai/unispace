@@ -1,5 +1,6 @@
 import { memo, useState } from "react";
 import { ArrowDownToLine, ArrowUpFromLine, Folder } from "lucide-react";
+import { PreferencesGroup } from "@/components/preferences-group";
 import { StatusMessage } from "@/components/status-message";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -32,59 +33,58 @@ export function TransfersPanel() {
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-auto p-5">
-      <header>
-        <h2 className="text-[22px] font-bold tracking-tight">Transfers</h2>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Encrypted, resumable file delivery between this PC and the paired Mac.
-        </p>
-      </header>
-      <div className="flex items-center gap-2.5">
-        <Tooltip>
-          <TooltipTrigger asChild>
-            {/* span keeps the tooltip reachable while the button is disabled */}
-            <span className="inline-flex">
-              <Button disabled={!files || busy} onClick={() => void sendFiles()}>
-                Send Files…
+    <div className="min-h-0 flex-1 overflow-auto">
+      <div className="mx-auto flex min-h-full w-full max-w-[640px] flex-col gap-5 px-6 py-6">
+        <PreferencesGroup
+          title="Transfers"
+          description={
+            files ? "File transfer is ready." : "Waiting for the file-transfer channel."
+          }
+          action={
+            <div className="flex shrink-0 items-center gap-2">
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  {/* span keeps the tooltip reachable while the button is disabled */}
+                  <span className="inline-flex">
+                    <Button disabled={!files || busy} onClick={() => void sendFiles()}>
+                      Send Files…
+                    </Button>
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent>
+                  {files
+                    ? "Choose files to send to the paired Mac."
+                    : "Available once the file-transfer channel connects."}
+                </TooltipContent>
+              </Tooltip>
+              <Button variant="outline" onClick={() => void commands.openFolder()}>
+                Open folder
               </Button>
-            </span>
-          </TooltipTrigger>
-          <TooltipContent>
-            {files
-              ? "Choose files to send to the paired Mac."
-              : "Available once the file-transfer channel connects."}
-          </TooltipContent>
-        </Tooltip>
-        <Button variant="outline" onClick={() => void commands.openFolder()}>
-          Open received folder
-        </Button>
-        <p
-          className="min-w-0 flex-1 truncate text-right text-[13px] text-muted-foreground"
-          aria-live="polite"
+            </div>
+          }
         >
-          {files ? "File transfer is ready." : "Waiting for the file-transfer channel."}
-        </p>
-      </div>
-      {transfers.length === 0 ? (
-        <Card className="flex flex-1 flex-col items-center justify-center py-10 text-center">
-          <div className="grid size-10 place-items-center rounded-[11px] border border-primary/20 bg-primary/10 text-primary">
-            <Folder className="size-4" aria-hidden="true" />
-          </div>
-          <strong className="mt-2 text-[15px]">No file transfers yet</strong>
-          <p className="mt-1 max-w-xs text-[13px] text-muted-foreground">
-            Copy files on the Mac while this PC is active, or choose Send Files.
-          </p>
-        </Card>
-      ) : (
-        <div className="flex flex-col gap-2.5">
-          {transfers.map((transfer) => (
-            <TransferCard key={transfer.id} transfer={transfer} />
-          ))}
+          {transfers.length === 0 ? (
+            <Card className="flex flex-col items-center justify-center py-12 text-center">
+              <div className="text-muted-foreground" aria-hidden="true">
+                <Folder className="size-8" />
+              </div>
+              <strong className="mt-3 text-[15px] font-bold">No file transfers yet</strong>
+              <p className="mt-1 max-w-xs text-[13px] text-muted-foreground">
+                Copy files on the Mac while this PC is active, or choose Send Files.
+              </p>
+            </Card>
+          ) : (
+            <div className="flex flex-col gap-3">
+              {transfers.map((transfer) => (
+                <TransferCard key={transfer.id} transfer={transfer} />
+              ))}
+            </div>
+          )}
+        </PreferencesGroup>
+        {/* Reserved slot, so an error appearing does not shove the list upward. */}
+        <div className="mt-auto flex min-h-5 items-center justify-end">
+          <StatusMessage text={transferError} tone="error" />
         </div>
-      )}
-      {/* Reserved slot, so an error appearing does not shove the list upward. */}
-      <div className="mt-auto flex min-h-5 items-center justify-end">
-        <StatusMessage text={transferError} tone="error" />
       </div>
     </div>
   );
@@ -97,19 +97,12 @@ const TransferCard = memo(function TransferCard({ transfer }: { transfer: Transf
   return (
     <Card>
       <CardContent className="flex flex-col gap-2.5">
-        <div className="flex gap-3">
-          <div
-            className={
-              incoming
-                ? "grid size-10 shrink-0 place-items-center rounded-[11px] border border-primary/20 bg-primary/10 text-primary"
-                : "grid size-10 shrink-0 place-items-center rounded-[11px] border bg-muted text-muted-foreground"
-            }
-            aria-hidden="true"
-          >
+        <div className="flex items-center gap-3.5">
+          <span className="shrink-0 text-muted-foreground" aria-hidden="true">
             <Icon className="size-4" />
-          </div>
+          </span>
           <div className="min-w-0 flex-1">
-            <strong className="block truncate text-sm" title={transfer.displayName}>
+            <strong className="block truncate text-sm font-bold" title={transfer.displayName}>
               {transfer.displayName}
             </strong>
             <span className="text-xs text-muted-foreground">
@@ -118,7 +111,7 @@ const TransferCard = memo(function TransferCard({ transfer }: { transfer: Transf
           </div>
           {/* Right-aligned and tabular: the percentage changes every tick and
               must not resize anything as it goes 9% → 10% → 100%. */}
-          <span className="w-12 shrink-0 text-right text-xs font-semibold tabular-nums">
+          <span className="w-12 shrink-0 text-right text-xs font-bold tabular-nums">
             {percent}%
           </span>
         </div>
@@ -126,15 +119,15 @@ const TransferCard = memo(function TransferCard({ transfer }: { transfer: Transf
           value={percent}
           className={
             transfer.state === "failed"
-              ? "[&_[data-slot=progress-indicator]]:bg-destructive"
+              ? "[&_[data-slot=progress-indicator]]:bg-[var(--danger-bg)]"
               : transfer.state === "completed"
-                ? "[&_[data-slot=progress-indicator]]:bg-emerald-500"
+                ? "[&_[data-slot=progress-indicator]]:bg-ok-dot"
                 : undefined
           }
         />
         {/* Fixed height: the Open folder button only exists once the transfer
             completes, and the row must not grow when it appears. */}
-        <div className="flex min-h-7 items-center justify-between gap-3">
+        <div className="flex min-h-[var(--control-h-sm)] items-center justify-between gap-3">
           <span className="text-xs text-muted-foreground tabular-nums">
             {formatBytes(transfer.bytesDone)} of {formatBytes(transfer.bytesTotal)}
           </span>

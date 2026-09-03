@@ -33,6 +33,74 @@ enum Instance {
     AlreadyRunning,
 }
 
+/// What the window needs to know to dress like the desktop it runs on.
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DesktopInfo {
+    /// "gnome" (also the fallback for unknown desktops) or "kde".
+    id: String,
+    /// The desktop's colour-scheme preference, or None when it has none and
+    /// the webview's own `prefers-color-scheme` should decide.
+    dark: Option<bool>,
+}
+
+fn desktop_id() -> String {
+    let raw = std::env::var("XDG_CURRENT_DESKTOP")
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if raw.contains("kde") || raw.contains("plasma") || raw.contains("lxqt") {
+        "kde".into()
+    } else {
+        "gnome".into()
+    }
+}
+
+/// Ask the desktop whether it is in dark mode. Both probes are cheap, and a
+/// missing tool or an unset key simply means "no preference".
+fn desktop_prefers_dark(id: &str) -> Option<bool> {
+    if id == "kde" {
+        for tool in ["kreadconfig6", "kreadconfig5"] {
+            let Ok(output) = Command::new(tool)
+                .args(["--file", "kdeglobals", "--group", "General", "--key", "ColorScheme"])
+                .output()
+            else {
+                continue;
+            };
+            if !output.status.success() {
+                continue;
+            }
+            let scheme = String::from_utf8_lossy(&output.stdout).to_ascii_lowercase();
+            if !scheme.trim().is_empty() {
+                return Some(scheme.contains("dark"));
+            }
+        }
+        return None;
+    }
+    let output = Command::new("gsettings")
+        .args(["get", "org.gnome.desktop.interface", "color-scheme"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let scheme = String::from_utf8_lossy(&output.stdout).to_ascii_lowercase();
+    if scheme.contains("prefer-dark") {
+        Some(true)
+    } else if scheme.contains("prefer-light") {
+        Some(false)
+    } else {
+        // "default" means the user has expressed no preference.
+        None
+    }
+}
+
+#[tauri::command]
+fn desktop() -> DesktopInfo {
+    let id = desktop_id();
+    let dark = desktop_prefers_dark(&id);
+    DesktopInfo { id, dark }
+}
+
 #[tauri::command]
 fn ping() -> String {
     format!("pong {}", std::process::id())
@@ -430,10 +498,15 @@ fn main() -> Result<()> {
             let Ok(json) = serde_json::to_string(&snapshot) else {
                 return;
             };
+            // The desktop identity has to be there before the first paint, or
+            // the window flashes the wrong theme.
+            let desktop_json = serde_json::to_string(&desktop()).unwrap_or_else(|_| "null".into());
             let direct = format!(
                 "(function(){{try{{\
                   var s={json};\
+                  window.__unispaceDesktop={desktop_json};\
                   window.__unispaceBoot=s;\
+                  if(typeof window.__unispaceSyncTheme==='function')window.__unispaceSyncTheme();\
                   if(typeof window.__unispaceApply==='function')window.__unispaceApply(s);\
                 }}catch(e){{}}}})();"
             );
@@ -471,6 +544,7 @@ fn main() -> Result<()> {
         .invoke_handler(tauri::generate_handler![
             ping,
             local_state,
+            desktop,
             state,
             begin_pairing,
             confirm_pairing,

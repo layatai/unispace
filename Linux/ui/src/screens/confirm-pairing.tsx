@@ -44,10 +44,7 @@ export function ConfirmPairing() {
 
   return (
     <section className="flex h-full flex-col items-center justify-center px-9 text-center">
-      <p className="mb-4 text-[13px] font-semibold tracking-[0.04em] text-primary uppercase">
-        UniSpace
-      </p>
-      <h1 className="text-[30px] leading-tight font-bold tracking-tight">Confirm pairing</h1>
+      <h1 className="text-[24px] leading-tight font-bold">Confirm pairing</h1>
       <p className="mt-2 max-w-md text-[15px] text-muted-foreground">
         {offer
           ? `Check that ${offer.peerName} is showing this same code, then approve on both devices.`
