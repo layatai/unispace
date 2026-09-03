@@ -30,12 +30,11 @@ enum CommandKind {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive("unispace_linux=info".parse()?),
-        )
-        .init();
+    let filter = match std::env::var_os("RUST_LOG") {
+        Some(_) => tracing_subscriber::EnvFilter::from_default_env(),
+        None => tracing_subscriber::EnvFilter::new("unispace_linux=info"),
+    };
+    tracing_subscriber::fmt().with_env_filter(filter).init();
     match Cli::parse().command.unwrap_or(CommandKind::Open) {
         CommandKind::Pair { address } => pair(address).await,
         CommandKind::Run => {
@@ -53,7 +52,24 @@ async fn main() -> Result<()> {
                 send_files,
             ));
             let gesture_bindings = configuration.resolved_gesture_bindings();
-            receiver::run(configuration, UinputSink::open(gesture_bindings)?, hub).await
+            let display = configuration
+                .workspace
+                .devices
+                .iter()
+                .find(|device| device.id.raw_value == configuration.device_id)
+                .and_then(|device| device.displays.first())
+                .cloned()
+                .context("local display missing from the paired workspace")?;
+            receiver::run(
+                configuration,
+                UinputSink::open(
+                    gesture_bindings,
+                    display.frame.width as i32,
+                    display.frame.height as i32,
+                )?,
+                hub,
+            )
+            .await
         }
         CommandKind::Status => {
             match Configuration::load() {

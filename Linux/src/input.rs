@@ -4,8 +4,8 @@ use crate::{
 };
 use anyhow::{Context, Result};
 use evdev::{
-    AttributeSet, EventType, InputEvent as LinuxEvent, KeyCode, RelativeAxisCode,
-    uinput::VirtualDevice,
+    AbsInfo, AbsoluteAxisCode, AttributeSet, EventType, InputEvent as LinuxEvent, KeyCode,
+    RelativeAxisCode, UinputAbsSetup, uinput::VirtualDevice,
 };
 use std::collections::BTreeSet;
 
@@ -30,7 +30,11 @@ pub struct UinputSink {
 }
 
 impl UinputSink {
-    pub fn open(gesture_bindings: ResolvedGestureBindings) -> Result<Self> {
+    pub fn open(
+        gesture_bindings: ResolvedGestureBindings,
+        width: i32,
+        height: i32,
+    ) -> Result<Self> {
         let mut keys = AttributeSet::<KeyCode>::new();
         for code in 1..=248 {
             keys.insert(KeyCode::new(code));
@@ -54,6 +58,17 @@ impl UinputSink {
             .name("UniSpace Virtual Input")
             .with_keys(&keys)?
             .with_relative_axes(&relative)?
+            // Absolute axes give activation placement exact positioning:
+            // relative slams saturate through libinput acceleration and land
+            // the cursor on the wrong edge.
+            .with_absolute_axis(&UinputAbsSetup::new(
+                AbsoluteAxisCode::ABS_X,
+                AbsInfo::new(0, 0, width.max(1), 0, 0, 0),
+            ))?
+            .with_absolute_axis(&UinputAbsSetup::new(
+                AbsoluteAxisCode::ABS_Y,
+                AbsInfo::new(0, 0, height.max(1), 0, 0, 0),
+            ))?
             .build()?;
         Ok(Self {
             device,
@@ -266,10 +281,8 @@ impl InputSink for UinputSink {
             ),
         };
         self.emit(&[
-            LinuxEvent::new(EventType::RELATIVE.0, RelativeAxisCode::REL_X.0, -32_767),
-            LinuxEvent::new(EventType::RELATIVE.0, RelativeAxisCode::REL_Y.0, -32_767),
-            LinuxEvent::new(EventType::RELATIVE.0, RelativeAxisCode::REL_X.0, x),
-            LinuxEvent::new(EventType::RELATIVE.0, RelativeAxisCode::REL_Y.0, y),
+            LinuxEvent::new(EventType::ABSOLUTE.0, AbsoluteAxisCode::ABS_X.0, x),
+            LinuxEvent::new(EventType::ABSOLUTE.0, AbsoluteAxisCode::ABS_Y.0, y),
         ])
     }
 

@@ -14,11 +14,12 @@ impl StatusTray {
             let ui = dir.join("unispace-linux-ui");
             // Preferred: launch inside the user session; the systemd user
             // manager carries the desktop environment the webview needs.
+            let unit = format!("unispace-ui-{}", std::process::id());
             if Command::new("systemd-run")
                 .args([
                     "--user",
                     "--collect",
-                    "--unit=unispace-ui",
+                    &format!("--unit={unit}"),
                     &ui.to_string_lossy(),
                 ])
                 .status()

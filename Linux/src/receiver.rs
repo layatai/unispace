@@ -262,6 +262,8 @@ async fn handle_control(
                 .find(|display| display.id.raw_value == display_id);
             let accepted = controller_id == remote.id.raw_value && display.is_some();
             if let Some(display) = display.filter(|_| accepted) {
+                let display_width = display.frame.width;
+                debug!(?edge, ?position, display_width, "activate placement");
                 input.release_all()?;
                 input.activate(display.frame.width, display.frame.height, edge, position)?;
                 let (x, y) = match edge {
