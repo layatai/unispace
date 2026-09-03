@@ -8,6 +8,7 @@ ConditionPathExists=%h/.config/unispace/receiver.json
 [Service]
 Type=simple
 ExecStart=/usr/bin/unispace-linux run
+SupplementaryGroups=unispace
 Restart=on-failure
 RestartSec=2
 Environment=RUST_LOG=unispace_linux=info
