@@ -58,6 +58,9 @@ pub struct TransferSnapshot {
 #[serde(rename_all = "camelCase")]
 pub struct ReceiverSnapshot {
     pub paired: bool,
+    /// Why the UI shows the connect screen despite a paired config, if it does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notice: Option<String>,
     pub workspace_name: String,
     pub controller_name: String,
     pub host_address: String,
@@ -71,9 +74,10 @@ pub struct ReceiverSnapshot {
 }
 
 impl ReceiverSnapshot {
-    pub fn unpaired() -> Self {
+    pub fn unpaired(notice: Option<String>) -> Self {
         Self {
             paired: false,
+            notice,
             workspace_name: String::new(),
             controller_name: String::new(),
             host_address: String::new(),
@@ -90,6 +94,7 @@ impl ReceiverSnapshot {
     pub fn from_configuration(configuration: &Configuration) -> Self {
         Self {
             paired: true,
+            notice: None,
             workspace_name: configuration.workspace.name.clone(),
             controller_name: configuration
                 .workspace
@@ -234,15 +239,18 @@ pub fn uinput_accessible() -> bool {
         .is_ok()
 }
 
-pub fn fallback_snapshot() -> ReceiverSnapshot {
+pub fn fallback_snapshot(notice: Option<String>) -> ReceiverSnapshot {
     match Configuration::load() {
         Ok(configuration) => {
             let mut snapshot = ReceiverSnapshot::from_configuration(&configuration);
             snapshot.service_running = crate::service::is_active();
             snapshot.uinput_ready = uinput_accessible();
+            snapshot.notice = notice;
             snapshot
         }
-        Err(_) => ReceiverSnapshot::unpaired(),
+        Err(error) => ReceiverSnapshot::unpaired(Some(format!(
+            "The paired configuration could not be read: {error}"
+        ))),
     }
 }
 
@@ -408,6 +416,7 @@ mod tests {
     fn sample() -> ReceiverSnapshot {
         ReceiverSnapshot {
             paired: true,
+            notice: None,
             workspace_name: "Desk".into(),
             controller_name: "Tai's Mac".into(),
             host_address: "mac.local".into(),
@@ -447,7 +456,7 @@ mod tests {
 
     #[tokio::test]
     async fn hub_update_is_visible_to_subscribers() {
-        let (hub, _send_rx) = StatusHub::new(ReceiverSnapshot::unpaired());
+        let (hub, _send_rx) = StatusHub::new(ReceiverSnapshot::unpaired(None));
         let mut rx = hub.subscribe();
         hub.set_control(true);
         timeout(Duration::from_secs(1), rx.changed())

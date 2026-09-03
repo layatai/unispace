@@ -39,7 +39,12 @@ enum Instance {
 async fn state() -> observe::ReceiverSnapshot {
     match tokio::time::timeout(Duration::from_millis(150), read_live_snapshot()).await {
         Ok(Ok(snapshot)) => snapshot,
-        _ => observe::fallback_snapshot(),
+        Ok(Err(error)) => observe::fallback_snapshot(Some(format!(
+            "The receiver service is not reporting status ({error}); showing its last known state."
+        ))),
+        Err(_) => observe::fallback_snapshot(Some(
+            "The receiver service did not answer in time; showing its last known state.".into(),
+        )),
     }
 }
 
@@ -339,7 +344,12 @@ async fn pump_status(app: tauri::AppHandle) {
                 }
             }
             Err(_) => {
-                let _ = app.emit("receiver-status", observe::fallback_snapshot());
+                let _ = app.emit(
+                    "receiver-status",
+                    observe::fallback_snapshot(Some(
+                        "The receiver service is not running; start it from Home.".into(),
+                    )),
+                );
                 tokio::time::sleep(Duration::from_millis(500)).await;
             }
         }
