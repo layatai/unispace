@@ -27,6 +27,8 @@ pub struct UinputSink {
     modifiers: u16,
     swipe_triggered: bool,
     gesture_bindings: ResolvedGestureBindings,
+    wheel_acc_x: f64,
+    wheel_acc_y: f64,
 }
 
 impl UinputSink {
@@ -76,6 +78,8 @@ impl UinputSink {
             modifiers: 0,
             swipe_triggered: false,
             gesture_bindings,
+            wheel_acc_x: 0.0,
+            wheel_acc_y: 0.0,
         })
     }
     fn emit(&mut self, events: &[LinuxEvent]) -> Result<()> {
@@ -217,21 +221,40 @@ impl UinputSink {
             _ => Ok(()),
         }
     }
+    /// Smooth wheel: REL_WHEEL is detent-quantized (~3 lines per unit), while
+    /// the controller sends per-point deltas. Accumulate and emit
+    /// REL_WHEEL_HI_RES (120 = one detent) so Wayland scrolls like the trackpad.
     fn wheel(&mut self, dx: f64, dy: f64) -> Result<()> {
+        const HI_RES_PER_POINT: f64 = 4.0;
         let mut events = Vec::new();
-        let (x, y) = wheel_axes(dx, dy);
-        if x != 0 {
+        self.wheel_acc_x += dx * HI_RES_PER_POINT;
+        self.wheel_acc_y += dy * HI_RES_PER_POINT;
+        let steps_x = self.wheel_acc_x.trunc();
+        let steps_y = self.wheel_acc_y.trunc();
+        self.wheel_acc_x -= steps_x;
+        self.wheel_acc_y -= steps_y;
+        if steps_x != 0.0 {
             events.push(LinuxEvent::new(
                 EventType::RELATIVE.0,
                 RelativeAxisCode::REL_HWHEEL.0,
-                x,
+                (steps_x / 120.0).round() as i32,
+            ));
+            events.push(LinuxEvent::new(
+                EventType::RELATIVE.0,
+                RelativeAxisCode::REL_HWHEEL_HI_RES.0,
+                steps_x as i32,
             ));
         }
-        if y != 0 {
+        if steps_y != 0.0 {
             events.push(LinuxEvent::new(
                 EventType::RELATIVE.0,
                 RelativeAxisCode::REL_WHEEL.0,
-                y,
+                (steps_y / 120.0).round() as i32,
+            ));
+            events.push(LinuxEvent::new(
+                EventType::RELATIVE.0,
+                RelativeAxisCode::REL_WHEEL_HI_RES.0,
+                steps_y as i32,
             ));
         }
         if !events.is_empty() {
@@ -425,13 +448,6 @@ fn hid_to_linux(usage: u16) -> Option<KeyCode> {
     Some(KeyCode::new(code))
 }
 
-/// Portable scroll signs match the controller capture and the Windows injector.
-/// macOS Natural Scrolling is already applied in the CGEvent point deltas; do
-/// not invert again on Linux.
-fn wheel_axes(dx: f64, dy: f64) -> (i32, i32) {
-    (dx.round() as i32, dy.round() as i32)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -441,9 +457,4 @@ mod tests {
         assert_eq!(hid_to_linux(0xe3), Some(KeyCode::KEY_LEFTMETA));
     }
 
-    #[test]
-    fn wheel_axes_keep_controller_scroll_signs() {
-        assert_eq!(wheel_axes(2.0, -3.0), (2, -3));
-        assert_eq!(wheel_axes(-1.4, 0.6), (-1, 1));
-    }
 }
