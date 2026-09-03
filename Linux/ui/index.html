@@ -665,6 +665,7 @@
           <div class="row end">
             <span id="service-state" class="value"></span>
             <button id="start-service" class="hidden">Start</button>
+            <button id="stop-service" class="ghost hidden">Stop</button>
           </div>
         </div>
         <div class="status-row">
@@ -673,7 +674,10 @@
             <h3>Input access</h3>
             <p id="uinput-detail">Required to move the pointer and type.</p>
           </div>
-          <span id="uinput-state" class="value"></span>
+          <div class="row end">
+            <span id="uinput-state" class="value"></span>
+            <button id="restart-receiver" class="hidden">Restart receiver</button>
+          </div>
         </div>
       </div>
       <div class="footer-actions">
@@ -775,16 +779,16 @@
 
       setStatus("service", next.serviceRunning, "Running", "Stopped");
       $("start-service").classList.toggle("hidden", !!next.serviceRunning);
+      $("stop-service").classList.toggle("hidden", !next.serviceRunning);
 
-      setStatus(
-        "uinput",
-        next.uinputReady,
-        "Allowed",
-        "Needs access"
+      setStatus("uinput", next.uinputReady, "Allowed", "Needs access");
+      $("restart-receiver").classList.toggle(
+        "hidden",
+        next.uinputReady && next.serviceRunning
       );
       $("uinput-detail").textContent = next.uinputReady
         ? "Required to move the pointer and type."
-        : "Join the unispace group, then sign out and back in.";
+        : "Sign out and back in, then restart the receiver to pick up the unispace group.";
 
       $("files-hint").textContent = next.files
         ? "File transfer is ready."
@@ -967,6 +971,13 @@
 
     $("start-service").addEventListener("click", () =>
       run("home-error", $("start-service"), () => invoke("start_service"))
+    );
+    $("stop-service").addEventListener("click", () =>
+      run("home-error", $("stop-service"), () => invoke("stop_service"))
+    );
+    $("restart-receiver").addEventListener("click", () =>
+      run("home-error", $("restart-receiver"), () => invoke("restart_receiver"))
+    );
     );
 
     $("send-files").addEventListener("click", () => run("transfer-error", $("send-files"), async () => {

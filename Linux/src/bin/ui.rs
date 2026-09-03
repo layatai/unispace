@@ -118,6 +118,22 @@ fn start_service() -> Result<(), String> {
 }
 
 #[tauri::command]
+fn stop_service() -> Result<(), String> {
+    service::stop().map_err(|error| error.to_string())
+}
+
+/// Recovers a degraded receiver: stops the systemd unit and any manually
+/// launched daemon (e.g. one started before a relogin, whose process groups
+/// lack `unispace`), then starts the service fresh from the current session.
+#[tauri::command]
+fn restart_receiver() -> Result<(), String> {
+    service::stop().map_err(|error| error.to_string())?;
+    let _ = Command::new("pkill").args(["-x", "unispace-linux"]).status();
+    std::thread::sleep(Duration::from_millis(600));
+    service::start().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn choose_files() -> Result<Vec<String>, String> {
     let paths = rfd::FileDialog::new()
         .set_title("Send Files")
@@ -378,6 +394,8 @@ fn main() -> Result<()> {
             cancel_pairing,
             unpair,
             start_service,
+            stop_service,
+            restart_receiver,
             choose_files,
             send_files,
             open_folder
