@@ -170,6 +170,12 @@ public struct DevicePlatform: RawRepresentable, Codable, Hashable, Sendable {
     public static let unknown = Self(rawValue: "unknown")
     public static let macOS = Self(rawValue: "macos")
     public static let windows = Self(rawValue: "windows")
+    public static let linux = Self(rawValue: "linux")
+
+    /// Receiver platforms that use the portable v2 control/input wire format.
+    public var isPortableReceiver: Bool {
+        self == .windows || self == .linux
+    }
 }
 
 public struct DeviceDescriptor: Codable, Hashable, Identifiable, Sendable {

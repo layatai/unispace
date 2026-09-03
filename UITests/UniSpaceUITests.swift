@@ -87,17 +87,19 @@ final class UniSpaceUITests: XCTestCase {
     }
 
     @MainActor
-    func testHostingGuideOffersMacAndWindowsSetupWithMacifierDownload() {
+    func testHostingGuideOffersMacLinuxAndWindowsSetupDownloads() {
         let app = launchApp(mode: "--ui-testing-hosting")
 
         XCTAssertTrue(app.staticTexts["Waiting for another device"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["Add another Mac"].exists)
+        XCTAssertTrue(app.staticTexts["Add a Linux PC"].exists)
         XCTAssertTrue(app.staticTexts["Add a Windows PC"].exists)
+        XCTAssertTrue(app.descendants(matching: .any)["download-linux"].exists)
         let downloadLink = app.descendants(matching: .any)["download-macifier"]
         XCTAssertTrue(downloadLink.exists)
         XCTAssertTrue(downloadLink.isHittable)
         let screenshot = XCTAttachment(screenshot: app.windows["UniSpace"].screenshot())
-        screenshot.name = "Mac and Windows pairing guide"
+        screenshot.name = "Mac, Linux, and Windows pairing guide"
         screenshot.lifetime = .keepAlways
         add(screenshot)
         app.terminate()
@@ -184,7 +186,9 @@ final class UniSpaceUITests: XCTestCase {
 
         app.staticTexts["section-devices"].click()
         XCTAssertTrue(app.staticTexts["Via controller"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.staticTexts["3 of 3 devices online"].exists)
+        let count = app.staticTexts["online-device-count"]
+        XCTAssertTrue(count.waitForExistence(timeout: 5))
+        XCTAssertEqual(count.value as? String, "3 of 3 devices online")
         XCTAssertFalse(app.buttons["Retry connection to Office PC"].exists)
         XCTAssertFalse(app.staticTexts["The trusted peer is temporarily unavailable"].exists)
         app.terminate()

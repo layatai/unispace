@@ -107,13 +107,13 @@ struct WorkspaceView: View {
                     Text("\(model.onlineDeviceIDs.count) of \(max(model.devices.count, 1)) devices online")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("online-device-count")
                 }
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, 12)
             .padding(.bottom, 10)
         }
-        .accessibilityElement(children: .combine)
     }
 
     // MARK: Detail

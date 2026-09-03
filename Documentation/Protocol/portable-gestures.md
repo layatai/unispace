@@ -1,6 +1,6 @@
 # Portable gesture interoperability
 
-UniSpace preserves native macOS gesture replay while providing deterministic Windows
+UniSpace preserves native macOS gesture replay while providing deterministic Linux and Windows
 equivalents. Gesture transport is capability-gated so older peers continue receiving
 keyboard, pointer, button, drag, and scroll events without decoding unknown frames.
 
@@ -9,12 +9,12 @@ keyboard, pointer, button, drag, and scroll events without decoding unknown fram
 | Capability | Receiver | Payload |
 | --- | --- | --- |
 | `public-trackpad-gestures-v1` | macOS | Original serialized `CGEvent` for native replay |
-| `portable-trackpad-gestures-v1` | Windows | Normalized `PortableGesture` in portable input v2 |
+| `portable-trackpad-gestures-v1` | Linux/Windows | Normalized `PortableGesture` in portable input v2 |
 
 The controller captures each gesture in the suppressible Core Graphics event tap.
 That prevents the gesture from also executing on the controller while remote control
 is active. The serialized event remains unchanged for Mac peers; the same raw event is
-normalized for Windows peers.
+normalized for portable Linux and Windows peers.
 
 ## Supported input
 

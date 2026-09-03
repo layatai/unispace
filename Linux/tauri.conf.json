@@ -1,0 +1,32 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "UniSpace",
+  "version": "1.2.0",
+  "identifier": "com.layatai.unispace.linux",
+  "build": {
+    "frontendDist": "./ui/dist",
+    "devUrl": "http://localhost:1420",
+    "beforeDevCommand": "pnpm --dir ui dev",
+    "beforeBuildCommand": "pnpm --dir ui build"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "label": "main",
+        "title": "UniSpace",
+        "width": 760,
+        "height": 640,
+        "resizable": true,
+        "minimizable": false,
+        "maximizable": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost https://ipc.localhost; img-src 'self' data:; style-src 'self' 'unsafe-inline'"
+    }
+  },
+  "bundle": {
+    "active": false
+  }
+}

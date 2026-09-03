@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>UniSpace</title>
+    <script>
+      window.__unispaceApply =
+        window.__unispaceApply ||
+        function (s) {
+          window.__unispaceBoot = s;
+        };
+      (function () {
+        // First paint, before the bundle loads. src/lib/desktop.ts takes over
+        // and refines this with the desktop's own preference.
+        var d = window.__unispaceDesktop;
+        var dark =
+          d && typeof d.dark === "boolean"
+            ? d.dark
+            : window.matchMedia("(prefers-color-scheme: dark)").matches;
+        var root = document.documentElement;
+        root.dataset.desktop = d && d.id === "kde" ? "kde" : "gnome";
+        root.dataset.theme = dark ? "dark" : "light";
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

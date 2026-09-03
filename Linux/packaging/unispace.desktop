@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=UniSpace Receiver
+Comment=Control this Linux desktop from a paired Mac
+Exec=unispace-linux-ui
+Icon=input-mouse
+Terminal=false
+Categories=Utility;Network;
+StartupNotify=true

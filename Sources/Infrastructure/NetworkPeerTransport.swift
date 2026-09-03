@@ -256,7 +256,9 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
             }
         }
         if enableRealtime,
-           workspace.devices.contains(where: { $0.capabilities.contains(.udpPointerV2) }) {
+           workspace.devices.contains(where: {
+               $0.platform.isPortableReceiver && $0.capabilities.contains(.udpPointerV2)
+           }) {
             do {
                 let pointerTransport = AuthenticatedPointerTransport(
                     listenPort: configuredPointerListenPort,
@@ -271,7 +273,7 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
                 emit(.health(nil, .init(
                     health: .degraded,
                     transport: .tcp,
-                    detail: "UDP pointer lane unavailable; using reliable input"
+                    detail: "Portable UDP pointer lane unavailable; using reliable input"
                 )))
             }
         }
@@ -354,14 +356,14 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
     }
 
     public func send(_ envelope: ControlEnvelope, to deviceID: DeviceID) async throws {
-        let data = try isWindowsPeer(deviceID)
+        let data = try isPortableReceiver(deviceID)
             ? WireFrameCodec.encodePortableControl(envelope)
             : WireFrameCodec.encodeControl(envelope)
         try await send(data: data, to: deviceID)
     }
 
     public func send(_ frame: InputFrame, to deviceID: DeviceID) async throws {
-        if isWindowsPeer(deviceID) {
+        if isPortableReceiver(deviceID) {
             guard let portable = PortableInputMapper.map(frame) else { return }
             try await send(data: WireFrameCodec.encodePortableInput(portable), to: deviceID)
         } else {
@@ -379,7 +381,7 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
            try await pointerTransport.send(PortableInputMapper.map(frame), to: deviceID) {
             return true
         }
-        if isWindowsPeer(deviceID) {
+        if isPortableReceiver(deviceID) {
             return false
         }
         guard let realtime = lock.withLock({ realtimeTransport }) else {
@@ -406,10 +408,10 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
         try await connection.send(data)
     }
 
-    private func isWindowsPeer(_ deviceID: DeviceID) -> Bool {
+    private func isPortableReceiver(_ deviceID: DeviceID) -> Bool {
         lock.withLock {
             guard let peer = knownPeers[deviceID] else { return false }
-            return peer.platform == .windows && peer.capabilities.contains(.crossPlatformInputV2)
+            return peer.platform.isPortableReceiver && peer.capabilities.contains(.crossPlatformInputV2)
         }
     }
 
@@ -459,7 +461,7 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
     private func makeCrossPlatformQUICListener() -> NWListener? {
         guard enableQUIC,
               lock.withLock({ knownPeers.values.contains(where: {
-                  $0.platform == .windows && $0.capabilities.contains(.quicStreamV2)
+                  $0.platform.isPortableReceiver && $0.capabilities.contains(.quicStreamV2)
               }) }) else { return nil }
         do {
             let listener = try NWListener(
@@ -475,7 +477,7 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
                     self?.emit(.health(nil, .init(
                         health: .degraded,
                         transport: .quic,
-                        detail: "Windows QUIC unavailable: \(error.localizedDescription)"
+                        detail: "Portable QUIC unavailable: \(error.localizedDescription)"
                     )))
                 default:
                     break
@@ -487,7 +489,7 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
             emit(.health(nil, .init(
                 health: .degraded,
                 transport: .quic,
-                detail: "Windows QUIC unavailable; using TCP"
+                detail: "Portable QUIC unavailable; using TCP"
             )))
             return nil
         }
@@ -787,7 +789,7 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
                 let envelope = try WireFrameCodec.decodePortableControl(payload)
                 try handleControl(envelope, from: deviceID, managed: managed)
             case .inputBinaryV2, .realtimePointerBinaryV2:
-                // Windows peers are receiver-only. Portable input received by a Mac is invalid.
+                // Portable peers are receiver-only. Portable input received by a Mac is invalid.
                 throw ControlProtocolError.malformedFrame
             }
         } catch {
@@ -833,7 +835,7 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
     private func sendApplicationHello(to managed: SecurePeerConnection, deviceID: DeviceID) {
         let hello = lock.withLock { localDevice.map { ControlEnvelope(message: .hello($0)) } }
         guard let hello else { return }
-        let data = try? (isWindowsPeer(deviceID)
+        let data = try? (isPortableReceiver(deviceID)
             ? WireFrameCodec.encodePortableControl(hello)
             : WireFrameCodec.encodeControl(hello))
         if let data { managed.send(data, completion: nil) }

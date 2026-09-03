@@ -32,6 +32,6 @@
 		<string>_unispace-pair._tcp</string>
 	</array>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>UniSpace discovers and connects to trusted Macs and Windows PCs so you can control them and share clipboard data and files over your private network.</string>
+	<string>UniSpace discovers and connects to trusted Macs, Linux PCs, and Windows PCs so you can control them and share clipboard data and files over your private network.</string>
 </dict>
 </plist>

@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>One keyboard. Every device.</strong><br>
-  Move your pointer and files between up to four Macs and Windows PCs as if they shared one desk—over your LAN or private Tailscale network.
+  Move your pointer and files between up to four Macs, Linux PCs, and Windows PCs as if they shared one desk—over your LAN or private Tailscale network.
 </p>
 
 <p align="center">
@@ -29,7 +29,7 @@
   <img src="Documentation/Images/welcome.png" width="900" alt="UniSpace welcome screen with Create Workspace and Join Workspace options">
 </p>
 
-UniSpace is a native macOS Dock and menu-bar controller for sharing one Mac's keyboard, pointer, and regular files with your other Macs and Windows PCs. Arrange their displays the way they sit on your desk, then cross a touching edge to move control to the next device. Windows support is provided by the receiver built into Macifier.
+UniSpace is a native macOS Dock and menu-bar controller for sharing one Mac's keyboard, pointer, clipboard, and regular files with your other Macs, Linux PCs, and Windows PCs. Arrange their displays the way they sit on your desk, then cross a touching edge to move control to the next device. Linux uses the receiver in this repository; Windows support is provided by the receiver built into Macifier.
 
 ## Built for a shared desk
 
@@ -48,12 +48,12 @@ UniSpace is a native macOS Dock and menu-bar controller for sharing one Mac's ke
 ## Quick start
 
 1. [Download the latest release](https://github.com/layatai/unispace/releases/latest), open the DMG, and move UniSpace to Applications.
-2. Launch UniSpace on each Mac and enable UniSpace in Macifier on each Windows receiver. Grant **Input Monitoring** and **Post Events** on Macs when prompted.
+2. Launch UniSpace on each Mac, install the [Linux receiver](Linux/README.md) on each Linux PC, and enable UniSpace in Macifier on each Windows receiver. Grant **Input Monitoring** and **Post Events** on Macs when prompted.
 3. Choose **Create Workspace** on the Mac whose keyboard and pointer you want to use.
-4. Choose **Pair New Device** on the controller, then **Join Workspace** on the other Mac or in Macifier on Windows.
+4. Choose **Pair New Device** on the controller, then **Join Workspace** on the other Mac, run `unispace-linux pair MAC_ADDRESS` on Linux, or join through Macifier on Windows.
 5. Select the controller over the LAN, or enter its MagicDNS name or Tailscale IP. Confirm the same six-digit code on both devices.
 6. Open **Displays**, drag the display cards so their edges touch, and move the pointer through that edge.
-7. Copy regular files in Finder or File Explorer and paste them on the active compatible device. On macOS, **File Transfers** shows progress, cancellation, retry, and received files.
+7. Copy regular files in Finder or your desktop file manager and paste them on the active compatible device. On macOS, **File Transfers** shows progress, cancellation, retry, and received files.
 
 To join a different workspace later, open **General → Workspace**, choose **Leave Workspace…**, then return to setup and select **Join Workspace**. This removes only the local workspace membership and stored workspace key; operating-system permissions remain unchanged.
 
@@ -82,13 +82,13 @@ Bonjour handles automatic discovery on a trusted local network. Across Tailscale
 | Port | Protocol | Purpose |
 | --- | --- | --- |
 | `61337` | TCP | Pairing and workspace-key exchange |
-| `61338` | UDP, then TCP fallback | Existing Mac-to-Mac v1 control; Windows reliable TCP fallback |
+| `61338` | UDP, then TCP fallback | Existing Mac-to-Mac v1 control; Linux/Windows reliable TCP fallback |
 | `61339` | UDP | Existing Mac-to-Mac replaceable pointer motion |
-| `61340` | QUIC/UDP | Windows cross-platform reliable stream, ALPN `unispace/3` |
+| `61340` | QUIC/UDP | Cross-platform reliable stream, ALPN `unispace/3` |
 | `61340` | TCP | Encrypted resumable file-transfer content channel |
-| `61341` | UDP | Windows authenticated replay-protected latest pointer state |
+| `61341` | UDP | Authenticated replay-protected latest pointer state for capable receivers |
 
-Allow these ports through any host or tailnet firewall between participating devices. Windows initiates trusted control and file-transfer sessions, so Macifier does not add an inbound listener or firewall exception. Reliable input and control messages remain available when the pointer or file-transfer lane is unavailable.
+Allow these ports through any host or tailnet firewall between participating devices. Linux and Windows initiate trusted control and file-transfer sessions, so portable receivers do not need inbound firewall exceptions. Reliable input and control messages remain available when the pointer or file-transfer lane is unavailable.
 
 ## Security and privacy
 
@@ -97,28 +97,28 @@ Allow these ports through any host or tailnet firewall between participating dev
 - Peer sessions derive per-connection keys, authenticate handshakes, encrypt traffic with ChaCha20-Poly1305, and reject replayed messages.
 - File transfers validate manifests and offsets, stream through bounded buffers, and publish received files only after SHA-256 verification.
 - Incoming files remain in application-owned staging until pasted, revealed, or explicitly exported.
-- Workspace secrets and each installation's QUIC transport identity are protected by Keychain on macOS and DPAPI on Windows.
+- Workspace secrets are protected by Keychain on macOS, Secret Service on Linux, and DPAPI on Windows.
 - Raw keyboard, pointer, clipboard contents, and file contents are never logged.
 
 ## Current scope
 
 UniSpace forwards standard pointer movement and buttons, scrolling, keyboard keys,
 modifiers, shortcuts, and supported multi-finger trackpad gestures. Mac peers replay
-the original native gesture. Windows peers receive normalized portable gestures for
+the original native gesture. Linux and Windows peers receive normalized portable gestures for
 pinch zoom, navigation, Mission Control/App Exposé, workspace switching, smart zoom,
 Launchpad, and Show Desktop. See the [gesture interoperability contract](Documentation/Protocol/portable-gestures.md)
 for the exact mappings and compatibility rules. Mixed versions keep normal input
 working without sending incompatible frames.
 
 Compatible versions also share text and links and transfer regular files between
-macOS and Windows. See [Docs/FileTransfer.md](Docs/FileTransfer.md) for file-transfer
+macOS, Linux, and Windows. See [Docs/FileTransfer.md](Docs/FileTransfer.md) for file-transfer
 protocol, staging, recovery, and compatibility details.
 
 Connection ownership, continuity isolation, and performance release gates are
 documented in [Docs/performance-regression-remediation.md](Docs/performance-regression-remediation.md).
 
 Directories, macOS packages, symbolic links, reparse points, special files, screen
-sharing, Windows-to-Mac control, an internet relay, Touch ID or power-button forwarding,
+sharing, receiver-to-Mac control, an internet relay, Touch ID or power-button forwarding,
 login/UAC secure-desktop control, Secure Input bypasses, and live cross-device drag
 continuation remain intentionally unsupported.
 
@@ -154,6 +154,13 @@ files and never reads or writes Keychain.
 Its scripted run checks control activation, input latency, clipboard delivery,
 Finder-style file transfer, and restart recovery. Pointer p95 is compared with
 the idle baseline and any latency or delivery stall above 50 ms fails the run.
+
+The Rust Linux receiver is built and tested from this repository:
+
+```sh
+cargo test --manifest-path Linux/Cargo.toml
+./Scripts/build-linux.sh
+```
 
 </details>
 

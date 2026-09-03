@@ -83,7 +83,7 @@ targets:
           - _unispace-xfer._tcp
           - _unispace-clip._tcp
           - _unispace-pair._tcp
-        NSLocalNetworkUsageDescription: UniSpace discovers and connects to trusted Macs and Windows PCs so you can control them and share clipboard data and files over your private network.
+        NSLocalNetworkUsageDescription: UniSpace discovers and connects to trusted Macs, Linux PCs, and Windows PCs so you can control them and share clipboard data and files over your private network.
     entitlements:
       path: Resources/UniSpace.entitlements
       properties:

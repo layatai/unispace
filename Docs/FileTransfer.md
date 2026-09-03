@@ -1,10 +1,10 @@
 # UniSpace file transfer
 
-UniSpace transfers regular files between trusted macOS and Windows devices without sending file contents through the latency-critical keyboard and pointer connection. Windows support is provided by the paired Macifier UniSpace receiver.
+UniSpace transfers regular files between trusted macOS, Linux, and Windows devices without sending file contents through the latency-critical keyboard and pointer connection. Linux support is provided by the receiver in this repository; Windows support is provided by the paired Macifier receiver.
 
 ## File Explorer and Finder copy/paste
 
-1. Pair the Mac and Windows PC, or two Macs, in the same UniSpace workspace.
+1. Pair the Mac and Linux/Windows PC, or two Macs, in the same UniSpace workspace.
 2. Make a device the active control target, or choose it in **File Transfers** on macOS.
 3. Copy one or more regular files in Finder or File Explorer.
 4. UniSpace offers the selection to the active compatible device over the encrypted content channel.
@@ -19,9 +19,11 @@ On macOS, open **File Transfers** from the app menu, menu-bar item, or with **Co
 
 On Windows, Macifier runs the same transfer state machine in the UniSpace receiver. File Explorer copy/paste works automatically while the trusted workspace is connected. Received files are staged under the current user's local application data and remain available for normal File Explorer paste operations.
 
+On Linux, the Rust receiver monitors `text/uri-list` selections on GNOME and KDE, stages incoming files under the user's local data directory, verifies their SHA-256 digests, and publishes only finalized files to the Wayland or X11 clipboard.
+
 ## Portable protocol
 
-The file-transfer protocol is explicitly portable between Swift and .NET:
+The file-transfer protocol is explicitly portable between Swift, Rust, and .NET:
 
 - fixed big-endian envelope header with protocol version, message kind, workspace UUID, sender UUID, and payload length;
 - JSON metadata payloads using the existing Swift UUID wrapper representation;
@@ -33,7 +35,7 @@ The portable encoding replaces the former Swift binary-property-list boundary so
 
 ## Security model
 
-- Content uses a separate TCP connection advertised as `_unispace-xfer._tcp` on TCP port `61340`. Windows initiates this outbound connection; the same numeric port may also carry UniSpace QUIC over UDP without conflict.
+- Content uses a separate TCP connection advertised as `_unispace-xfer._tcp` on TCP port `61340`. Portable receivers initiate this outbound connection; the same numeric port may also carry UniSpace QUIC over UDP without conflict.
 - The content connection authenticates workspace and peer identity using an HMAC proof derived from the workspace key.
 - Each connection derives an independent ChaCha20-Poly1305 session key with HKDF and enforces a monotonically increasing replay sequence.
 - Incoming manifests, filenames, file counts, sizes, chunk lengths, and offsets are treated as untrusted.
