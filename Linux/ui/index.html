@@ -734,14 +734,22 @@
   </div>
 
   <script>
-    const { invoke } = window.__TAURI__.core;
-    const { listen } = window.__TAURI__.event;
     const $ = (id) => document.getElementById(id);
     const show = (el) => $(el).classList.remove("hidden");
     const hide = (el) => $(el).classList.add("hidden");
 
     let snapshot = { paired: false, transfers: [] };
     let panel = "home";
+    let invoke;
+    let listenFn;
+    try {
+      invoke = window.__TAURI__.core.invoke;
+      listenFn = window.__TAURI__.event.listen;
+    } catch (error) {
+      document.addEventListener("DOMContentLoaded", () => {
+        $("pair-error").textContent = `Tauri API unavailable: ${error}`;
+      });
+    }
 
     function apply(next) {
       snapshot = next;
@@ -993,10 +1001,20 @@
       button.addEventListener("click", () => setPanel(button.dataset.panel));
     });
 
-    listen("receiver-status", (event) => apply(event.payload));
-    invoke("state").then(apply).catch((error) => {
-      $("pair-error").textContent = String(error);
-    });
+    if (!invoke || !listenFn) {
+      $("pair-error").textContent = "Tauri API unavailable in this window.";
+      return;
+    }
+    listenFn("receiver-status", (event) => apply(event.payload));
+    async function refresh() {
+      try {
+        apply(await invoke("state"));
+      } catch (error) {
+        $("pair-error").textContent = String(error);
+      }
+    }
+    refresh();
+    setInterval(refresh, 2000);
   </script>
 </body>
 </html>
