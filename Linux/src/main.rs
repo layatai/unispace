@@ -5,9 +5,13 @@ use std::{
     process::Command,
 };
 use unispace_linux::{
-    clipboard, config::Configuration, files, host,
+    clipboard,
+    config::Configuration,
+    files, host,
     input::{InputSink, NullInputSink, UinputSink},
-    observe, pairing::PendingPairing, receiver, service, status,
+    observe,
+    pairing::PendingPairing,
+    receiver, service, status,
 };
 
 #[derive(Parser)]

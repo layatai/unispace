@@ -987,7 +987,6 @@
     $("restart-receiver").addEventListener("click", () =>
       run("home-error", $("restart-receiver"), () => invoke("restart_receiver"))
     );
-    );
 
     $("send-files").addEventListener("click", () => run("transfer-error", $("send-files"), async () => {
       const paths = await invoke("choose_files");

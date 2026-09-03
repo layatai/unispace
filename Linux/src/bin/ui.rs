@@ -12,9 +12,7 @@ use std::{
 use tauri::{Emitter, Manager, WindowEvent};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::net::UnixStream as TokioUnixStream;
-use unispace_linux::{
-    config::Configuration, host, observe, pairing::PendingPairing, service,
-};
+use unispace_linux::{config::Configuration, host, observe, pairing::PendingPairing, service};
 
 #[derive(serde::Serialize)]
 struct Offer {
@@ -138,7 +136,9 @@ fn stop_service() -> Result<(), String> {
 #[tauri::command]
 fn restart_receiver() -> Result<(), String> {
     service::stop().map_err(|error| error.to_string())?;
-    let _ = Command::new("pkill").args(["-x", "unispace-linux"]).status();
+    let _ = Command::new("pkill")
+        .args(["-x", "unispace-linux"])
+        .status();
     std::thread::sleep(Duration::from_millis(600));
     service::start().map_err(|error| error.to_string())
 }
