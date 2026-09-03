@@ -269,6 +269,13 @@ fn strip_wayland_minmax_buttons(window: &tauri::WebviewWindow) {
             return;
         };
         set_close_only_layout(&titlebar);
+        // GTK re-derives the decoration layout on hover and title updates,
+        // which resurrects min/max; keep re-asserting close-only.
+        let titlebar = titlebar.clone();
+        gtk::glib::timeout_add_local(std::time::Duration::from_millis(500), move || {
+            set_close_only_layout(&titlebar);
+            gtk::glib::ControlFlow::Continue
+        });
     });
 }
 
