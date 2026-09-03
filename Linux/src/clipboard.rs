@@ -2,6 +2,7 @@ use crate::{
     CLIPBOARD_PORT,
     config::Configuration,
     model::Identifier,
+    observe::StatusHub,
     secure::{ChannelProfile, SecureStream},
 };
 use anyhow::{Context, Result, ensure};
@@ -16,7 +17,7 @@ use uuid::Uuid;
 
 const HEADER: usize = 39;
 
-pub async fn run(configuration: Configuration) -> Result<()> {
+pub async fn run(configuration: Configuration, hub: StatusHub) -> Result<()> {
     let key = configuration.workspace_key()?;
     let remote = configuration
         .workspace
@@ -37,6 +38,7 @@ pub async fn run(configuration: Configuration) -> Result<()> {
         },
     )
     .await?;
+    hub.set_clipboard(true);
     let mut clipboard = Clipboard::new()?;
     let mut ticker = interval(Duration::from_millis(350));
     ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
@@ -64,9 +66,10 @@ pub async fn run(configuration: Configuration) -> Result<()> {
     }
 }
 
-pub async fn supervise(configuration: Configuration) {
+pub async fn supervise(configuration: Configuration, hub: StatusHub) {
     loop {
-        if let Err(error) = run(configuration.clone()).await {
+        if let Err(error) = run(configuration.clone(), hub.clone()).await {
+            hub.set_clipboard(false);
             warn!(%error,"clipboard channel disconnected");
         }
         tokio::time::sleep(Duration::from_secs(2)).await;

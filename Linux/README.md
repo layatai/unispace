@@ -31,11 +31,11 @@ virtual-input group and sign out once:
 sudo usermod -aG unispace "$USER"
 ```
 
-On the controller Mac choose **Pair New Device**. On Linux run:
-
-```sh
-unispace-linux pair MAC_ADDRESS
-```
+Open **UniSpace Receiver** from the application launcher (or the tray). On the
+controller Mac choose **Pair New Device**, then enter that Mac’s hostname or
+Tailscale address in the Linux window and confirm the same six-digit code on
+both devices. After pairing, Home shows connection and input status, Transfers
+lists file delivery, and Clipboard shows whether text sharing is connected.
 
 Pairing starts the packaged user service automatically. If the desktop session
 was not available during pairing, start it after signing in:
@@ -47,6 +47,12 @@ systemctl --user enable --now unispace.service
 The package globally enables the service; it remains dormant until a workspace
 configuration exists. The workspace key is stored in Secret Service (GNOME
 Keyring or KWallet), never in the JSON configuration file.
+
+Headless pairing remains available:
+
+```sh
+unispace-linux pair MAC_ADDRESS
+```
 
 The application launcher opens receiver status. KDE and desktops implementing
 StatusNotifierItem can also show a tray item; GNOME uses the launcher and desktop

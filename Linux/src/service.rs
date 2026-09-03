@@ -24,6 +24,12 @@ pub fn stop() -> Result<()> {
     Ok(())
 }
 
+pub fn is_active() -> bool {
+    systemctl(&["is-active", "--quiet", UNIT])
+        .map(|output| output.status.success())
+        .unwrap_or(false)
+}
+
 fn systemctl(arguments: &[&str]) -> Result<Output> {
     Command::new("systemctl")
         .arg("--user")

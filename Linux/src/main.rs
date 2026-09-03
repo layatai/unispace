@@ -5,8 +5,8 @@ use std::{
     process::Command,
 };
 use unispace_linux::{
-    clipboard, config::Configuration, files, host, input::UinputSink, pairing::PendingPairing,
-    receiver, service, status,
+    clipboard, config::Configuration, files, host, input::UinputSink, observe,
+    pairing::PendingPairing, receiver, service, status,
 };
 
 #[derive(Parser)]
@@ -41,11 +41,19 @@ async fn main() -> Result<()> {
         CommandKind::Run => {
             let configuration = Configuration::load()
                 .context("UniSpace is not paired; run `unispace-linux pair HOST`")?;
-            tokio::spawn(status::start());
-            tokio::spawn(clipboard::supervise(configuration.clone()));
-            tokio::spawn(files::supervise(configuration.clone()));
+            let (hub, send_files) = observe::StatusHub::new(
+                observe::ReceiverSnapshot::from_configuration(&configuration),
+            );
+            tokio::spawn(observe::serve(hub.clone()));
+            tokio::spawn(status::start(hub.clone()));
+            tokio::spawn(clipboard::supervise(configuration.clone(), hub.clone()));
+            tokio::spawn(files::supervise(
+                configuration.clone(),
+                hub.clone(),
+                send_files,
+            ));
             let gesture_bindings = configuration.resolved_gesture_bindings();
-            receiver::run(configuration, UinputSink::open(gesture_bindings)?).await
+            receiver::run(configuration, UinputSink::open(gesture_bindings)?, hub).await
         }
         CommandKind::Status => {
             match Configuration::load() {

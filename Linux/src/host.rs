@@ -109,8 +109,7 @@ fn screen_size() -> (u32, u32) {
 fn hypr_monitor_size() -> Option<(u32, u32)> {
     // The session env is absent over SSH; derive it from the runtime dir.
     let uid = unsafe { libc::getuid() };
-    let runtime = std::env::var("XDG_RUNTIME_DIR")
-        .unwrap_or_else(|_| format!("/run/user/{uid}"));
+    let runtime = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| format!("/run/user/{uid}"));
     let instance = std::fs::read_dir(format!("{runtime}/hypr"))
         .ok()?
         .flatten()

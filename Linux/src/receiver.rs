@@ -2,6 +2,7 @@ use crate::{
     config::Configuration,
     input::InputSink,
     model::DeviceDescriptor,
+    observe::StatusHub,
     pointer,
     protocol::{self, ControlMessage, Epoch, WireKind},
     secure::SecureStream,
@@ -80,7 +81,11 @@ impl CursorState {
     }
 }
 
-pub async fn run(configuration: Configuration, mut input: impl InputSink + 'static) -> Result<()> {
+pub async fn run(
+    configuration: Configuration,
+    mut input: impl InputSink + 'static,
+    hub: StatusHub,
+) -> Result<()> {
     let local = configuration
         .workspace
         .devices
@@ -95,10 +100,11 @@ pub async fn run(configuration: Configuration, mut input: impl InputSink + 'stat
         .clone();
     loop {
         let key = configuration.workspace_key()?;
-        match run_connection(&configuration, &key, &local, &remote, &mut input).await {
+        match run_connection(&configuration, &key, &local, &remote, &mut input, &hub).await {
             Ok(()) => warn!("controller disconnected"),
             Err(error) => warn!(%error,"controller connection failed"),
         }
+        hub.set_control(false);
         let _ = input.release_all();
         sleep(Duration::from_secs(2)).await;
     }
@@ -110,6 +116,7 @@ async fn run_connection(
     local: &DeviceDescriptor,
     remote: &DeviceDescriptor,
     input: &mut impl InputSink,
+    hub: &StatusHub,
 ) -> Result<()> {
     let channel = SecureStream::connect_control(
         &configuration.host_address,
@@ -152,6 +159,7 @@ async fn run_connection(
     ));
     writer.send(&protocol::hello_frame(local)?).await?;
     info!(controller=%remote.name,"connected");
+    hub.set_control(true);
     crate::status::notify(
         "UniSpace connected",
         &format!("{} can now control this PC", remote.name),
@@ -183,6 +191,7 @@ async fn run_connection(
                             remote,
                             &mut writer,
                             input,
+                            hub,
                             message,
                         )
                         .await?;
@@ -194,6 +203,7 @@ async fn run_connection(
                             remote,
                             &mut writer,
                             input,
+                            hub,
                             payload,
                         )
                         .await?;
@@ -206,7 +216,7 @@ async fn run_connection(
                     // Pointer lane unavailable; reliable input still works.
                     continue;
                 };
-                handle_realtime_pointer(&mut state, remote, &mut writer, input, frame).await?;
+                handle_realtime_pointer(&mut state, remote, &mut writer, input, hub, frame).await?;
             }
             _ = watchdog.tick() => {
                 if let Some((session, _)) = state.active
@@ -217,6 +227,7 @@ async fn run_connection(
                     warn!(%session,"controller heartbeat timed out; releasing input");
                     input.release_all()?;
                     state = SessionState::default();
+                    hub.set_receiving(false);
                 }
                 resync_cursor_from_compositor(&mut state);
             }
@@ -233,6 +244,7 @@ async fn handle_control(
     remote: &DeviceDescriptor,
     writer: &mut crate::secure::SecureWriter,
     input: &mut impl InputSink,
+    hub: &StatusHub,
     message: ControlMessage,
 ) -> Result<()> {
     match message {
@@ -280,6 +292,7 @@ async fn handle_control(
                     y,
                     linked_edges: linked_edges(topology, display_id),
                 });
+                hub.set_receiving(true);
             }
             writer
                 .send(&protocol::activation_result_frame(session_id, accepted)?)
@@ -289,6 +302,7 @@ async fn handle_control(
             if state.active.is_some_and(|active| active.0 == session_id) {
                 input.release_all()?;
                 *state = SessionState::default();
+                hub.set_receiving(false);
             }
         }
         ControlMessage::RotateWorkspaceKey(key) => {
@@ -324,6 +338,7 @@ async fn handle_reliable_input(
     remote: &DeviceDescriptor,
     writer: &mut crate::secure::SecureWriter,
     input: &mut impl InputSink,
+    hub: &StatusHub,
     payload: &[u8],
 ) -> Result<()> {
     let frame = protocol::decode_input(payload, false)?;
@@ -351,7 +366,7 @@ async fn handle_reliable_input(
     if let protocol::InputEvent::PointerMove { dx, dy, .. } = &frame.event {
         debug!(dx, dy, "reliable pointer");
     }
-    inject_with_boundary(state, writer, input, frame.event).await
+    inject_with_boundary(state, writer, input, hub, frame.event).await
 }
 
 async fn handle_realtime_pointer(
@@ -359,6 +374,7 @@ async fn handle_realtime_pointer(
     remote: &DeviceDescriptor,
     writer: &mut crate::secure::SecureWriter,
     input: &mut impl InputSink,
+    hub: &StatusHub,
     frame: protocol::RealtimePointerFrame,
 ) -> Result<()> {
     let Some((session, epoch)) = state.active else {
@@ -409,13 +425,14 @@ async fn handle_realtime_pointer(
         absolute_y: frame.absolute_y,
     };
     tracing::debug!(dx = movement.0, dy = movement.1, "pointer");
-    inject_with_boundary(state, writer, input, event).await
+    inject_with_boundary(state, writer, input, hub, event).await
 }
 
 async fn inject_with_boundary(
     state: &mut SessionState,
     writer: &mut crate::secure::SecureWriter,
     input: &mut impl InputSink,
+    hub: &StatusHub,
     event: protocol::InputEvent,
 ) -> Result<()> {
     if let protocol::InputEvent::PointerMove { dx, dy, .. } = &event
@@ -441,6 +458,7 @@ async fn inject_with_boundary(
         let session = state.active.map(|(session, _)| session);
         input.release_all()?;
         *state = SessionState::default();
+        hub.set_receiving(false);
         if let Some(session) = session {
             writer
                 .send(&protocol::boundary_crossed_frame(
@@ -467,7 +485,9 @@ fn cursor_at_edge(cursor: &CursorState, edge: protocol::DisplayEdge) -> bool {
 }
 
 fn resync_cursor_from_compositor(state: &mut SessionState) {
-    let Some(cursor) = state.cursor.as_mut() else { return };
+    let Some(cursor) = state.cursor.as_mut() else {
+        return;
+    };
     if let Some((x, y)) = crate::host::cursor_position() {
         cursor.x = x.clamp(0.0, cursor.width - 1.0);
         cursor.y = y.clamp(0.0, cursor.height - 1.0);

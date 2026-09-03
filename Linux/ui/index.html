@@ -4,119 +4,494 @@
   <meta charset="utf-8" />
   <title>UniSpace</title>
   <style>
-    :root { color-scheme: light dark; }
+    :root {
+      color-scheme: light dark;
+      --accent: #0a84ff;
+      --positive: #34c759;
+      --warning: #ff9f0a;
+      --danger: #ff3b30;
+      --radius: 14px;
+      --hero-radius: 20px;
+      --small-radius: 10px;
+      --hairline: color-mix(in srgb, currentColor 9%, transparent);
+      --surface: color-mix(in srgb, currentColor 4.5%, transparent);
+      --surface-strong: color-mix(in srgb, currentColor 7.5%, transparent);
+      --canvas: color-mix(in srgb, currentColor 2.8%, transparent);
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
     body {
-      font-family: system-ui, sans-serif;
       margin: 0;
-      padding: 24px;
+      font-family: ui-sans-serif, system-ui, sans-serif;
+      background: var(--canvas);
+      color: CanvasText;
       display: flex;
       flex-direction: column;
-      gap: 16px;
     }
-    h1 { font-size: 20px; margin: 0; }
-    h2 { font-size: 14px; margin: 0 0 8px; color: gray; }
-    .card { border: 1px solid color-mix(in srgb, currentColor 20%, transparent); border-radius: 10px; padding: 16px; }
+    .hidden { display: none !important; }
     button {
-      font: inherit; padding: 8px 14px; border-radius: 8px; cursor: pointer;
-      border: 1px solid color-mix(in srgb, currentColor 30%, transparent);
+      font: inherit;
+      padding: 8px 14px;
+      border-radius: 8px;
+      cursor: pointer;
+      border: 1px solid var(--hairline);
+      background: var(--surface-strong);
+      color: inherit;
     }
-    button.primary { background: #2563eb; border-color: #2563eb; color: white; }
-    input { font: inherit; padding: 8px 10px; border-radius: 8px; width: 100%;
-      box-sizing: border-box; border: 1px solid color-mix(in srgb, currentColor 30%, transparent); }
+    button:disabled { opacity: 0.45; cursor: default; }
+    button.primary {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: white;
+    }
+    button.danger {
+      background: color-mix(in srgb, var(--danger) 14%, transparent);
+      border-color: color-mix(in srgb, var(--danger) 22%, transparent);
+      color: var(--danger);
+    }
+    input {
+      font: inherit;
+      padding: 10px 12px;
+      border-radius: var(--small-radius);
+      width: 100%;
+      border: 1px solid var(--hairline);
+      background: var(--surface);
+      color: inherit;
+    }
+    .page {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+    .welcome, .confirm, .shell {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+    .welcome, .confirm {
+      align-items: center;
+      justify-content: center;
+      padding: 36px;
+      text-align: center;
+      background:
+        radial-gradient(1200px 420px at 50% -10%, color-mix(in srgb, var(--accent) 10%, transparent), transparent 70%);
+    }
+    .welcome h1, .confirm h1 {
+      font-size: 30px;
+      font-weight: 700;
+      margin: 0;
+      letter-spacing: -0.03em;
+    }
+    .lede {
+      margin: 8px 0 0;
+      max-width: 440px;
+      color: color-mix(in srgb, CanvasText 62%, transparent);
+      line-height: 1.45;
+    }
+    .pair-form {
+      width: min(440px, 100%);
+      margin-top: 28px;
+      text-align: left;
+    }
     .row { display: flex; gap: 10px; align-items: center; }
-    .error { color: #dc2626; font-size: 13px; white-space: pre-wrap; }
-    .hidden { display: none; }
-    .code { font-size: 28px; font-weight: 600; letter-spacing: 6px; }
-    dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 0; }
-    dt { color: gray; } dd { margin: 0; }
+    .error { color: var(--danger); font-size: 13px; white-space: pre-wrap; min-height: 1.2em; }
+    .code-row { display: flex; gap: 8px; justify-content: center; margin: 26px 0; }
+    .code-tile {
+      width: 46px;
+      height: 60px;
+      display: grid;
+      place-items: center;
+      font: 600 34px ui-monospace, SFMono-Regular, Menlo, monospace;
+      background: var(--surface-strong);
+      border: 1px solid var(--hairline);
+      border-radius: var(--small-radius);
+    }
+    .lock-note {
+      margin-top: auto;
+      font-size: 12px;
+      color: color-mix(in srgb, CanvasText 55%, transparent);
+    }
+    .shell-header {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      padding: 20px 22px 16px;
+    }
+    .mark {
+      width: 48px;
+      height: 48px;
+      border-radius: 14px;
+      background:
+        linear-gradient(135deg, color-mix(in srgb, var(--accent) 22%, transparent), var(--surface));
+      border: 1px solid var(--hairline);
+      display: grid;
+      place-items: center;
+      font-size: 22px;
+    }
+    .shell-header h1 {
+      margin: 0;
+      font-size: 22px;
+      font-weight: 700;
+    }
+    .shell-header p {
+      margin: 4px 0 0;
+      color: color-mix(in srgb, CanvasText 62%, transparent);
+      font-size: 13px;
+    }
+    .pills { display: flex; gap: 8px; margin-left: auto; flex-wrap: wrap; justify-content: flex-end; }
+    .pill {
+      font-size: 12px;
+      font-weight: 600;
+      padding: 5px 10px;
+      border-radius: 999px;
+      background: color-mix(in srgb, currentColor 14%, transparent);
+      border: 1px solid color-mix(in srgb, currentColor 22%, transparent);
+    }
+    .pill.accent { color: var(--accent); }
+    .pill.positive { color: var(--positive); }
+    .pill.neutral { color: color-mix(in srgb, CanvasText 55%, transparent); }
+    .pill.warning { color: var(--warning); }
+    nav {
+      display: flex;
+      gap: 4px;
+      margin: 0 22px;
+      padding: 4px;
+      background: var(--surface);
+      border: 1px solid var(--hairline);
+      border-radius: 12px;
+    }
+    nav button {
+      flex: 1;
+      border: 0;
+      background: transparent;
+      padding: 8px 10px;
+      border-radius: 8px;
+    }
+    nav button.active {
+      background: var(--surface-strong);
+      font-weight: 600;
+    }
+    .panel {
+      flex: 1;
+      overflow: auto;
+      padding: 18px 22px 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--hairline);
+      border-radius: var(--radius);
+      padding: 16px;
+    }
+    .hero {
+      display: flex;
+      gap: 16px;
+      align-items: center;
+      padding: 20px;
+      border-radius: var(--hero-radius);
+      background:
+        linear-gradient(135deg, color-mix(in srgb, var(--accent) 12%, transparent), var(--surface));
+      border: 1px solid var(--hairline);
+    }
+    dl { display: grid; grid-template-columns: 140px 1fr auto; gap: 10px 12px; margin: 0; align-items: center; }
+    dt { color: color-mix(in srgb, CanvasText 55%, transparent); font-size: 13px; }
+    dd { margin: 0; font-size: 14px; }
+    .ok { color: var(--positive); font-weight: 600; font-size: 13px; }
+    .bad { color: var(--warning); font-weight: 600; font-size: 13px; }
+    .transfers-toolbar { display: flex; gap: 10px; align-items: center; }
+    .transfers-toolbar p { margin: 0; color: color-mix(in srgb, CanvasText 62%, transparent); font-size: 13px; }
+    .empty {
+      flex: 1;
+      display: grid;
+      place-items: center;
+      text-align: center;
+      color: color-mix(in srgb, CanvasText 55%, transparent);
+      padding: 32px;
+    }
+    .transfer {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .transfer header { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
+    .transfer strong { font-size: 14px; }
+    .meta { font-size: 12px; color: color-mix(in srgb, CanvasText 55%, transparent); }
+    progress { width: 100%; height: 8px; }
+    .overlay {
+      position: fixed;
+      inset: 0;
+      background: color-mix(in srgb, Canvas 55%, transparent);
+      display: grid;
+      place-items: center;
+      padding: 24px;
+    }
+    .dialog {
+      width: min(420px, 100%);
+      background: Canvas;
+      border: 1px solid var(--hairline);
+      border-radius: var(--hero-radius);
+      padding: 22px;
+    }
+    .dialog h2 { margin: 0 0 8px; font-size: 18px; }
+    .dialog p { margin: 0 0 18px; color: color-mix(in srgb, CanvasText 62%, transparent); }
   </style>
 </head>
 <body>
-  <h1>UniSpace</h1>
-
-  <section id="status-card" class="card hidden">
-    <h2>Paired</h2>
-    <dl>
-      <dt>Workspace</dt><dd id="workspace-name"></dd>
-      <dt>Controller</dt><dd id="host-address"></dd>
-    </dl>
-    <div class="row" style="margin-top:12px">
-      <button id="unpair">Unpair</button>
-    </div>
-  </section>
-
-  <section id="pair-card" class="card">
-    <h2>Pair with a Mac</h2>
-    <div id="step-address">
-      <input id="address" placeholder="Controller Mac hostname or IP, e.g. macbook.local" />
+  <section id="welcome" class="page welcome">
+    <h1>One keyboard. Every device.</h1>
+    <p class="lede">Pair this Linux PC with the Mac whose keyboard you want to use, over your LAN or private Tailscale network.</p>
+    <div class="pair-form">
+      <input id="address" placeholder="Controller Mac hostname or IP" />
       <div class="row" style="margin-top:10px">
         <button id="begin" class="primary">Connect</button>
       </div>
+      <p id="pair-error" class="error"></p>
     </div>
-    <div id="step-confirm" class="hidden">
-      <p id="peer-prompt"></p>
-      <div class="code" id="code"></div>
-      <p>Does the Mac show the same code?</p>
+    <p class="lock-note">Pairing uses an encrypted private connection and a code you confirm on both devices.</p>
+  </section>
+
+  <section id="confirm" class="page confirm hidden">
+    <h1>Confirm pairing</h1>
+    <p id="peer-prompt" class="lede"></p>
+    <div id="code" class="code-row"></div>
+    <div class="row">
+      <button id="cancel">Cancel</button>
+      <button id="confirm-code" class="primary">Codes match</button>
+    </div>
+    <p id="confirm-error" class="error"></p>
+  </section>
+
+  <section id="shell" class="page shell hidden">
+    <header class="shell-header">
+      <div class="mark" aria-hidden="true">U</div>
+      <div>
+        <h1 id="workspace-name">UniSpace</h1>
+        <p id="status-detail"></p>
+      </div>
+      <div id="pills" class="pills"></div>
+    </header>
+    <nav>
+      <button data-panel="home" class="active">Home</button>
+      <button data-panel="transfers">Transfers</button>
+      <button data-panel="clipboard">Clipboard</button>
+    </nav>
+    <section id="panel-home" class="panel">
+      <div class="hero">
+        <div>
+          <h1 id="hero-title" style="font-size:22px;margin:0"></h1>
+          <p id="hero-detail" class="lede" style="margin-top:6px"></p>
+        </div>
+      </div>
+      <div class="card">
+        <dl>
+          <dt>Controller</dt><dd id="controller-name"></dd><dd></dd>
+          <dt>Address</dt><dd id="host-address"></dd><dd></dd>
+          <dt>Receiver service</dt><dd id="service-state"></dd><dd><button id="start-service" class="hidden">Start</button></dd>
+          <dt>Input access</dt><dd id="uinput-state"></dd><dd></dd>
+        </dl>
+      </div>
       <div class="row">
-        <button id="confirm" class="primary">Codes match</button>
-        <button id="cancel">Cancel</button>
+        <button id="unpair">Unpair…</button>
+      </div>
+      <p id="home-error" class="error"></p>
+    </section>
+    <section id="panel-transfers" class="panel hidden">
+      <div class="transfers-toolbar">
+        <button id="send-files" class="primary">Send Files…</button>
+        <button id="open-received">Open received folder</button>
+        <p id="files-hint"></p>
+      </div>
+      <div id="transfer-list"></div>
+      <div id="transfer-empty" class="empty card">Copy files on the Mac while this PC is active, or choose Send Files.</div>
+      <p id="transfer-error" class="error"></p>
+    </section>
+    <section id="panel-clipboard" class="panel hidden">
+      <div class="card">
+        <h2 style="margin:0 0 8px;font-size:16px">Clipboard</h2>
+        <p id="clipboard-state" class="lede" style="max-width:none"></p>
+        <p class="meta" style="margin-top:12px">Text and links sync automatically with the active Mac. Regular files use Transfers instead.</p>
+      </div>
+    </section>
+  </section>
+
+  <div id="unpair-dialog" class="overlay hidden">
+    <div class="dialog">
+      <h2>Leave this workspace?</h2>
+      <p>This PC will forget the workspace and return to setup. The Mac and its other devices are unchanged.</p>
+      <div class="row">
+        <button id="unpair-cancel">Cancel</button>
+        <button id="unpair-confirm" class="danger">Unpair</button>
       </div>
     </div>
-    <p id="error" class="error"></p>
-  </section>
+  </div>
 
   <script>
     const { invoke } = window.__TAURI__.core;
+    const { listen } = window.__TAURI__.event;
     const $ = (id) => document.getElementById(id);
-    const show = (id) => $(id).classList.remove('hidden');
-    const hide = (id) => $(id).classList.add('hidden');
+    const show = (el) => $(el).classList.remove("hidden");
+    const hide = (el) => $(el).classList.add("hidden");
 
-    async function refresh() {
-      const state = await invoke('state');
-      if (state.paired) {
-        $('workspace-name').textContent = state.workspaceName;
-        $('host-address').textContent = state.hostAddress;
-        show('status-card');
-        hide('pair-card');
-      } else {
-        hide('status-card');
-        show('pair-card');
-        show('step-address');
-        hide('step-confirm');
+    let snapshot = { paired: false, transfers: [] };
+    let panel = "home";
+
+    function apply(next) {
+      snapshot = next;
+      if (!next.paired) {
+        show("welcome");
+        hide("confirm");
+        hide("shell");
+        return;
+      }
+      hide("welcome");
+      hide("confirm");
+      show("shell");
+      $("workspace-name").textContent = next.workspaceName || "UniSpace";
+      $("hero-title").textContent = next.workspaceName || "UniSpace";
+      $("controller-name").textContent = next.controllerName || "Mac";
+      $("host-address").textContent = next.hostAddress || "—";
+      const receiving = next.receiving;
+      const connected = next.control === "connected";
+      $("status-detail").textContent = receiving
+        ? `Receiving from ${next.controllerName}`
+        : connected
+          ? `Connected to ${next.controllerName}`
+          : `Waiting for ${next.controllerName}`;
+      $("hero-detail").textContent = $("status-detail").textContent;
+      $("pills").innerHTML = "";
+      addPill(receiving ? "Receiving" : connected ? "Connected" : "Waiting", receiving ? "positive" : connected ? "accent" : "neutral");
+      $("service-state").innerHTML = next.serviceRunning ? '<span class="ok">Running</span>' : '<span class="bad">Stopped</span>';
+      $("start-service").classList.toggle("hidden", next.serviceRunning);
+      $("uinput-state").innerHTML = next.uinputReady
+        ? '<span class="ok">Allowed</span>'
+        : '<span class="bad">Sign out after joining the unispace group</span>';
+      $("files-hint").textContent = next.files ? "File transfer is ready." : "Waiting for the file-transfer channel.";
+      $("send-files").disabled = !next.files;
+      $("clipboard-state").textContent = next.clipboard
+        ? `Sharing text and links with ${next.controllerName}.`
+        : "Reconnecting the clipboard channel.";
+      renderTransfers(next.transfers || []);
+    }
+
+    function addPill(title, tone) {
+      const pill = document.createElement("span");
+      pill.className = `pill ${tone}`;
+      pill.textContent = title;
+      $("pills").appendChild(pill);
+    }
+
+    function renderTransfers(transfers) {
+      const list = $("transfer-list");
+      list.innerHTML = "";
+      $("transfer-empty").classList.toggle("hidden", transfers.length > 0);
+      for (const transfer of transfers) {
+        const card = document.createElement("div");
+        card.className = "card transfer";
+        const percent = transfer.bytesTotal
+          ? Math.min(100, Math.round((transfer.bytesDone / transfer.bytesTotal) * 100))
+          : transfer.state === "completed" ? 100 : 0;
+        const direction = transfer.direction === "incoming" ? "From Mac" : "To Mac";
+        card.innerHTML = `
+          <header>
+            <strong>${escapeHtml(transfer.displayName)}</strong>
+            <span class="meta">${direction} · ${transfer.state}</span>
+          </header>
+          <progress max="100" value="${percent}"></progress>
+          <div class="row">
+            <span class="meta">${formatBytes(transfer.bytesDone)} of ${formatBytes(transfer.bytesTotal)}</span>
+            ${transfer.directory && transfer.state === "completed" && transfer.direction === "incoming"
+              ? `<button data-open="${escapeAttr(transfer.directory)}">Open folder</button>` : ""}
+          </div>`;
+        const open = card.querySelector("[data-open]");
+        if (open) {
+          open.addEventListener("click", () => invoke("open_folder", { path: open.dataset.open }));
+        }
+        list.appendChild(card);
       }
     }
 
-    async function run(action) {
-      $('error').textContent = '';
-      try { await action(); } catch (error) { $('error').textContent = String(error); }
+    function formatBytes(value) {
+      if (!value) return "0 B";
+      const units = ["B", "KB", "MB", "GB"];
+      let size = value;
+      let unit = 0;
+      while (size >= 1024 && unit < units.length - 1) { size /= 1024; unit += 1; }
+      return `${size >= 10 || unit === 0 ? Math.round(size) : size.toFixed(1)} ${units[unit]}`;
     }
 
-    $('begin').addEventListener('click', () => run(async () => {
-      const offer = await invoke('begin_pairing', { address: $('address').value.trim() });
-      $('peer-prompt').textContent = `Confirm that ${offer.peerName} shows this code:`;
-      $('code').textContent = offer.code;
-      hide('step-address');
-      show('step-confirm');
-    }));
+    function escapeHtml(value) {
+      return String(value).replace(/[&<>"']/g, (ch) => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+      }[ch]));
+    }
+    function escapeAttr(value) { return escapeHtml(value); }
 
-    $('confirm').addEventListener('click', () => run(async () => {
-      const result = await invoke('confirm_pairing');
-      await refresh();
-      $('error').textContent = result.warning || '';
-    }));
+    function setPanel(name) {
+      panel = name;
+      for (const button of document.querySelectorAll("nav button")) {
+        button.classList.toggle("active", button.dataset.panel === name);
+      }
+      for (const id of ["home", "transfers", "clipboard"]) {
+        $("panel-" + id).classList.toggle("hidden", id !== name);
+      }
+    }
 
-    $('cancel').addEventListener('click', () => run(async () => {
-      await invoke('cancel_pairing');
-      show('step-address');
-      hide('step-confirm');
-    }));
+    async function run(errorId, action) {
+      $(errorId).textContent = "";
+      try { await action(); }
+      catch (error) { $(errorId).textContent = String(error); }
+    }
 
-    $('unpair').addEventListener('click', () => run(async () => {
-      await invoke('unpair');
-      await refresh();
+    $("begin").addEventListener("click", () => run("pair-error", async () => {
+      const offer = await invoke("begin_pairing", { address: $("address").value.trim() });
+      $("peer-prompt").textContent = `Check that ${offer.peerName} is showing this same code, then approve on both devices.`;
+      $("code").innerHTML = "";
+      for (const digit of String(offer.code)) {
+        const tile = document.createElement("div");
+        tile.className = "code-tile";
+        tile.textContent = digit;
+        $("code").appendChild(tile);
+      }
+      hide("welcome");
+      show("confirm");
     }));
+    $("address").addEventListener("keydown", (event) => {
+      if (event.key === "Enter") $("begin").click();
+    });
+    $("confirm-code").addEventListener("click", () => run("confirm-error", async () => {
+      const result = await invoke("confirm_pairing");
+      apply(result.state);
+      $("home-error").textContent = result.warning || "";
+    }));
+    $("cancel").addEventListener("click", () => run("confirm-error", async () => {
+      await invoke("cancel_pairing");
+      show("welcome");
+      hide("confirm");
+    }));
+    $("unpair").addEventListener("click", () => show("unpair-dialog"));
+    $("unpair-cancel").addEventListener("click", () => hide("unpair-dialog"));
+    $("unpair-confirm").addEventListener("click", () => run("home-error", async () => {
+      hide("unpair-dialog");
+      await invoke("unpair");
+      apply({ paired: false, transfers: [] });
+    }));
+    $("start-service").addEventListener("click", () => run("home-error", () => invoke("start_service")));
+    $("send-files").addEventListener("click", () => run("transfer-error", async () => {
+      const paths = await invoke("choose_files");
+      if (!paths.length) return;
+      await invoke("send_files", { paths });
+    }));
+    $("open-received").addEventListener("click", () => invoke("open_folder", { path: "" }));
+    document.querySelectorAll("nav button").forEach((button) => {
+      button.addEventListener("click", () => setPanel(button.dataset.panel));
+    });
 
-    refresh();
+    listen("receiver-status", (event) => apply(event.payload));
+    invoke("state").then(apply).catch((error) => { $("pair-error").textContent = String(error); });
   </script>
 </body>
 </html>
