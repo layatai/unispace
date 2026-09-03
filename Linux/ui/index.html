@@ -41,7 +41,7 @@
       -webkit-font-smoothing: antialiased;
     }
 
-    .hidden { display: none !important; }
+    .hidden { display: none !important; pointer-events: none !important; }
 
     button {
       font: inherit;
@@ -637,9 +637,9 @@
       <div id="pills" class="pills"></div>
     </header>
     <nav aria-label="Sections">
-      <button data-panel="home" class="active">Home</button>
-      <button data-panel="transfers">Transfers</button>
-      <button data-panel="clipboard">Clipboard</button>
+      <button type="button" data-panel="home" class="active" onclick="window.__unispaceSetPanel('home')">Home</button>
+      <button type="button" data-panel="transfers" onclick="window.__unispaceSetPanel('transfers')">Transfers</button>
+      <button type="button" data-panel="clipboard" onclick="window.__unispaceSetPanel('clipboard')">Clipboard</button>
     </nav>
 
     <section id="panel-home" class="panel">
@@ -716,7 +716,7 @@
           <h2>Sharing</h2>
           <p id="clipboard-state"></p>
         </div>
-        <span id="clipboard-pill" class="pill neutral">Off</span>
+        <span id="clipboard-pill" class="pill warning">Waiting</span>
       </div>
       <p class="note">Text and links sync automatically. Regular files continue through Transfers.</p>
     </section>
@@ -742,6 +742,7 @@
     let panel = "home";
     let invoke;
     let listenFn;
+    let lastApplied = { current: "" };
     try {
       invoke = window.__TAURI__.core.invoke;
       listenFn = window.__TAURI__.event.listen;
@@ -752,6 +753,10 @@
     }
 
     function apply(next) {
+      if (!next || typeof next !== "object") return;
+      const key = JSON.stringify(next);
+      if (key === lastApplied.current) return;
+      lastApplied.current = key;
       snapshot = next;
       if (!next.paired) {
         show("welcome");
@@ -763,6 +768,8 @@
       hide("welcome");
       hide("confirm");
       show("shell");
+      // Notices about a slow status socket belong on Home, not the pair form.
+      $("home-error").textContent = next.notice || "";
 
       const name = next.workspaceName || "UniSpace";
       const controller = next.controllerName || "Mac";
@@ -815,6 +822,8 @@
 
       renderTransfers(next.transfers || []);
     }
+    window.__unispaceApply = apply;
+    if (window.__unispaceBoot) apply(window.__unispaceBoot);
 
     function setStatus(kind, ok, good, bad) {
       const state = $(`${kind}-state`);
@@ -895,12 +904,14 @@
     function escapeAttr(value) { return escapeHtml(value); }
 
     function setPanel(name) {
+      if (!name || !["home", "transfers", "clipboard"].includes(name)) return;
       panel = name;
       for (const button of document.querySelectorAll("nav button")) {
         button.classList.toggle("active", button.dataset.panel === name);
       }
       for (const id of ["home", "transfers", "clipboard"]) {
         const el = $("panel-" + id);
+        if (!el) continue;
         const active = id === name;
         el.classList.toggle("hidden", !active);
         if (active) {
@@ -910,6 +921,7 @@
         }
       }
     }
+    window.__unispaceSetPanel = setPanel;
 
     function setBusy(button, busy) {
       button.classList.toggle("busy", busy);
@@ -1007,17 +1019,15 @@
     listenFn("receiver-status", (event) => apply(event.payload));
     async function refresh() {
       try {
-        const pong = await Promise.race([
-          invoke("ping"),
-          new Promise((_, reject) => setTimeout(() => reject(new Error("IPC timeout")), 1500)),
-        ]);
-        apply(await Promise.race([
-          invoke("state"),
-          new Promise((_, reject) => setTimeout(() => reject(new Error("state IPC timeout")), 1500)),
-        ]));
-        $("pair-error").textContent = `IPC ok (${pong})`;
+        // Config-only first so a paired machine never sits on Connect.
+        apply(await invoke("local_state"));
+        apply(await invoke("state"));
       } catch (error) {
-        $("pair-error").textContent = `IPC: ${error}`;
+        if (!snapshot.paired) {
+          $("pair-error").textContent = String(error).replace(/^Error:\s*/, "");
+        } else {
+          $("home-error").textContent = String(error).replace(/^Error:\s*/, "");
+        }
       }
     }
     refresh();

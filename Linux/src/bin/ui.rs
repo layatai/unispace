@@ -9,7 +9,7 @@ use std::{
     process::Command,
     time::Duration,
 };
-use tauri::{Emitter, Manager, WindowEvent};
+use tauri::{Emitter, Manager, webview::PageLoadEvent};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::net::UnixStream as TokioUnixStream;
 use unispace_linux::{config::Configuration, host, observe, pairing::PendingPairing, service};
@@ -36,6 +36,13 @@ enum Instance {
 #[tauri::command]
 fn ping() -> String {
     format!("pong {}", std::process::id())
+}
+
+/// Config-only snapshot. Does not touch the status socket — used to paint Home
+/// immediately when this machine is already paired, even if live IPC is slow.
+#[tauri::command]
+fn local_state() -> observe::ReceiverSnapshot {
+    observe::fallback_snapshot(None)
 }
 
 #[tauri::command]
@@ -230,20 +237,20 @@ fn focus_main(app: &tauri::AppHandle) {
         let _ = window.show();
         let _ = window.unminimize();
         let _ = window.set_focus();
-        heal_wayland_chrome(&window);
+        // Do not heal on every focus — set_resizable toggles steal clicks.
     }
 }
 
 /// Tao 0.35's Wayland CSD leaves minimize/maximize/close unresponsive until the
 /// surface gets a fresh configure (tauri#13440 / #11856). On Omarchy/Hyprland
 /// tiled windows, `set_size` is ignored — toggling resizable still forces one.
+/// Call sparingly: each heal reconfigures the surface and drops in-flight clicks.
 fn heal_wayland_chrome(window: &tauri::WebviewWindow) {
     if std::env::var_os("WAYLAND_DISPLAY").is_none() {
         return;
     }
     let _ = window.set_resizable(false);
     let _ = window.set_resizable(true);
-    // Extra nudge when the compositor honors client resizes (floating windows).
     if let Ok(size) = window.outer_size() {
         let nudged = tauri::PhysicalSize {
             width: size.width.saturating_add(1).max(2),
@@ -252,8 +259,6 @@ fn heal_wayland_chrome(window: &tauri::WebviewWindow) {
         let _ = window.set_size(nudged);
         let _ = window.set_size(size);
     }
-    // Tao rewrites the header to menu:minimize,maximize,close on resizable
-    // notify — strip min/max again so Omarchy only keeps close.
     #[cfg(target_os = "linux")]
     strip_wayland_minmax_buttons(window);
 }
@@ -267,6 +272,9 @@ fn strip_wayland_minmax_buttons(window: &tauri::WebviewWindow) {
     let window = window.clone();
     let _ = window.clone().run_on_main_thread(move || {
         use gtk::prelude::*;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        static WATCHING: AtomicBool = AtomicBool::new(false);
+
         let Ok(gtk_window) = window.gtk_window() else {
             return;
         };
@@ -274,10 +282,13 @@ fn strip_wayland_minmax_buttons(window: &tauri::WebviewWindow) {
             return;
         };
         set_close_only_layout(&titlebar);
-        // GTK re-derives the decoration layout on hover and title updates,
-        // which resurrects min/max; keep re-asserting close-only.
+        // One watcher only — a previous 500ms Continue timer was registered on
+        // every heal/focus and kept the GTK main loop busy, making the UI dead.
+        if WATCHING.swap(true, Ordering::SeqCst) {
+            return;
+        }
         let titlebar = titlebar.clone();
-        gtk::glib::timeout_add_local(std::time::Duration::from_millis(500), move || {
+        gtk::glib::timeout_add_local(std::time::Duration::from_millis(1500), move || {
             set_close_only_layout(&titlebar);
             gtk::glib::ControlFlow::Continue
         });
@@ -307,12 +318,7 @@ fn set_close_only_layout(widget: &gtk::Widget) {
 fn attach_wayland_chrome_heal(window: &tauri::WebviewWindow) {
     #[cfg(target_os = "linux")]
     strip_wayland_minmax_buttons(window);
-    let win = window.clone();
-    window.on_window_event(move |event| {
-        if matches!(event, WindowEvent::Focused(true)) {
-            heal_wayland_chrome(&win);
-        }
-    });
+    // Intentionally no Focused→heal hook: it made the window non-clickable.
 }
 
 /// Prefer Plasma's server-side decorations. Tiling compositors often have no
@@ -351,13 +357,13 @@ async fn pump_status(app: tauri::AppHandle) {
                 let mut lines = BufReader::new(stream).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
                     if let Ok(snapshot) = serde_json::from_str::<observe::ReceiverSnapshot>(&line) {
-                        let _ = app.emit("receiver-status", snapshot);
+                        push_snapshot(&app, snapshot);
                     }
                 }
             }
             Err(_) => {
-                let _ = app.emit(
-                    "receiver-status",
+                push_snapshot(
+                    &app,
                     observe::fallback_snapshot(Some(
                         "The receiver service is not running; start it from Home.".into(),
                     )),
@@ -365,6 +371,33 @@ async fn pump_status(app: tauri::AppHandle) {
                 tokio::time::sleep(Duration::from_millis(500)).await;
             }
         }
+    }
+}
+
+fn push_snapshot(app: &tauri::AppHandle, snapshot: observe::ReceiverSnapshot) {
+    let _ = app.emit("receiver-status", &snapshot);
+    // Eval fallback for broken webkit2gtk IPC — but only when state changes.
+    // Re-running apply on every line rebuilds the DOM and eats clicks.
+    let Ok(json) = serde_json::to_string(&snapshot) else {
+        return;
+    };
+    {
+        use std::sync::{Mutex, OnceLock};
+        static LAST: OnceLock<Mutex<String>> = OnceLock::new();
+        let last = LAST.get_or_init(|| Mutex::new(String::new()));
+        let Ok(mut prev) = last.lock() else {
+            return;
+        };
+        if *prev == json {
+            return;
+        }
+        *prev = json.clone();
+    }
+    if let Some(window) = app.get_webview_window("main") {
+        let script = format!(
+            "(function(){{try{{if(typeof window.__unispaceApply==='function')window.__unispaceApply({json});}}catch(e){{}}}})();"
+        );
+        let _ = window.eval(script);
     }
 }
 
@@ -382,6 +415,57 @@ fn main() -> Result<()> {
     tauri::Builder::default()
         .manage(tokio::sync::Mutex::new(Option::<PendingPairing>::None))
         .manage(tokio::sync::Mutex::new(address))
+        .on_page_load(|webview, payload| {
+            if payload.event() != PageLoadEvent::Finished {
+                return;
+            }
+            // Push config state into the page without invoke() — webkit2gtk IPC
+            // has been unreliable here, and setup emit races ahead of listen().
+            let snapshot = observe::fallback_snapshot(None);
+            let Ok(json) = serde_json::to_string(&snapshot) else {
+                return;
+            };
+            let direct = format!(
+                "(function(){{try{{\
+                  var s={json};\
+                  window.__unispaceBoot=s;\
+                  window.__unispaceSetPanel=window.__unispaceSetPanel||function(name){{\
+                    var ids=['home','transfers','clipboard'];\
+                    if(ids.indexOf(name)<0)return;\
+                    document.querySelectorAll('nav button').forEach(function(b){{\
+                      b.classList.toggle('active', b.getAttribute('data-panel')===name);\
+                    }});\
+                    ids.forEach(function(id){{\
+                      var el=document.getElementById('panel-'+id);\
+                      if(!el)return;\
+                      if(id===name)el.classList.remove('hidden'); else el.classList.add('hidden');\
+                    }});\
+                  }};\
+                  if(s&&s.paired){{\
+                    var w=document.getElementById('welcome');\
+                    var c=document.getElementById('confirm');\
+                    var h=document.getElementById('shell');\
+                    if(w)w.classList.add('hidden');\
+                    if(c)c.classList.add('hidden');\
+                    if(h)h.classList.remove('hidden');\
+                    var n=document.getElementById('workspace-name');\
+                    if(n)n.textContent=s.workspaceName||'UniSpace';\
+                    var d=document.getElementById('status-detail');\
+                    if(d)d.textContent='Connected to '+(s.controllerName||'Mac');\
+                    var cn=document.getElementById('controller-name');\
+                    if(cn)cn.textContent=s.controllerName||'Mac';\
+                    var ha=document.getElementById('host-address');\
+                    if(ha)ha.textContent=s.hostAddress||'—';\
+                    var pill=document.getElementById('clipboard-pill');\
+                    var st=document.getElementById('clipboard-state');\
+                    if(pill){{pill.textContent=s.clipboard?'Enabled':'Waiting';pill.className='pill '+(s.clipboard?'positive':'warning');}}\
+                    if(st)st.textContent=s.clipboard?('Sharing text and links with '+(s.controllerName||'Mac')+'.'):'Waiting for the clipboard channel.';\
+                  }}\
+                  if(typeof window.__unispaceApply==='function')window.__unispaceApply(s);\
+                }}catch(e){{}}}})();"
+            );
+            let _ = webview.eval(direct);
+        })
         .setup(move |app| {
             let handle = app.handle().clone();
             let focus_handle = app.handle().clone();
@@ -402,19 +486,18 @@ fn main() -> Result<()> {
                 };
                 serve_focus(listener, focus_handle).await;
             });
-            // Heal after map; tiled Hyprland needs the resizable toggle, not size.
+            // Single delayed heal after map — not a burst that fights input.
             tauri::async_runtime::spawn(async move {
-                for delay_ms in [80_u64, 250, 600] {
-                    tokio::time::sleep(Duration::from_millis(delay_ms)).await;
-                    if let Some(window) = heal_handle.get_webview_window("main") {
-                        heal_wayland_chrome(&window);
-                    }
+                tokio::time::sleep(Duration::from_millis(250)).await;
+                if let Some(window) = heal_handle.get_webview_window("main") {
+                    heal_wayland_chrome(&window);
                 }
             });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             ping,
+            local_state,
             state,
             begin_pairing,
             confirm_pairing,
