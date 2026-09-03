@@ -8,3 +8,4 @@ xcuserdata/
 *.xcuserstate
 /Scripts/.ship.env
 /Linux/target/
+/Linux/ui/node_modules/

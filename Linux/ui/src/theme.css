@@ -1,0 +1,60 @@
+:root {
+  color-scheme: light;
+  --font-ui: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-code: ui-monospace, SFMono-Regular, Menlo, monospace;
+  --radius: 0.625rem;
+
+  --bg: oklch(0.985 0.004 250);
+  --surface: oklch(1 0 0);
+  --surface-2: oklch(0.97 0.004 250);
+  --ink: oklch(0.205 0.01 250);
+  --ink-3: oklch(0.55 0.01 250);
+  --border-c: oklch(0.91 0.01 250);
+  --rose: oklch(0.577 0.245 27.325);
+  --brand: #0a84ff;
+  --brand-ink: oklch(0.99 0 0);
+
+  --background: var(--bg);
+  --foreground: var(--ink);
+  --card: var(--surface);
+  --card-foreground: var(--ink);
+  --popover: var(--surface);
+  --popover-foreground: var(--ink);
+  --primary: var(--brand);
+  --primary-foreground: var(--brand-ink);
+  --secondary: var(--surface-2);
+  --secondary-foreground: var(--ink);
+  --muted: var(--surface-2);
+  --muted-foreground: var(--ink-3);
+  --accent: var(--surface-2);
+  --accent-foreground: var(--ink);
+  --destructive: var(--rose);
+  --border: var(--border-c);
+  --input: var(--border-c);
+  --ring: var(--brand);
+  --chart-1: var(--brand);
+  --chart-2: oklch(0.556 0 0);
+  --chart-3: oklch(0.439 0 0);
+  --chart-4: oklch(0.371 0 0);
+  --chart-5: oklch(0.269 0 0);
+  --sidebar: var(--surface);
+  --sidebar-foreground: var(--ink);
+  --sidebar-primary: var(--brand);
+  --sidebar-primary-foreground: var(--brand-ink);
+  --sidebar-accent: var(--surface-2);
+  --sidebar-accent-foreground: var(--ink);
+  --sidebar-border: var(--border-c);
+  --sidebar-ring: var(--brand);
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: oklch(0.175 0.01 250);
+  --surface: oklch(0.22 0.012 250);
+  --surface-2: oklch(0.27 0.012 250);
+  --ink: oklch(0.96 0.005 250);
+  --ink-3: oklch(0.72 0.01 250);
+  --border-c: oklch(1 0 0 / 12%);
+  --brand: #3d9eff;
+  --rose: oklch(0.704 0.191 22.216);
+}

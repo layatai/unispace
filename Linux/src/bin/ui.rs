@@ -318,6 +318,8 @@ fn set_close_only_layout(widget: &gtk::Widget) {
 fn attach_wayland_chrome_heal(window: &tauri::WebviewWindow) {
     #[cfg(target_os = "linux")]
     strip_wayland_minmax_buttons(window);
+    #[cfg(not(target_os = "linux"))]
+    let _ = window;
     // Intentionally no Focused→heal hook: it made the window non-clickable.
 }
 
@@ -429,38 +431,6 @@ fn main() -> Result<()> {
                 "(function(){{try{{\
                   var s={json};\
                   window.__unispaceBoot=s;\
-                  window.__unispaceSetPanel=window.__unispaceSetPanel||function(name){{\
-                    var ids=['home','transfers','clipboard'];\
-                    if(ids.indexOf(name)<0)return;\
-                    document.querySelectorAll('nav button').forEach(function(b){{\
-                      b.classList.toggle('active', b.getAttribute('data-panel')===name);\
-                    }});\
-                    ids.forEach(function(id){{\
-                      var el=document.getElementById('panel-'+id);\
-                      if(!el)return;\
-                      if(id===name)el.classList.remove('hidden'); else el.classList.add('hidden');\
-                    }});\
-                  }};\
-                  if(s&&s.paired){{\
-                    var w=document.getElementById('welcome');\
-                    var c=document.getElementById('confirm');\
-                    var h=document.getElementById('shell');\
-                    if(w)w.classList.add('hidden');\
-                    if(c)c.classList.add('hidden');\
-                    if(h)h.classList.remove('hidden');\
-                    var n=document.getElementById('workspace-name');\
-                    if(n)n.textContent=s.workspaceName||'UniSpace';\
-                    var d=document.getElementById('status-detail');\
-                    if(d)d.textContent='Connected to '+(s.controllerName||'Mac');\
-                    var cn=document.getElementById('controller-name');\
-                    if(cn)cn.textContent=s.controllerName||'Mac';\
-                    var ha=document.getElementById('host-address');\
-                    if(ha)ha.textContent=s.hostAddress||'—';\
-                    var pill=document.getElementById('clipboard-pill');\
-                    var st=document.getElementById('clipboard-state');\
-                    if(pill){{pill.textContent=s.clipboard?'Enabled':'Waiting';pill.className='pill '+(s.clipboard?'positive':'warning');}}\
-                    if(st)st.textContent=s.clipboard?('Sharing text and links with '+(s.controllerName||'Mac')+'.'):'Waiting for the clipboard channel.';\
-                  }}\
                   if(typeof window.__unispaceApply==='function')window.__unispaceApply(s);\
                 }}catch(e){{}}}})();"
             );
