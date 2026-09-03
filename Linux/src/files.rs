@@ -485,10 +485,17 @@ fn clipboard_files() -> Result<Vec<PathBuf>> {
         return Ok(Vec::new());
     }
     let text = String::from_utf8(output.stdout)?;
+    // Files under the transfers root are files we just RECEIVED (incoming
+    // completion publishes them to the clipboard); auto-offering them back
+    // forks an endless Mac↔Linux re-transfer loop.
+    let transfers_root = crate::observe::transfers_root().ok();
     Ok(sendable_paths(
         text.lines()
             .filter(|line| !line.starts_with('#'))
             .filter_map(file_uri)
+            .filter(|path| {
+                transfers_root.as_ref().is_none_or(|root| !path.starts_with(root))
+            })
             .collect(),
     ))
 }
