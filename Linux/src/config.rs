@@ -106,9 +106,22 @@ fn detect_desktop(desktop: Option<&str>) -> GestureProfile {
         GestureProfile::Hyprland
     } else if desktop.contains("kde") || desktop.contains("plasma") {
         GestureProfile::Kde
+    } else if desktop.is_empty() && hyprland_session() {
+        // Daemons launched over SSH have no XDG_CURRENT_DESKTOP; detect the
+        // running compositor so gestures do not fall back to GNOME chords.
+        GestureProfile::Hyprland
     } else {
         GestureProfile::Gnome
     }
+}
+
+fn hyprland_session() -> bool {
+    let uid = unsafe { libc::getuid() };
+    let runtime = std::env::var("XDG_RUNTIME_DIR")
+        .unwrap_or_else(|_| format!("/run/user/{uid}"));
+    std::fs::read_dir(format!("{runtime}/hypr"))
+        .map(|mut entries| entries.next().is_some())
+        .unwrap_or(false)
 }
 
 fn profile_defaults(profile: GestureProfile) -> ResolvedGestureBindings {
