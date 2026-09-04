@@ -313,10 +313,6 @@ final class AppModel: ObservableObject {
 
         pairing.stop()
         candidates = []
-        networkTask?.cancel()
-        networkTask = nil
-        realtimeInputTask?.cancel()
-        realtimeInputTask = nil
         controlLatencyActivity.stop()
         sessionTask?.cancel()
         sessionTask = nil
@@ -614,10 +610,6 @@ final class AppModel: ObservableObject {
         do {
             controlTransferGuard.reset()
             guard let keyring = try trustStore.workspaceKeyring(for: workspace.id) else { return }
-            networkTask?.cancel()
-            networkTask = nil
-            realtimeInputTask?.cancel()
-            realtimeInputTask = nil
             controlLatencyActivity.stop()
             sessionTask?.cancel()
             sessionTask = nil
@@ -658,20 +650,27 @@ final class AppModel: ObservableObject {
             self.coordinator = coordinator
             applyPeerConnectionPolicy()
             startCaptureIfPossible()
-            networkTask = Task { [weak self, transport] in
-                guard let self else { return }
-                for await event in transport.events() {
-                    if Task.isCancelled { break }
-                    await self.handlePeerEvent(event)
+            // Cancellation terminates these shared AsyncStreams, so their
+            // consumers must live as long as the transport instance does.
+            if networkTask == nil {
+                networkTask = Task { [weak self, transport] in
+                    guard let self else { return }
+                    for await event in transport.events() {
+                        if Task.isCancelled { break }
+                        await self.handlePeerEvent(event)
+                    }
                 }
             }
-            realtimeInputTask = Task.detached(
-                priority: realtimeInputTaskPriority
-            ) { [coordinator, transport] in
-                for await event in transport.realtimeInputEvents() {
-                    if Task.isCancelled { break }
-                    if case let .realtimeInput(source, frame) = event {
-                        coordinator.handleIncomingRealtime(frame, from: source)
+            if realtimeInputTask == nil {
+                realtimeInputTask = Task.detached(
+                    priority: realtimeInputTaskPriority
+                ) { [weak self, transport] in
+                    for await event in transport.realtimeInputEvents() {
+                        if Task.isCancelled { break }
+                        if case let .realtimeInput(source, frame) = event,
+                           let coordinator = await self?.coordinator {
+                            coordinator.handleIncomingRealtime(frame, from: source)
+                        }
                     }
                 }
             }
