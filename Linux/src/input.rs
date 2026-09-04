@@ -9,6 +9,36 @@ use evdev::{
 };
 use std::collections::BTreeSet;
 
+const RELATIVE_AXES: [RelativeAxisCode; 6] = [
+    RelativeAxisCode::REL_X,
+    RelativeAxisCode::REL_Y,
+    RelativeAxisCode::REL_WHEEL,
+    RelativeAxisCode::REL_HWHEEL,
+    RelativeAxisCode::REL_WHEEL_HI_RES,
+    RelativeAxisCode::REL_HWHEEL_HI_RES,
+];
+
+#[derive(Default)]
+struct WheelAxisAccumulator {
+    high_resolution_remainder: f64,
+    legacy_remainder: i64,
+}
+
+impl WheelAxisAccumulator {
+    fn advance(&mut self, points: f64) -> (i32, i32) {
+        const HIGH_RESOLUTION_UNITS_PER_POINT: f64 = 4.0;
+        const HIGH_RESOLUTION_UNITS_PER_DETENT: i64 = 120;
+
+        self.high_resolution_remainder += points * HIGH_RESOLUTION_UNITS_PER_POINT;
+        let high_resolution = self.high_resolution_remainder.trunc() as i32;
+        self.high_resolution_remainder -= f64::from(high_resolution);
+        self.legacy_remainder += i64::from(high_resolution);
+        let legacy = self.legacy_remainder / HIGH_RESOLUTION_UNITS_PER_DETENT;
+        self.legacy_remainder %= HIGH_RESOLUTION_UNITS_PER_DETENT;
+        (high_resolution, legacy as i32)
+    }
+}
+
 pub trait InputSink: Send {
     fn activate(
         &mut self,
@@ -27,8 +57,8 @@ pub struct UinputSink {
     modifiers: u16,
     swipe_triggered: bool,
     gesture_bindings: ResolvedGestureBindings,
-    wheel_acc_x: f64,
-    wheel_acc_y: f64,
+    wheel_x: WheelAxisAccumulator,
+    wheel_y: WheelAxisAccumulator,
 }
 
 impl UinputSink {
@@ -47,12 +77,7 @@ impl UinputSink {
             keys.insert(KeyCode::new(code));
         }
         let mut relative = AttributeSet::<RelativeAxisCode>::new();
-        for axis in [
-            RelativeAxisCode::REL_X,
-            RelativeAxisCode::REL_Y,
-            RelativeAxisCode::REL_WHEEL,
-            RelativeAxisCode::REL_HWHEEL,
-        ] {
+        for axis in RELATIVE_AXES {
             relative.insert(axis);
         }
         let device = VirtualDevice::builder()
@@ -78,8 +103,8 @@ impl UinputSink {
             modifiers: 0,
             swipe_triggered: false,
             gesture_bindings,
-            wheel_acc_x: 0.0,
-            wheel_acc_y: 0.0,
+            wheel_x: WheelAxisAccumulator::default(),
+            wheel_y: WheelAxisAccumulator::default(),
         })
     }
     fn emit(&mut self, events: &[LinuxEvent]) -> Result<()> {
@@ -225,37 +250,37 @@ impl UinputSink {
     /// the controller sends per-point deltas. Accumulate and emit
     /// REL_WHEEL_HI_RES (120 = one detent) so Wayland scrolls like the trackpad.
     fn wheel(&mut self, dx: f64, dy: f64) -> Result<()> {
-        const HI_RES_PER_POINT: f64 = 4.0;
         let mut events = Vec::new();
-        self.wheel_acc_x += dx * HI_RES_PER_POINT;
-        self.wheel_acc_y += dy * HI_RES_PER_POINT;
-        let steps_x = self.wheel_acc_x.trunc();
-        let steps_y = self.wheel_acc_y.trunc();
-        self.wheel_acc_x -= steps_x;
-        self.wheel_acc_y -= steps_y;
-        if steps_x != 0.0 {
-            events.push(LinuxEvent::new(
-                EventType::RELATIVE.0,
-                RelativeAxisCode::REL_HWHEEL.0,
-                (steps_x / 120.0).round() as i32,
-            ));
-            events.push(LinuxEvent::new(
-                EventType::RELATIVE.0,
-                RelativeAxisCode::REL_HWHEEL_HI_RES.0,
-                steps_x as i32,
-            ));
-        }
-        if steps_y != 0.0 {
-            events.push(LinuxEvent::new(
-                EventType::RELATIVE.0,
-                RelativeAxisCode::REL_WHEEL.0,
-                (steps_y / 120.0).round() as i32,
-            ));
-            events.push(LinuxEvent::new(
-                EventType::RELATIVE.0,
-                RelativeAxisCode::REL_WHEEL_HI_RES.0,
-                steps_y as i32,
-            ));
+        let horizontal = self.wheel_x.advance(dx);
+        let vertical = self.wheel_y.advance(dy);
+        for (high_resolution, legacy, high_resolution_code, legacy_code) in [
+            (
+                horizontal.0,
+                horizontal.1,
+                RelativeAxisCode::REL_HWHEEL_HI_RES,
+                RelativeAxisCode::REL_HWHEEL,
+            ),
+            (
+                vertical.0,
+                vertical.1,
+                RelativeAxisCode::REL_WHEEL_HI_RES,
+                RelativeAxisCode::REL_WHEEL,
+            ),
+        ] {
+            if high_resolution != 0 {
+                events.push(LinuxEvent::new(
+                    EventType::RELATIVE.0,
+                    high_resolution_code.0,
+                    high_resolution,
+                ));
+            }
+            if legacy != 0 {
+                events.push(LinuxEvent::new(
+                    EventType::RELATIVE.0,
+                    legacy_code.0,
+                    legacy,
+                ));
+            }
         }
         if !events.is_empty() {
             self.emit(&events)?
@@ -455,5 +480,24 @@ mod tests {
     fn maps_hid_keys() {
         assert_eq!(hid_to_linux(0x04), Some(KeyCode::KEY_A));
         assert_eq!(hid_to_linux(0xe3), Some(KeyCode::KEY_LEFTMETA));
+    }
+
+    #[test]
+    fn advertises_high_resolution_wheel_axes() {
+        assert!(RELATIVE_AXES.contains(&RelativeAxisCode::REL_WHEEL_HI_RES));
+        assert!(RELATIVE_AXES.contains(&RelativeAxisCode::REL_HWHEEL_HI_RES));
+    }
+
+    #[test]
+    fn accumulates_legacy_detents_across_high_resolution_packets() {
+        let mut two_packets = WheelAxisAccumulator::default();
+        assert_eq!(two_packets.advance(15.0), (60, 0));
+        assert_eq!(two_packets.advance(15.0), (60, 1));
+
+        let mut three_packets = WheelAxisAccumulator::default();
+        assert_eq!(three_packets.advance(10.0), (40, 0));
+        assert_eq!(three_packets.advance(10.0), (40, 0));
+        assert_eq!(three_packets.advance(10.0), (40, 1));
+        assert_eq!(three_packets.advance(-30.0), (-120, -1));
     }
 }
