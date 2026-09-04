@@ -365,8 +365,18 @@ async fn handle_reliable_input(
     }
     state.last_sequence = Some(frame.sequence);
     state.last_heartbeat = Some(Instant::now());
-    if let protocol::InputEvent::PointerMove { dx, dy, .. } = &frame.event {
-        debug!(dx, dy, "reliable pointer");
+    match &frame.event {
+        protocol::InputEvent::PointerMove { dx, dy, .. } => debug!(dx, dy, "reliable pointer"),
+        protocol::InputEvent::Scroll { dx, dy, .. } => debug!(dx, dy, "reliable scroll"),
+        protocol::InputEvent::Gesture {
+            kind,
+            phase,
+            dx,
+            dy,
+            value,
+            ..
+        } => debug!(kind, phase, dx, dy, value, "reliable gesture"),
+        _ => {}
     }
     inject_with_boundary(state, writer, input, hub, frame.event).await
 }

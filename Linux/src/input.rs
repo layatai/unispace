@@ -9,6 +9,36 @@ use evdev::{
 };
 use std::collections::BTreeSet;
 
+const RELATIVE_AXES: [RelativeAxisCode; 6] = [
+    RelativeAxisCode::REL_X,
+    RelativeAxisCode::REL_Y,
+    RelativeAxisCode::REL_WHEEL,
+    RelativeAxisCode::REL_HWHEEL,
+    RelativeAxisCode::REL_WHEEL_HI_RES,
+    RelativeAxisCode::REL_HWHEEL_HI_RES,
+];
+
+#[derive(Default)]
+struct WheelAxisAccumulator {
+    high_resolution_remainder: f64,
+    legacy_remainder: i64,
+}
+
+impl WheelAxisAccumulator {
+    fn advance(&mut self, points: f64) -> (i32, i32) {
+        const HIGH_RESOLUTION_UNITS_PER_POINT: f64 = 4.0;
+        const HIGH_RESOLUTION_UNITS_PER_DETENT: i64 = 120;
+
+        self.high_resolution_remainder += points * HIGH_RESOLUTION_UNITS_PER_POINT;
+        let high_resolution = self.high_resolution_remainder.trunc() as i32;
+        self.high_resolution_remainder -= f64::from(high_resolution);
+        self.legacy_remainder += i64::from(high_resolution);
+        let legacy = self.legacy_remainder / HIGH_RESOLUTION_UNITS_PER_DETENT;
+        self.legacy_remainder %= HIGH_RESOLUTION_UNITS_PER_DETENT;
+        (high_resolution, legacy as i32)
+    }
+}
+
 pub trait InputSink: Send {
     fn activate(
         &mut self,
@@ -27,6 +57,8 @@ pub struct UinputSink {
     modifiers: u16,
     swipe_triggered: bool,
     gesture_bindings: ResolvedGestureBindings,
+    wheel_x: WheelAxisAccumulator,
+    wheel_y: WheelAxisAccumulator,
 }
 
 impl UinputSink {
@@ -45,12 +77,7 @@ impl UinputSink {
             keys.insert(KeyCode::new(code));
         }
         let mut relative = AttributeSet::<RelativeAxisCode>::new();
-        for axis in [
-            RelativeAxisCode::REL_X,
-            RelativeAxisCode::REL_Y,
-            RelativeAxisCode::REL_WHEEL,
-            RelativeAxisCode::REL_HWHEEL,
-        ] {
+        for axis in RELATIVE_AXES {
             relative.insert(axis);
         }
         let device = VirtualDevice::builder()
@@ -76,6 +103,8 @@ impl UinputSink {
             modifiers: 0,
             swipe_triggered: false,
             gesture_bindings,
+            wheel_x: WheelAxisAccumulator::default(),
+            wheel_y: WheelAxisAccumulator::default(),
         })
     }
     fn emit(&mut self, events: &[LinuxEvent]) -> Result<()> {
@@ -217,22 +246,41 @@ impl UinputSink {
             _ => Ok(()),
         }
     }
+    /// Smooth wheel: REL_WHEEL is detent-quantized (~3 lines per unit), while
+    /// the controller sends per-point deltas. Accumulate and emit
+    /// REL_WHEEL_HI_RES (120 = one detent) so Wayland scrolls like the trackpad.
     fn wheel(&mut self, dx: f64, dy: f64) -> Result<()> {
         let mut events = Vec::new();
-        let (x, y) = wheel_axes(dx, dy);
-        if x != 0 {
-            events.push(LinuxEvent::new(
-                EventType::RELATIVE.0,
-                RelativeAxisCode::REL_HWHEEL.0,
-                x,
-            ));
-        }
-        if y != 0 {
-            events.push(LinuxEvent::new(
-                EventType::RELATIVE.0,
-                RelativeAxisCode::REL_WHEEL.0,
-                y,
-            ));
+        let horizontal = self.wheel_x.advance(dx);
+        let vertical = self.wheel_y.advance(dy);
+        for (high_resolution, legacy, high_resolution_code, legacy_code) in [
+            (
+                horizontal.0,
+                horizontal.1,
+                RelativeAxisCode::REL_HWHEEL_HI_RES,
+                RelativeAxisCode::REL_HWHEEL,
+            ),
+            (
+                vertical.0,
+                vertical.1,
+                RelativeAxisCode::REL_WHEEL_HI_RES,
+                RelativeAxisCode::REL_WHEEL,
+            ),
+        ] {
+            if high_resolution != 0 {
+                events.push(LinuxEvent::new(
+                    EventType::RELATIVE.0,
+                    high_resolution_code.0,
+                    high_resolution,
+                ));
+            }
+            if legacy != 0 {
+                events.push(LinuxEvent::new(
+                    EventType::RELATIVE.0,
+                    legacy_code.0,
+                    legacy,
+                ));
+            }
         }
         if !events.is_empty() {
             self.emit(&events)?
@@ -425,13 +473,6 @@ fn hid_to_linux(usage: u16) -> Option<KeyCode> {
     Some(KeyCode::new(code))
 }
 
-/// Portable scroll signs match the controller capture and the Windows injector.
-/// macOS Natural Scrolling is already applied in the CGEvent point deltas; do
-/// not invert again on Linux.
-fn wheel_axes(dx: f64, dy: f64) -> (i32, i32) {
-    (dx.round() as i32, dy.round() as i32)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -442,8 +483,21 @@ mod tests {
     }
 
     #[test]
-    fn wheel_axes_keep_controller_scroll_signs() {
-        assert_eq!(wheel_axes(2.0, -3.0), (2, -3));
-        assert_eq!(wheel_axes(-1.4, 0.6), (-1, 1));
+    fn advertises_high_resolution_wheel_axes() {
+        assert!(RELATIVE_AXES.contains(&RelativeAxisCode::REL_WHEEL_HI_RES));
+        assert!(RELATIVE_AXES.contains(&RelativeAxisCode::REL_HWHEEL_HI_RES));
+    }
+
+    #[test]
+    fn accumulates_legacy_detents_across_high_resolution_packets() {
+        let mut two_packets = WheelAxisAccumulator::default();
+        assert_eq!(two_packets.advance(15.0), (60, 0));
+        assert_eq!(two_packets.advance(15.0), (60, 1));
+
+        let mut three_packets = WheelAxisAccumulator::default();
+        assert_eq!(three_packets.advance(10.0), (40, 0));
+        assert_eq!(three_packets.advance(10.0), (40, 0));
+        assert_eq!(three_packets.advance(10.0), (40, 1));
+        assert_eq!(three_packets.advance(-30.0), (-120, -1));
     }
 }
