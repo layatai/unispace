@@ -61,7 +61,14 @@ fn desktop_prefers_dark(id: &str) -> Option<bool> {
     if id == "kde" {
         for tool in ["kreadconfig6", "kreadconfig5"] {
             let Ok(output) = Command::new(tool)
-                .args(["--file", "kdeglobals", "--group", "General", "--key", "ColorScheme"])
+                .args([
+                    "--file",
+                    "kdeglobals",
+                    "--group",
+                    "General",
+                    "--key",
+                    "ColorScheme",
+                ])
                 .output()
             else {
                 continue;
