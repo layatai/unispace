@@ -117,8 +117,7 @@ fn detect_desktop(desktop: Option<&str>) -> GestureProfile {
 
 fn hyprland_session() -> bool {
     let uid = unsafe { libc::getuid() };
-    let runtime = std::env::var("XDG_RUNTIME_DIR")
-        .unwrap_or_else(|_| format!("/run/user/{uid}"));
+    let runtime = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| format!("/run/user/{uid}"));
     std::fs::read_dir(format!("{runtime}/hypr"))
         .map(|mut entries| entries.next().is_some())
         .unwrap_or(false)

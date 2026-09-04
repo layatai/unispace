@@ -494,7 +494,9 @@ fn clipboard_files() -> Result<Vec<PathBuf>> {
             .filter(|line| !line.starts_with('#'))
             .filter_map(file_uri)
             .filter(|path| {
-                transfers_root.as_ref().is_none_or(|root| !path.starts_with(root))
+                transfers_root
+                    .as_ref()
+                    .is_none_or(|root| !path.starts_with(root))
             })
             .collect(),
     ))
