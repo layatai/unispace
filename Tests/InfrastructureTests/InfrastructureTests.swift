@@ -1683,14 +1683,10 @@ final class InfrastructureTests: XCTestCase {
             timestampNanos: 6
         )
         client.frameHandler = { kind, payload in
-            do {
-                XCTAssertEqual(kind, .realtimePointerBinaryV2)
-                let decoded = try WireFrameCodec.decodePortableRealtimePointer(payload)
-                XCTAssertEqual(decoded, frame)
-                received.fulfill()
-            } catch {
-                XCTFail("Could not decode Windows pointer frame: \(error)")
-            }
+            guard kind == .realtimePointerBinaryV2,
+                  let decoded = try? WireFrameCodec.decodePortableRealtimePointer(payload),
+                  decoded == frame else { return }
+            received.fulfill()
         }
         rawClient.start(queue: DispatchQueue(label: "UniSpaceInfrastructureTests.WindowsPointer"))
         await fulfillment(of: [authenticated], timeout: 3)
@@ -1704,6 +1700,7 @@ final class InfrastructureTests: XCTestCase {
         let sentToUnknownDevice = try await transport.send(frame, to: DeviceID())
         XCTAssertFalse(sentToUnknownDevice)
         await fulfillment(of: [received], timeout: 3)
+        client.cancel()
 
         let restartedRawClient = NWConnection(
             host: "127.0.0.1",
@@ -1724,6 +1721,7 @@ final class InfrastructureTests: XCTestCase {
         defer { restartedClient.cancel() }
         let restartedAuthenticated = expectation(description: "Restarted Windows pointer lane authenticated")
         let restartedReceived = expectation(description: "Restarted Windows pointer lane received state")
+        let restartedFrameReceived = BooleanLatch()
         restartedClient.authenticatedHandler = { deviceID in
             XCTAssertEqual(deviceID, macID)
             restartedAuthenticated.fulfill()
@@ -1747,15 +1745,15 @@ final class InfrastructureTests: XCTestCase {
             guard kind == .realtimePointerBinaryV2,
                   let decoded = try? WireFrameCodec.decodePortableRealtimePointer(payload),
                   decoded == restartedFrame else { return }
-            restartedReceived.fulfill()
+            if restartedFrameReceived.set() { restartedReceived.fulfill() }
         }
         restartedRawClient.start(queue: DispatchQueue(label: "UniSpaceInfrastructureTests.RestartedWindowsPointer"))
         await fulfillment(of: [restartedAuthenticated], timeout: 3)
 
         sent = false
-        for _ in 0..<50 where !sent {
-            sent = try await transport.send(restartedFrame, to: windowsID)
-            if !sent { try await Task.sleep(for: .milliseconds(20)) }
+        for _ in 0..<50 where !restartedFrameReceived.value {
+            sent = try await transport.send(restartedFrame, to: windowsID) || sent
+            if !restartedFrameReceived.value { try await Task.sleep(for: .milliseconds(20)) }
         }
         XCTAssertTrue(sent)
         await fulfillment(of: [restartedReceived], timeout: 3)
@@ -1915,6 +1913,21 @@ private final class StringRecorder: @unchecked Sendable {
 
     func append(_ value: String) {
         lock.withLock { storedValues.append(value) }
+    }
+}
+
+private final class BooleanLatch: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored = false
+
+    var value: Bool { lock.withLock { stored } }
+
+    func set() -> Bool {
+        lock.withLock {
+            guard !stored else { return false }
+            stored = true
+            return true
+        }
     }
 }
 
