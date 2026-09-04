@@ -369,7 +369,12 @@ async fn handle_reliable_input(
         protocol::InputEvent::PointerMove { dx, dy, .. } => debug!(dx, dy, "reliable pointer"),
         protocol::InputEvent::Scroll { dx, dy, .. } => debug!(dx, dy, "reliable scroll"),
         protocol::InputEvent::Gesture {
-            kind, phase, dx, dy, value, ..
+            kind,
+            phase,
+            dx,
+            dy,
+            value,
+            ..
         } => debug!(kind, phase, dx, dy, value, "reliable gesture"),
         _ => {}
     }

@@ -456,5 +456,4 @@ mod tests {
         assert_eq!(hid_to_linux(0x04), Some(KeyCode::KEY_A));
         assert_eq!(hid_to_linux(0xe3), Some(KeyCode::KEY_LEFTMETA));
     }
-
 }
