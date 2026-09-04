@@ -1,0 +1,4 @@
+interface:
+  display_name: "Windows Codex Agent"
+  short_description: "Run and supervise Codex safely over Windows SSH"
+  default_prompt: "Use $windows-codex-agent to run a scoped Codex CLI task on the designated Windows host."
