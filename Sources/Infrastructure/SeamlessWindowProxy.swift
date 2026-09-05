@@ -16,6 +16,7 @@ public final class SeamlessWindowProxy: NSObject, NSWindowDelegate {
     private var parameters: [Data] = []
     private var needsKeyframe = true
     var nativeWindow: NSWindow { window }
+    var isRendering: Bool { surface.video.status == .rendering }
 
     public init(descriptor: SeamlessWindowDescriptor, sourceName: String) {
         let scale = min(1, 1_000 / Double(descriptor.width), 700 / Double(descriptor.height))

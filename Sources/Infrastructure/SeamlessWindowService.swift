@@ -25,6 +25,7 @@ public final class SeamlessWindowService {
     private var video: SeamlessWindowConnection?
     private var descriptor: SeamlessWindowDescriptor?
     private var offerSent = false
+    private var acceptanceRequested = false
     private var visible = true
     private var timer: Task<Void, Never>?
     private var captureTask: Task<Void, Never>?
@@ -146,11 +147,16 @@ public final class SeamlessWindowService {
     }
 
     public func accept() {
-        guard let incoming, let configuration, control?.peer == incoming.0.source,
-              video?.peer == incoming.0.source else { returnHome(); return }
+        guard let incoming, control?.peer == incoming.0.source else { returnHome(); return }
+        guard video?.peer == incoming.0.source else {
+            acceptanceRequested = true
+            report("Waiting for the encrypted video connection…")
+            return
+        }
         do {
             try state.accept(incoming.0, now: now)
             self.incoming = nil
+            acceptanceRequested = false
             let epoch = incoming.0.epoch
             let proxy = SeamlessWindowProxy(descriptor: incoming.1, sourceName: name(incoming.0.source))
             proxy.onInput = { [weak self] event in
@@ -164,13 +170,12 @@ public final class SeamlessWindowService {
             presentedFrameCount = 0
             send(.accept(incoming.0))
             report("Showing \(incoming.1.application) from \(name(incoming.0.source))")
-            _ = configuration
         } catch { returnHome() }
     }
 
     public func returnHome() {
         if let lease = state.lease { send(.release(lease.epoch)) }
-        state.release(); incoming = nil; descriptor = nil; offerSent = false; visible = true
+        state.release(); incoming = nil; descriptor = nil; offerSent = false; visible = true; acceptanceRequested = false
         input?.releaseAll(); input = nil
         if let localMonitor { NSEvent.removeMonitor(localMonitor) }; localMonitor = nil
         proxy?.close(); proxy = nil
@@ -228,6 +233,7 @@ public final class SeamlessWindowService {
                     guard self.video == nil else { connection.close(); return }; self.video = connection
                 }
                 self.offerIfReady()
+                if self.acceptanceRequested { self.accept() }
             }
             connection.onPacket = { [weak self] peer, data in self?.receive(peer: peer, lane: lane, data: data) }
             connection.onClosed = { [weak self, weak connection] in
@@ -295,6 +301,7 @@ public final class SeamlessWindowService {
             case let .visibility(epoch, visible):
                 guard state.authorizes(epoch: epoch, peer: peer, now: now) else { throw SeamlessWindowError.staleLease }
                 self.visible = visible; input?.releaseAll()
+                capture.setPaused(!visible)
                 if visible { capture.requestKeyframe() }
             case .resize, .offer: throw SeamlessWindowError.invalidMessage
             }

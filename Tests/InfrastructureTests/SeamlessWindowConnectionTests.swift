@@ -66,6 +66,7 @@ final class SeamlessWindowConnectionTests: XCTestCase {
         let proxy = SeamlessWindowProxy(descriptor: descriptor, sourceName: "Test Mac")
         defer { proxy.close() }
         XCTAssertTrue(try proxy.display(frame))
+        try await eventually { proxy.isRendering }
         var inputs: [SeamlessInput] = []
         proxy.onInput = { inputs.append($0) }
         let content = try XCTUnwrap(proxy.nativeWindow.contentView)
@@ -111,8 +112,9 @@ final class SeamlessWindowConnectionTests: XCTestCase {
         XCTAssertThrowsError(try service.start(workspace: workspace, local: local, key: Data()))
         try service.start(workspace: workspace, local: local, key: key)
         try await eventually { service.listeningPorts.count == 2 && !service.isPresenting }
-        let ready = expectation(description: "both client lanes ready")
-        ready.expectedFulfillmentCount = 2
+        let controlReady = expectation(description: "client control ready")
+        let videoReady = expectation(description: "client video ready")
+        let delayedVideo = unauthorizedInput
         var clients: [SeamlessWindowConnection] = []
         defer { clients.forEach { $0.close() } }
         var messages: [SeamlessWindowMessage] = []
@@ -120,11 +122,12 @@ final class SeamlessWindowConnectionTests: XCTestCase {
             let network = NWConnection(host: "127.0.0.1", port: service.listeningPorts[index], using: SeamlessWindowConnection.parameters())
             let client = try SeamlessWindowConnection(connection: network, lane: lane, workspace: workspaceID,
                 local: source, allowed: [local], expected: local, key: key)
-            client.onReady = { _ in ready.fulfill() }
+            client.onReady = { _ in (index == 0 ? controlReady : videoReady).fulfill() }
             client.onPacket = { _, data in if let message = try? SeamlessWindowCodec.decode(data) { messages.append(message) } }
-            clients.append(client); client.start()
+            clients.append(client)
+            if index == 0 || !delayedVideo { client.start() }
         }
-        let connected = await XCTWaiter.fulfillment(of: [ready], timeout: 5)
+        let connected = await XCTWaiter.fulfillment(of: delayedVideo ? [controlReady] : [controlReady, videoReady], timeout: 5)
         XCTAssertEqual(connected, .completed)
         let lease = WindowPresentationLease(windowID: RemoteWindowID(), source: source, destination: local)
         let descriptor = SeamlessWindowDescriptor(id: lease.windowID, title: "Fixture", application: "Fixture", width: 640, height: 480)
@@ -132,6 +135,12 @@ final class SeamlessWindowConnectionTests: XCTestCase {
         try await eventually { service.incoming != nil }
         XCTAssertEqual(service.incoming?.0, lease)
         service.accept()
+        if delayedVideo {
+            XCTAssertNotNil(service.incoming)
+            clients[1].start()
+            let videoConnected = await XCTWaiter.fulfillment(of: [videoReady], timeout: 5)
+            XCTAssertEqual(videoConnected, .completed)
+        }
         try await eventually { messages.contains(.accept(lease)) }
         XCTAssertNil(service.incoming)
         XCTAssertTrue(service.isPresenting)

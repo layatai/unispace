@@ -63,6 +63,7 @@ public final class SeamlessWindowCapture {
     }
 
     public func requestKeyframe() { output?.requestKeyframe() }
+    public func setPaused(_ paused: Bool) { output?.setPaused(paused) }
 
     public func stop() async {
         let old = stream
@@ -81,6 +82,7 @@ final class WindowH264Output: NSObject, SCStreamOutput, SCStreamDelegate, @unche
     private let lock = NSLock()
     private var forceKey = true
     private var stopped = false
+    private var paused = false
     private var session: VTCompressionSession?
     private var sequence: UInt64 = 0
     private let epoch: UUID
@@ -125,6 +127,9 @@ final class WindowH264Output: NSObject, SCStreamOutput, SCStreamDelegate, @unche
     }
 
     func requestKeyframe() { lock.lock(); forceKey = true; lock.unlock() }
+    func setPaused(_ paused: Bool) {
+        lock.lock(); self.paused = paused; forceKey = true; lock.unlock()
+    }
 
     func stop() {
         lock.lock(); stopped = true; lock.unlock()
@@ -154,7 +159,8 @@ final class WindowH264Output: NSObject, SCStreamOutput, SCStreamDelegate, @unche
         dispatchPrecondition(condition: .onQueue(queue))
         guard let session, gate.wait(timeout: .now()) == .success else { return }
         lock.lock()
-        let stop = stopped; let keyframe = forceKey; forceKey = false
+        let stop = stopped || paused; let keyframe = forceKey
+        if !stop { forceKey = false }
         lock.unlock()
         guard !stop else { gate.signal(); return }
         let properties = [kVTEncodeFrameOptionKey_ForceKeyFrame: keyframe] as CFDictionary
