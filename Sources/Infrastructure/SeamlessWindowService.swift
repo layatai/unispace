@@ -32,10 +32,17 @@ public final class SeamlessWindowService {
     private var lifecycleObservers: [(NotificationCenter, NSObjectProtocol)] = []
     private var generation = UUID()
     private var idleConnectionDeadline: TimeInterval = 0
+    private let controlPort: NWEndpoint.Port
+    private let videoPort: NWEndpoint.Port
+    private let enableBonjour: Bool
+    var listeningPorts: [NWEndpoint.Port] { listeners.compactMap(\.port) }
+    private(set) var presentedFrameCount: UInt64 = 0
     nonisolated static let serviceType = "_unispace-win._tcp"
     nonisolated static let videoType = "_unispace-vid._tcp"
 
-    public init() {}
+    public init(controlPort: NWEndpoint.Port = 61_343, videoPort: NWEndpoint.Port = 61_344, enableBonjour: Bool = true) {
+        self.controlPort = controlPort; self.videoPort = videoPort; self.enableBonjour = enableBonjour
+    }
 
     public func start(workspace: WorkspaceSnapshot, local: DeviceID, key: Data) throws {
         stop()
@@ -43,10 +50,10 @@ public final class SeamlessWindowService {
         configuration = (workspace, local, key)
         let generation = self.generation
         do {
-            for (lane, port, type) in [(SeamlessWindowConnection.Lane.control, UInt16(61_343), Self.serviceType),
-                                       (.video, UInt16(61_344), Self.videoType)] {
-                let listener = try NWListener(using: SeamlessWindowConnection.parameters(), on: NWEndpoint.Port(rawValue: port)!)
-                listener.service = NWListener.Service(name: local.description, type: type)
+            for (lane, port, type) in [(SeamlessWindowConnection.Lane.control, controlPort, Self.serviceType),
+                                       (.video, videoPort, Self.videoType)] {
+                let listener = try NWListener(using: SeamlessWindowConnection.parameters(), on: port)
+                if enableBonjour { listener.service = NWListener.Service(name: local.description, type: type) }
                 listener.newConnectionHandler = { [weak self] connection in
                     Task { @MainActor [weak self] in
                         guard let self, self.generation == generation else { connection.cancel(); return }
@@ -64,6 +71,7 @@ public final class SeamlessWindowService {
                 listener.start(queue: .global(qos: .userInitiated))
                 listeners.append(listener)
             }
+            if enableBonjour {
             let browser = NWBrowser(for: .bonjour(type: Self.serviceType, domain: nil), using: SeamlessWindowConnection.parameters())
             browser.browseResultsChangedHandler = { [weak self] results, _ in
                 Task { @MainActor [weak self] in
@@ -81,6 +89,7 @@ public final class SeamlessWindowService {
                 }
             }
             browser.start(queue: .global(qos: .userInitiated)); self.browser = browser
+            }
             let workspaceCenter = NSWorkspace.shared.notificationCenter
             for (center, notification) in [
                 (workspaceCenter, NSWorkspace.willSleepNotification),
@@ -152,6 +161,7 @@ public final class SeamlessWindowService {
             proxy.onVisibility = { [weak self] in self?.send(.visibility(epoch, $0)) }
             proxy.onKeyframeNeeded = { [weak self] in self?.send(.keyframe(epoch)) }
             self.proxy = proxy
+            presentedFrameCount = 0
             send(.accept(incoming.0))
             report("Showing \(incoming.1.application) from \(name(incoming.0.source))")
             _ = configuration
@@ -251,7 +261,7 @@ public final class SeamlessWindowService {
                 guard frame.epoch == lease.epoch else { throw SeamlessWindowError.staleLease }
                 do { try state.receive(frame) }
                 catch { send(.keyframe(lease.epoch)); return }
-                try proxy?.display(frame)
+                if try proxy?.display(frame) == true { presentedFrameCount &+= 1 }
                 return
             }
             let message = try SeamlessWindowCodec.decode(data)

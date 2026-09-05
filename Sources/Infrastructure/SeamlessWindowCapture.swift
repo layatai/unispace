@@ -75,7 +75,7 @@ public final class SeamlessWindowCapture {
 
 /// Capture and encoder state are serialized by queue; gate bounds the number of
 /// outstanding encode/presentation callbacks to one (including the main actor).
-private final class WindowH264Output: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sendable {
+final class WindowH264Output: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sendable {
     let queue = DispatchQueue(label: "com.layatai.unispace.window.encode", qos: .userInitiated)
     private let gate = DispatchSemaphore(value: 1)
     private let lock = NSLock()
@@ -146,15 +146,20 @@ private final class WindowH264Output: NSObject, SCStreamOutput, SCStreamDelegate
               let attachments = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: false) as? [[SCStreamFrameInfo: Any]],
               let status = attachments.first?[.status] as? Int,
               status == SCFrameStatus.complete.rawValue,
-              let image = CMSampleBufferGetImageBuffer(sampleBuffer), let session,
-              gate.wait(timeout: .now()) == .success else { return }
+              let image = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+        encode(image, at: CMSampleBufferGetPresentationTimeStamp(sampleBuffer))
+    }
+
+    func encode(_ image: CVPixelBuffer, at time: CMTime) {
+        dispatchPrecondition(condition: .onQueue(queue))
+        guard let session, gate.wait(timeout: .now()) == .success else { return }
         lock.lock()
         let stop = stopped; let keyframe = forceKey; forceKey = false
         lock.unlock()
         guard !stop else { gate.signal(); return }
         let properties = [kVTEncodeFrameOptionKey_ForceKeyFrame: keyframe] as CFDictionary
         let result = VTCompressionSessionEncodeFrame(session, imageBuffer: image,
-            presentationTimeStamp: CMSampleBufferGetPresentationTimeStamp(sampleBuffer), duration: .invalid,
+            presentationTimeStamp: time, duration: .invalid,
             frameProperties: properties, sourceFrameRefcon: nil, infoFlagsOut: nil)
         if result != noErr { requestKeyframe(); gate.signal() }
     }

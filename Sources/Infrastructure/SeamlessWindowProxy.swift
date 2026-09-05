@@ -15,6 +15,7 @@ public final class SeamlessWindowProxy: NSObject, NSWindowDelegate {
     private var format: CMVideoFormatDescription?
     private var parameters: [Data] = []
     private var needsKeyframe = true
+    var nativeWindow: NSWindow { window }
 
     public init(descriptor: SeamlessWindowDescriptor, sourceName: String) {
         let scale = min(1, 1_000 / Double(descriptor.width), 700 / Double(descriptor.height))
@@ -38,16 +39,16 @@ public final class SeamlessWindowProxy: NSObject, NSWindowDelegate {
 
     /// AVSampleBufferDisplayLayer owns hardware decoding. No unbounded array of
     /// frames is retained: after a decoder stall, wait for an IDR to recover.
-    public func display(_ frame: SeamlessVideoFrame) throws {
+    @discardableResult public func display(_ frame: SeamlessVideoFrame) throws -> Bool {
         try frame.validate()
-        guard !window.isMiniaturized else { return }
+        guard !window.isMiniaturized else { return false }
         if surface.video.status == .failed || !surface.video.isReadyForMoreMediaData {
             surface.video.flushAndRemoveImage(); needsKeyframe = true
             surface.inputEnabled = false; onInput?(SeamlessInput(kind: .releaseAll))
             onKeyframeNeeded?()
         }
         let changed = parameters != [frame.sps, frame.pps]
-        guard (!needsKeyframe && !changed) || frame.keyframe else { return }
+        guard (!needsKeyframe && !changed) || frame.keyframe else { return false }
         if changed {
             var next: CMFormatDescription?
             let status = frame.sps.withUnsafeBytes { sps in
@@ -99,6 +100,7 @@ public final class SeamlessWindowProxy: NSObject, NSWindowDelegate {
         surface.video.enqueue(sample)
         surface.inputEnabled = true
         needsKeyframe = false
+        return true
     }
 
     public func close() {

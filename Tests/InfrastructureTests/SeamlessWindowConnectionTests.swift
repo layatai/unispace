@@ -1,4 +1,7 @@
 import Foundation
+import AppKit
+import CoreVideo
+import CoreMedia
 import Network
 import XCTest
 import UniSpaceApplication
@@ -51,6 +54,142 @@ final class SeamlessWindowConnectionTests: XCTestCase {
         let result = await XCTWaiter.fulfillment(of: [closed], timeout: 5)
         XCTAssertEqual(result, .completed)
         XCTAssertNil(pair.server?.peer)
+    }
+
+    func testRealH264FrameRendersAndProxyMapsInput() async throws {
+        _ = NSApplication.shared
+        let epoch = UUID()
+        let frame = try await encodedFrame(epoch: epoch)
+        try frame.validate()
+        XCTAssertTrue(frame.keyframe)
+        let descriptor = SeamlessWindowDescriptor(id: RemoteWindowID(), title: "Codec fixture", application: "Fixture", width: 640, height: 480)
+        let proxy = SeamlessWindowProxy(descriptor: descriptor, sourceName: "Test Mac")
+        defer { proxy.close() }
+        XCTAssertTrue(try proxy.display(frame))
+        var inputs: [SeamlessInput] = []
+        proxy.onInput = { inputs.append($0) }
+        let content = try XCTUnwrap(proxy.nativeWindow.contentView)
+        let click = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseDown,
+            location: CGPoint(x: content.bounds.midX, y: content.bounds.midY), modifierFlags: [], timestamp: 1,
+            windowNumber: proxy.nativeWindow.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: 1))
+        content.mouseDown(with: click)
+        let down = try XCTUnwrap(inputs.last(where: { $0.kind == .leftDown }))
+        XCTAssertEqual(down.x, 0.5, accuracy: 0.01)
+        XCTAssertEqual(down.y, 0.5, accuracy: 0.01)
+        let key = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .command,
+            timestamp: 2, windowNumber: proxy.nativeWindow.windowNumber, context: nil,
+            characters: "a", charactersIgnoringModifiers: "a", isARepeat: false, keyCode: 0))
+        content.keyDown(with: key)
+        XCTAssertEqual(inputs.last?.kind, .keyDown)
+        XCTAssertEqual(inputs.last?.modifiers, UInt64(NSEvent.ModifierFlags.command.rawValue))
+        content.keyUp(with: key)
+        XCTAssertEqual(inputs.last?.kind, .keyUp)
+        proxy.windowDidResignKey(Notification(name: NSWindow.didResignKeyNotification))
+        XCTAssertEqual(inputs.last?.kind, .releaseAll)
+        let invalid = SeamlessVideoFrame(epoch: epoch, sequence: 1, width: 800, height: 480,
+            keyframe: frame.keyframe, sps: frame.sps, pps: frame.pps, bytes: frame.bytes)
+        XCTAssertThrowsError(try proxy.display(invalid))
+    }
+
+    func testReceiverAcceptsEncryptedOfferRendersMediaAndReturnsHomeOnDisconnect() async throws {
+        try await receiverSession(unauthorizedInput: false)
+    }
+
+    func testReceiverRejectsSourceAttemptToInjectInputIntoViewer() async throws {
+        try await receiverSession(unauthorizedInput: true)
+    }
+
+    private func receiverSession(unauthorizedInput: Bool) async throws {
+        _ = NSApplication.shared
+        let service = SeamlessWindowService(controlPort: .any, videoPort: .any, enableBonjour: false)
+        defer { service.stop() }
+        let local = DeviceID(), source = DeviceID(), workspaceID = WorkspaceID()
+        let key = Data(repeating: 3, count: 32)
+        let workspace = WorkspaceSnapshot(id: workspaceID, name: "Window fixture", localDeviceID: local,
+            devices: [DeviceDescriptor(id: local, name: "Receiver", platform: .macOS),
+                      DeviceDescriptor(id: source, name: "Source", platform: .macOS)])
+        XCTAssertThrowsError(try service.start(workspace: workspace, local: local, key: Data()))
+        try service.start(workspace: workspace, local: local, key: key)
+        try await eventually { service.listeningPorts.count == 2 && !service.isPresenting }
+        let ready = expectation(description: "both client lanes ready")
+        ready.expectedFulfillmentCount = 2
+        var clients: [SeamlessWindowConnection] = []
+        defer { clients.forEach { $0.close() } }
+        var messages: [SeamlessWindowMessage] = []
+        for (index, lane) in [SeamlessWindowConnection.Lane.control, .video].enumerated() {
+            let network = NWConnection(host: "127.0.0.1", port: service.listeningPorts[index], using: SeamlessWindowConnection.parameters())
+            let client = try SeamlessWindowConnection(connection: network, lane: lane, workspace: workspaceID,
+                local: source, allowed: [local], expected: local, key: key)
+            client.onReady = { _ in ready.fulfill() }
+            client.onPacket = { _, data in if let message = try? SeamlessWindowCodec.decode(data) { messages.append(message) } }
+            clients.append(client); client.start()
+        }
+        let connected = await XCTWaiter.fulfillment(of: [ready], timeout: 5)
+        XCTAssertEqual(connected, .completed)
+        let lease = WindowPresentationLease(windowID: RemoteWindowID(), source: source, destination: local)
+        let descriptor = SeamlessWindowDescriptor(id: lease.windowID, title: "Fixture", application: "Fixture", width: 640, height: 480)
+        XCTAssertTrue(clients[0].send(try SeamlessWindowCodec.encode(.offer(lease, descriptor))))
+        try await eventually { service.incoming != nil }
+        XCTAssertEqual(service.incoming?.0, lease)
+        service.accept()
+        try await eventually { messages.contains(.accept(lease)) }
+        XCTAssertNil(service.incoming)
+        XCTAssertTrue(service.isPresenting)
+        let frame = try await encodedFrame(epoch: lease.epoch)
+        XCTAssertTrue(clients[1].send(try SeamlessWindowCodec.encode(frame)))
+        try await eventually { service.presentedFrameCount == 1 }
+        // A replay requests an IDR; it cannot replace the displayed access unit.
+        try await eventually { !clients[1].isSending }
+        XCTAssertTrue(clients[1].send(try SeamlessWindowCodec.encode(frame)))
+        try await eventually { messages.contains(.keyframe(lease.epoch)) }
+        XCTAssertEqual(service.presentedFrameCount, 1)
+        if unauthorizedInput {
+            // The viewer is never an input-injection target for its source.
+            XCTAssertTrue(clients[0].send(try SeamlessWindowCodec.encode(.input(lease.epoch, SeamlessInput(kind: .keyDown)))))
+        } else { clients[1].close() }
+        try await eventually { !service.isPresenting }
+        XCTAssertTrue(service.status.contains(unauthorizedInput ? "stopped" : "Connection ended"))
+        service.returnHome(); service.stop()
+        XCTAssertTrue(service.listeningPorts.isEmpty)
+    }
+
+    private func encodedFrame(epoch: UUID) async throws -> SeamlessVideoFrame {
+        let encoded = expectation(description: "VideoToolbox emits H264")
+        var result: SeamlessVideoFrame?
+        let encoder = try WindowH264Output(epoch: epoch, width: 640, height: 480, onFrame: { frame in
+            result = frame; encoded.fulfill(); return true
+        }, onFailure: { XCTFail("Encoder failed") })
+        defer { encoder.stop() }
+        encoder.requestKeyframe()
+        encoder.queue.async {
+            var buffer: CVPixelBuffer?
+            let status = CVPixelBufferCreate(kCFAllocatorDefault, 640, 480, kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
+                [kCVPixelBufferIOSurfacePropertiesKey: [:]] as CFDictionary, &buffer)
+            guard status == kCVReturnSuccess, let buffer else { XCTFail("Pixel buffer allocation failed"); return }
+            CVPixelBufferLockBaseAddress(buffer, [])
+            for plane in 0..<CVPixelBufferGetPlaneCount(buffer) {
+                if let base = CVPixelBufferGetBaseAddressOfPlane(buffer, plane) {
+                    memset(base, plane == 0 ? 16 : 128,
+                        CVPixelBufferGetBytesPerRowOfPlane(buffer, plane) * CVPixelBufferGetHeightOfPlane(buffer, plane))
+                }
+            }
+            CVPixelBufferUnlockBaseAddress(buffer, [])
+            encoder.encode(buffer, at: CMTime(value: 1, timescale: 30))
+        }
+        let completed = await XCTWaiter.fulfillment(of: [encoded], timeout: 10)
+        XCTAssertEqual(completed, .completed)
+        return try XCTUnwrap(result)
+    }
+
+    private func eventually(_ predicate: @MainActor () -> Bool) async throws {
+        let deadline = ProcessInfo.processInfo.systemUptime + 5
+        while !predicate(), ProcessInfo.processInfo.systemUptime < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        guard predicate() else {
+            XCTFail("Timed out waiting for the window session")
+            throw SeamlessWindowError.unavailable
+        }
     }
 }
 
