@@ -1,6 +1,9 @@
 import AppKit
 import CoreMedia
-import ScreenCaptureKit
+// The macOS 14 SDK does not annotate SCShareableContent's immutable snapshot as
+// Sendable. Capture/catalog references are confined to MainActor; sample buffers
+// are handled only on the output's serial queue.
+@preconcurrency import ScreenCaptureKit
 import VideoToolbox
 import UniSpaceDomain
 

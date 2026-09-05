@@ -40,8 +40,10 @@ public final class SeamlessWindowProxy: NSObject, NSWindowDelegate {
     /// frames is retained: after a decoder stall, wait for an IDR to recover.
     public func display(_ frame: SeamlessVideoFrame) throws {
         try frame.validate()
+        guard !window.isMiniaturized else { return }
         if surface.video.status == .failed || !surface.video.isReadyForMoreMediaData {
             surface.video.flushAndRemoveImage(); needsKeyframe = true
+            surface.inputEnabled = false; onInput?(SeamlessInput(kind: .releaseAll))
             onKeyframeNeeded?()
         }
         let changed = parameters != [frame.sps, frame.pps]
@@ -68,6 +70,8 @@ public final class SeamlessWindowProxy: NSObject, NSWindowDelegate {
             surface.video.flushAndRemoveImage()
         }
         guard let format else { throw SeamlessWindowError.invalidMessage }
+        let dimensions = CMVideoFormatDescriptionGetDimensions(format)
+        guard dimensions.width == frame.width, dimensions.height == frame.height else { throw SeamlessWindowError.invalidMessage }
         var block: CMBlockBuffer?
         guard CMBlockBufferCreateWithMemoryBlock(allocator: kCFAllocatorDefault, memoryBlock: nil,
             blockLength: frame.bytes.count, blockAllocator: kCFAllocatorDefault, customBlockSource: nil,
@@ -79,7 +83,9 @@ public final class SeamlessWindowProxy: NSObject, NSWindowDelegate {
         guard copied == noErr else { throw SeamlessWindowError.unavailable }
         var sample: CMSampleBuffer?
         var size = frame.bytes.count
-        var timing = CMSampleTimingInfo(duration: .invalid, presentationTimeStamp: .zero, decodeTimeStamp: .invalid)
+        var timing = CMSampleTimingInfo(duration: .invalid,
+            presentationTimeStamp: CMTime(seconds: ProcessInfo.processInfo.systemUptime, preferredTimescale: 1_000_000),
+            decodeTimeStamp: .invalid)
         guard CMSampleBufferCreateReady(allocator: kCFAllocatorDefault, dataBuffer: block, formatDescription: format,
             sampleCount: 1, sampleTimingEntryCount: 1, sampleTimingArray: &timing,
             sampleSizeEntryCount: 1, sampleSizeArray: &size, sampleBufferOut: &sample) == noErr,
@@ -91,6 +97,7 @@ public final class SeamlessWindowProxy: NSObject, NSWindowDelegate {
         }
         surface.sourceSize = CGSize(width: frame.width, height: frame.height)
         surface.video.enqueue(sample)
+        surface.inputEnabled = true
         needsKeyframe = false
     }
 
@@ -111,6 +118,7 @@ public final class SeamlessWindowProxy: NSObject, NSWindowDelegate {
 private final class WindowVideoSurface: NSView {
     let video = AVSampleBufferDisplayLayer()
     var sourceSize = CGSize(width: 16, height: 16)
+    var inputEnabled = false
     var input: ((SeamlessInput) -> Void)?
     var emergencyStop: (() -> Void)?
     private var tracking: NSTrackingArea?
@@ -156,9 +164,11 @@ private final class WindowVideoSurface: NSView {
         keyDown(with: event); return true
     }
     private func keyboard(_ event: NSEvent, _ kind: SeamlessInput.Kind) {
+        guard inputEnabled else { return }
         input?(SeamlessInput(kind: kind, keyCode: event.keyCode, modifiers: UInt64(event.modifierFlags.rawValue) & 0x00ff0000))
     }
     private func pointer(_ event: NSEvent, _ kind: SeamlessInput.Kind) {
+        guard inputEnabled else { return }
         let scale = min(bounds.width / sourceSize.width, bounds.height / sourceSize.height)
         guard scale.isFinite, scale > 0 else { return }
         let rect = CGRect(x: (bounds.width - sourceSize.width * scale) / 2,
@@ -170,7 +180,7 @@ private final class WindowVideoSurface: NSView {
         input?(SeamlessInput(kind: kind, x: min(1, max(0, (point.x - rect.minX) / rect.width)),
             y: min(1, max(0, (point.y - rect.minY) / rect.height)),
             modifiers: UInt64(event.modifierFlags.rawValue) & 0x00ff0000,
-            deltaX: max(-4_096, min(4_096, Double(event.scrollingDeltaX))),
-            deltaY: max(-4_096, min(4_096, Double(event.scrollingDeltaY)))))
+            deltaX: kind == .scroll ? max(-4_096, min(4_096, Double(event.scrollingDeltaX))) : 0,
+            deltaY: kind == .scroll ? max(-4_096, min(4_096, Double(event.scrollingDeltaY))) : 0))
     }
 }

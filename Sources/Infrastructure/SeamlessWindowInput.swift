@@ -10,6 +10,7 @@ public final class SeamlessWindowInput {
     private let window: AXUIElement
     private let application: AXUIElement
     private let process: pid_t
+    private let approvedSize: CGSize
     private var keys = Set<CGKeyCode>()
     private var buttons = Set<UInt32>()
     private var lastPoint = CGPoint.zero
@@ -19,6 +20,7 @@ public final class SeamlessWindowInput {
             throw SeamlessWindowError.permissionDenied
         }
         process = owner.processID
+        approvedSize = captured.frame.size
         application = AXUIElementCreateApplication(process)
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(application, kAXWindowsAttribute as CFString, &value) == .success,
@@ -36,7 +38,9 @@ public final class SeamlessWindowInput {
 
     public var isAvailable: Bool {
         guard NSRunningApplication(processIdentifier: process)?.isTerminated == false,
-              Self.frame(window) != nil else { return false }
+              let rect = Self.frame(window),
+              abs(rect.width - approvedSize.width) < 3,
+              abs(rect.height - approvedSize.height) < 3 else { return false }
         var minimized: CFTypeRef?
         guard AXUIElementCopyAttributeValue(window, kAXMinimizedAttribute as CFString, &minimized) == .success else { return false }
         return minimized as? Bool != true
@@ -124,8 +128,8 @@ public final class SeamlessWindowInput {
               let position, let size, CFGetTypeID(position) == AXValueGetTypeID(),
               CFGetTypeID(size) == AXValueGetTypeID() else { return nil }
         var point = CGPoint.zero, dimensions = CGSize.zero
-        guard AXValueGetValue(unsafeBitCast(position, to: AXValue.self), .cgPoint, &point),
-              AXValueGetValue(unsafeBitCast(size, to: AXValue.self), .cgSize, &dimensions),
+        guard AXValueGetValue(unsafeDowncast(position, to: AXValue.self), .cgPoint, &point),
+              AXValueGetValue(unsafeDowncast(size, to: AXValue.self), .cgSize, &dimensions),
               dimensions.width > 0, dimensions.height > 0 else { return nil }
         return CGRect(origin: point, size: dimensions)
     }

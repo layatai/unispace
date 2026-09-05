@@ -31,6 +31,7 @@ public final class SeamlessWindowService {
     private var localMonitor: Any?
     private var sleepObserver: NSObjectProtocol?
     private var generation = UUID()
+    private var idleConnectionDeadline: TimeInterval = 0
     private static let serviceType = "_unispace-win._tcp"
     private static let videoType = "_unispace-vid._tcp"
 
@@ -192,6 +193,7 @@ public final class SeamlessWindowService {
 
     private func attach(_ network: NWConnection, lane: SeamlessWindowConnection.Lane, expected: DeviceID?) {
         guard let configuration, connections.count < 4 else { network.cancel(); return }
+        if connections.isEmpty { idleConnectionDeadline = now + SeamlessWindowLimits.leaseDuration }
         let id = UUID()
         do {
             let connection = try SeamlessWindowConnection(connection: network, lane: lane,
@@ -312,6 +314,7 @@ public final class SeamlessWindowService {
     }
 
     private func tick() {
+        if state.phase == .idle, !connections.isEmpty, now >= idleConnectionDeadline { returnHome(); return }
         if state.expire(now: now) { returnHome(); report("The window session expired and returned home."); return }
         if state.phase == .presenting, let lease = state.lease {
             if lease.source == configuration?.local && input?.isAvailable != true { returnHome(); return }

@@ -11,7 +11,7 @@ This branch implements a one-window Mac-to-Mac streaming preview. It is **not ye
 5. Accept the incoming window on the destination. Its contents appear in a native resizable window alongside local apps; no desktop is captured.
 6. Click inside the proxy before typing. Close it, use **Bring All Windows Home**, or press Control Option Command Escape to end sharing.
 
-The source app keeps running on its original Mac. Closing the proxy never closes the source application. The current preview also leaves the source window visible. Destination resizing scales the presentation; it does not resize the source application. Clipboard and file transfer continue through their existing features.
+The source app keeps running on its original Mac. Closing the proxy never closes the source application. The current preview also leaves the source window visible. Destination resizing scales the presentation; it does not resize the source application. Resizing the source ends the session so input cannot use stale geometry. Clipboard and file transfer continue through their existing features.
 
 ## Architecture and bounds
 
