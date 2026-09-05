@@ -96,15 +96,15 @@ struct SeamlessWindowView: View {
             Text("Seamless Windows").font(.title)
             Text("Show an application window from another Mac alongside your local apps. The application keeps running on its source Mac.")
                 .foregroundStyle(.secondary)
-            Toggle("Enable window sharing for this session", isOn: Binding(get: { model.enabled }, set: model.setEnabled))
+            Toggle("Enable window sharing for this session", isOn: Binding(get: { model.enabled }, set: { model.setEnabled($0) }))
             Text(model.status).accessibilityIdentifier("seamless.status")
             if let title = model.incomingTitle {
                 GroupBox("Incoming window") {
                     VStack(alignment: .leading) {
                         Text(title)
                         HStack {
-                            Button("Accept Window", action: model.accept)
-                            Button("Decline", action: model.returnHome)
+                            Button("Accept Window") { model.accept() }
+                            Button("Decline") { model.returnHome() }
                         }
                     }.frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -126,9 +126,9 @@ struct SeamlessWindowView: View {
                 }
             }.frame(minHeight: 180)
             HStack {
-                Button("Move Window to Mac", action: model.moveWindow)
+                Button("Move Window to Mac") { model.moveWindow() }
                     .disabled(!model.enabled || model.busy || model.selectedWindow == nil || model.selectedPeer == nil)
-                Button("Bring All Windows Home", action: model.returnHome).disabled(!model.busy)
+                Button("Bring All Windows Home") { model.returnHome() }.disabled(!model.busy)
             }
             Text("Preview: one Mac-to-Mac window at a time. Keep its source window visible. Closing the remote window ends sharing. Control Option Command Escape returns it home.")
                 .font(.caption).foregroundStyle(.secondary)
