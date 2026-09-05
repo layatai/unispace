@@ -18,11 +18,18 @@ public final class SeamlessWindowProxy: NSObject, NSWindowDelegate {
     var nativeWindow: NSWindow { window }
     var isRendering: Bool { surface.video.status == .rendering }
 
-    public init(descriptor: SeamlessWindowDescriptor, sourceName: String) {
+    public convenience init(descriptor: SeamlessWindowDescriptor, sourceName: String) {
         let scale = min(1, 1_000 / Double(descriptor.width), 700 / Double(descriptor.height))
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: Double(descriptor.width) * scale,
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: Double(descriptor.width) * scale,
             height: Double(descriptor.height) * scale), styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered, defer: false)
+        self.init(descriptor: descriptor, sourceName: sourceName, window: window)
+    }
+
+    /// Accepts a native host window so foreground routing can be verified
+    /// independently of the process activation policy of an XCTest runner.
+    init(descriptor: SeamlessWindowDescriptor, sourceName: String, window: NSWindow) {
+        self.window = window
         super.init()
         window.title = "\(descriptor.title) — \(sourceName)"
         window.isReleasedWhenClosed = false
