@@ -7,6 +7,7 @@ struct UniSpaceApp: App {
     @StateObject private var model = AppModel()
     @StateObject private var transferModel = FileTransferViewModel()
     @StateObject private var clipboardModel = ClipboardViewModel()
+    @StateObject private var seamlessModel = SeamlessWindowViewModel()
     @State private var selection: WorkspaceView.Destination = .general
     @Environment(\.openWindow) private var openWindow
 
@@ -24,6 +25,10 @@ struct UniSpaceApp: App {
                     model.refreshPermissions()
                     transferModel.bind(to: model)
                     clipboardModel.bind(to: model)
+                    seamlessModel.bind(to: model)
+                }
+                .onChange(of: seamlessModel.incomingTitle) { _, title in
+                    if title != nil { openWindow(id: "seamless") }
                 }
                 .onDisappear { DockIconVisibility.hideWhenNoVisibleWindows() }
         }
@@ -34,10 +39,13 @@ struct UniSpaceApp: App {
             CommandGroup(after: .appInfo) {
                 Button("Make This Mac Controller") { model.makeThisMacController() }
                     .disabled(model.workspace == nil || model.isLocalController)
-                Button("Stop Remote Control") { model.stopControlling() }
+                Button("Stop Remote Control") { model.stopControlling(); seamlessModel.returnHome() }
                     .keyboardShortcut(.escape, modifiers: [.control, .option, .command])
                     .disabled(model.workspace == nil)
                 Divider()
+                Button("Show Seamless Windows") { openWindow(id: "seamless") }
+                Button("Bring All Windows Home") { seamlessModel.returnHome() }
+                    .disabled(!seamlessModel.busy)
                 Button("Show Continuity") { openContinuity() }
                     .keyboardShortcut("k", modifiers: [.command, .shift])
                     .disabled(model.workspace == nil)
@@ -45,6 +53,11 @@ struct UniSpaceApp: App {
                     .keyboardShortcut("t", modifiers: [.command, .shift])
                     .disabled(model.workspace == nil)
             }
+        }
+
+        Window("Seamless Windows", id: "seamless") {
+            SeamlessWindowView(model: seamlessModel)
+                .onAppear { seamlessModel.bind(to: model) }
         }
 
         MenuBarExtra {
@@ -56,6 +69,9 @@ struct UniSpaceApp: App {
 
     @ViewBuilder
     private var menuContent: some View {
+        Button("Seamless Windows…") { openWindow(id: "seamless") }
+        Button("Bring All Windows Home") { seamlessModel.returnHome() }
+            .disabled(!seamlessModel.busy)
         Text(model.workspace?.name ?? "UniSpace")
         Text(model.statusMessage)
 

@@ -33,6 +33,8 @@ UniSpace is a native macOS Dock and menu-bar controller for sharing one Mac's ke
 
 ## Built for a shared desk
 
+An experimental [macOS seamless-window preview](Docs/SeamlessWindowImplementation.md) is available from **Seamless Windows…**. It streams one selected window into a native window on a paired Mac. Source hiding, edge dragging, Windows support, and live-device acceptance remain unfinished; this is not yet a complete Coherence/Unity-style mode.
+
 - **Natural handoff:** move through a configured display edge to control another device, then cross back to return.
 - **Finder and File Explorer continuity:** copy regular files on one trusted device and paste them on another after encrypted streaming and SHA-256 verification.
 - **LAN or Tailscale:** discover nearby devices with Bonjour or connect directly with a MagicDNS name or Tailscale IP.
