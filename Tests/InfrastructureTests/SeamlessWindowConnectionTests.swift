@@ -85,11 +85,69 @@ final class SeamlessWindowConnectionTests: XCTestCase {
         XCTAssertEqual(inputs.last?.modifiers, UInt64(NSEvent.ModifierFlags.command.rawValue))
         content.keyUp(with: key)
         XCTAssertEqual(inputs.last?.kind, .keyUp)
+        XCTAssertTrue(content.performKeyEquivalent(with: key))
+        let flags = try XCTUnwrap(NSEvent.keyEvent(with: .flagsChanged, location: .zero, modifierFlags: .shift,
+            timestamp: 3, windowNumber: proxy.nativeWindow.windowNumber, context: nil,
+            characters: "", charactersIgnoringModifiers: "", isARepeat: false, keyCode: 56))
+        content.flagsChanged(with: flags)
+        XCTAssertEqual(inputs.last?.kind, .flagsChanged)
+        XCTAssertEqual(inputs.last?.modifiers, UInt64(NSEvent.ModifierFlags.shift.rawValue))
+        // Resizing the proxy changes letterboxing, never the source coordinates.
+        proxy.nativeWindow.setContentSize(NSSize(width: 1_280, height: 480))
+        for (type, expected) in [(NSEvent.EventType.mouseMoved, SeamlessInput.Kind.move),
+            (.leftMouseUp, .leftUp), (.rightMouseDown, .rightDown), (.rightMouseUp, .rightUp),
+            (.leftMouseDragged, .leftDrag), (.rightMouseDragged, .rightDrag)] {
+            let event = try XCTUnwrap(NSEvent.mouseEvent(with: type, location: CGPoint(x: 640, y: 240),
+                modifierFlags: [], timestamp: 4, windowNumber: proxy.nativeWindow.windowNumber,
+                context: nil, eventNumber: 2, clickCount: 1, pressure: 0))
+            switch type {
+            case .mouseMoved: content.mouseMoved(with: event)
+            case .leftMouseUp: content.mouseUp(with: event)
+            case .rightMouseDown: content.rightMouseDown(with: event)
+            case .rightMouseUp: content.rightMouseUp(with: event)
+            case .leftMouseDragged: content.mouseDragged(with: event)
+            default: content.rightMouseDragged(with: event)
+            }
+            XCTAssertEqual(inputs.last?.kind, expected)
+            XCTAssertEqual(try XCTUnwrap(inputs.last?.x), 0.5, accuracy: 0.01)
+        }
+        let outside = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseDown, location: CGPoint(x: 10, y: 240),
+            modifierFlags: [], timestamp: 5, windowNumber: proxy.nativeWindow.windowNumber,
+            context: nil, eventNumber: 3, clickCount: 1, pressure: 1))
+        let beforeOutside = inputs.count
+        content.mouseDown(with: outside)
+        XCTAssertEqual(inputs.count, beforeOutside, "Letterbox clicks must not reach the source")
+        content.mouseUp(with: outside)
+        XCTAssertEqual(inputs.last?.kind, .leftUp, "Release must work outside the image")
+        XCTAssertEqual(inputs.last?.x, 0)
         proxy.windowDidResignKey(Notification(name: NSWindow.didResignKeyNotification))
         XCTAssertEqual(inputs.last?.kind, .releaseAll)
         let invalid = SeamlessVideoFrame(epoch: epoch, sequence: 1, width: 800, height: 480,
             keyframe: frame.keyframe, sps: frame.sps, pps: frame.pps, bytes: frame.bytes)
         XCTAssertThrowsError(try proxy.display(invalid))
+        var returnedHome = false
+        proxy.onClose = { returnedHome = true }
+        let emergency = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero,
+            modifierFlags: [.control, .option, .command], timestamp: 6,
+            windowNumber: proxy.nativeWindow.windowNumber, context: nil,
+            characters: "", charactersIgnoringModifiers: "", isARepeat: false, keyCode: 53))
+        content.keyDown(with: emergency)
+        XCTAssertTrue(returnedHome)
+    }
+
+    func testBonjourServiceCanStartAndStopWithoutCapturingAWindow() async throws {
+        let service = SeamlessWindowService(controlPort: .any, videoPort: .any)
+        defer { service.stop() }
+        let local = DeviceID()
+        let workspace = WorkspaceSnapshot(id: WorkspaceID(), name: "Discovery fixture", localDeviceID: local,
+            devices: [DeviceDescriptor(id: local, name: "Fixture", platform: .macOS)])
+        try service.start(workspace: workspace, local: local, key: Data(repeating: 4, count: 32))
+        try await eventually { service.listeningPorts.count == 2 && !service.isPresenting }
+        XCTAssertNil(service.incoming)
+        service.stop()
+        try await eventually { !service.isPresenting }
+        XCTAssertTrue(service.listeningPorts.isEmpty)
+        XCTAssertEqual(service.status, "Window sharing is off")
     }
 
     func testReceiverAcceptsEncryptedOfferRendersMediaAndReturnsHomeOnDisconnect() async throws {
