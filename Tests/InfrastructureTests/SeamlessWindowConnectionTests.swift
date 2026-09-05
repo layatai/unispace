@@ -287,7 +287,7 @@ final class SeamlessWindowConnectionTests: XCTestCase {
         let receiver = try WindowReceiverFixture()
         receiver.start()
         defer { receiver.stop() }
-        try await eventually { receiver.listeners.allSatisfy { $0.port != nil } }
+        try await eventually { receiver.listeners.allSatisfy { ($0.port?.rawValue ?? 0) != 0 } }
         let capture = WindowCaptureFixture()
         let service = SeamlessWindowService(controlPort: .any, videoPort: .any, enableBonjour: false,
             directControlPort: try XCTUnwrap(receiver.listeners[0].port),
@@ -333,13 +333,13 @@ final class SeamlessWindowConnectionTests: XCTestCase {
         XCTAssertFalse(service.isPresenting, "An old capture callback cannot revive its lease")
     }
 
-    private func eventually(_ predicate: @MainActor () -> Bool) async throws {
+    private func eventually(file: StaticString = #filePath, line: UInt = #line, _ predicate: @MainActor () -> Bool) async throws {
         let deadline = ProcessInfo.processInfo.systemUptime + 5
         while !predicate(), ProcessInfo.processInfo.systemUptime < deadline {
             try await Task.sleep(for: .milliseconds(10))
         }
         guard predicate() else {
-            XCTFail("Timed out waiting for the window session")
+            XCTFail("Timed out waiting for the window session", file: file, line: line)
             throw SeamlessWindowError.unavailable
         }
     }

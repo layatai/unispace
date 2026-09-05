@@ -39,7 +39,7 @@ public final class SeamlessWindowService {
     private let directControlPort: NWEndpoint.Port
     private let directVideoPort: NWEndpoint.Port
     private let enableBonjour: Bool
-    var listeningPorts: [NWEndpoint.Port] { listeners.compactMap(\.port) }
+    var listeningPorts: [NWEndpoint.Port] { listeners.compactMap(\.port).filter { $0.rawValue != 0 } }
     private(set) var presentedFrameCount: UInt64 = 0
     nonisolated static let serviceType = "_unispace-win._tcp"
     nonisolated static let videoType = "_unispace-vid._tcp"
