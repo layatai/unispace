@@ -27,6 +27,7 @@ public final class SeamlessWindowService {
     private var offerSent = false
     private var acceptanceRequested = false
     private var visible = true
+    private var sourceReady = false
     private var timer: Task<Void, Never>?
     private var captureTask: Task<Void, Never>?
     private var localMonitor: Any?
@@ -180,7 +181,7 @@ public final class SeamlessWindowService {
 
     public func returnHome() {
         if let lease = state.lease { send(.release(lease.epoch)) }
-        state.release(); incoming = nil; descriptor = nil; offerSent = false; visible = true; acceptanceRequested = false
+        state.release(); incoming = nil; descriptor = nil; offerSent = false; visible = true; acceptanceRequested = false; sourceReady = false
         input?.releaseAll(); input = nil
         if let localMonitor { NSEvent.removeMonitor(localMonitor) }; localMonitor = nil
         proxy?.close(); proxy = nil
@@ -298,7 +299,7 @@ public final class SeamlessWindowService {
                 guard epoch == lease.epoch else { throw SeamlessWindowError.staleLease }
                 returnHome()
             case let .input(epoch, event):
-                guard state.authorizes(epoch: epoch, peer: peer, now: now) else { throw SeamlessWindowError.staleLease }
+                guard sourceReady, state.authorizes(epoch: epoch, peer: peer, now: now) else { throw SeamlessWindowError.staleLease }
                 try input?.send(event)
             case let .keyframe(epoch):
                 guard state.authorizes(epoch: epoch, peer: peer, now: now) else { throw SeamlessWindowError.staleLease }
@@ -321,7 +322,9 @@ public final class SeamlessWindowService {
                 try await self.capture.start(id: lease.windowID, epoch: lease.epoch, onFrame: { [weak self] frame in
                     guard let self, self.state.lease?.epoch == lease.epoch, self.visible,
                           let data = try? SeamlessWindowCodec.encode(frame) else { return false }
-                    return self.video?.send(data) ?? false
+                    let sent = self.video?.send(data) ?? false
+                    if sent { self.sourceReady = true }
+                    return sent
                 }, onFailure: { [weak self] in
                     guard self?.state.lease?.epoch == lease.epoch else { return }
                     self?.returnHome()
