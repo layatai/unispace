@@ -141,6 +141,23 @@ final class SeamlessWindowConnectionTests: XCTestCase {
             characters: "", charactersIgnoringModifiers: "", isARepeat: false, keyCode: 53))
         content.keyDown(with: emergency)
         XCTAssertTrue(returnedHome)
+        var visibility: [Bool] = []
+        var requestedKeyframes = 0
+        proxy.onVisibility = { visibility.append($0) }
+        proxy.onKeyframeNeeded = { requestedKeyframes += 1 }
+        host.minimized = true
+        proxy.windowDidMiniaturize(Notification(name: NSWindow.didMiniaturizeNotification))
+        XCTAssertEqual(inputs.last?.kind, .releaseAll)
+        XCTAssertEqual(visibility.last, false)
+        XCTAssertFalse(try proxy.display(frame))
+        host.minimized = false
+        proxy.windowDidDeminiaturize(Notification(name: NSWindow.didDeminiaturizeNotification))
+        XCTAssertEqual(visibility.last, true)
+        XCTAssertEqual(requestedKeyframes, 1)
+        XCTAssertTrue(try proxy.display(frame))
+        returnedHome = false
+        proxy.windowWillClose(Notification(name: NSWindow.willCloseNotification))
+        XCTAssertTrue(returnedHome)
     }
 
     func testBonjourServiceCanStartAndStopWithoutCapturingAWindow() async throws {
@@ -218,6 +235,10 @@ final class SeamlessWindowConnectionTests: XCTestCase {
         XCTAssertTrue(clients[1].send(try SeamlessWindowCodec.encode(frame)))
         try await eventually { messages.contains(.keyframe(lease.epoch)) }
         XCTAssertEqual(service.presentedFrameCount, 1)
+        // The real timer must renew the accepted session through its control
+        // connection while video remains idle.
+        try await eventually { messages.contains(.heartbeat(lease.epoch)) }
+        XCTAssertTrue(clients[0].send(try SeamlessWindowCodec.encode(.heartbeat(lease.epoch))))
         if unauthorizedInput {
             // The viewer is never an input-injection target for its source.
             XCTAssertTrue(clients[0].send(try SeamlessWindowCodec.encode(.input(lease.epoch, SeamlessInput(kind: .keyDown)))))
@@ -271,7 +292,9 @@ final class SeamlessWindowConnectionTests: XCTestCase {
 @MainActor
 private final class ForegroundWindowFixture: NSWindow {
     var foreground = false
+    var minimized = false
     override var isKeyWindow: Bool { foreground }
+    override var isMiniaturized: Bool { minimized }
 }
 
 @MainActor
