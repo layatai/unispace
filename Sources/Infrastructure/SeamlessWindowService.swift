@@ -121,7 +121,7 @@ public final class SeamlessWindowService {
         self.input = input; self.descriptor = descriptor; offerSent = false
         do {
             let endpoint = try endpoint(for: peer, video: false)
-            let videoEndpoint = try endpoint(for: peer, video: true)
+            let videoEndpoint = try self.endpoint(for: peer, video: true)
             attach(NWConnection(to: endpoint, using: SeamlessWindowConnection.parameters()), lane: .control, expected: peer)
             attach(NWConnection(to: videoEndpoint, using: SeamlessWindowConnection.parameters()), lane: .video, expected: peer)
             report("Connecting to \(name(peer))…")

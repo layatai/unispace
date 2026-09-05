@@ -28,6 +28,7 @@ jobs:
           xcodebuild test -project UniSpace.xcodeproj -scheme UniSpace \
             -destination 'platform=macOS,arch=arm64' CODE_SIGNING_ALLOWED=NO \
             -only-testing:UniSpaceApplicationTests/SeamlessWindowTests \
+            -only-testing:UniSpaceInfrastructureTests/SeamlessWindowConnectionTests \
             -resultBundlePath .build/test-results/SeamlessWindow.xcresult \
             2>&1 | tee .build/test-results/seamless.log
       - name: Universal release build
