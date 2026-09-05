@@ -1,6 +1,25 @@
 import Foundation
 import UniSpaceDomain
 
+@MainActor
+public protocol SeamlessInputTarget: AnyObject {
+    var isAvailable: Bool { get }
+    func send(_ input: SeamlessInput) throws
+    func releaseAll()
+}
+
+@MainActor
+public protocol SeamlessCaptureSource: AnyObject {
+    func catalog() async throws -> [SeamlessWindowDescriptor]
+    func inputTarget(for id: RemoteWindowID) throws -> any SeamlessInputTarget
+    func start(id: RemoteWindowID, epoch: UUID,
+               onFrame: @escaping @MainActor @Sendable (SeamlessVideoFrame) -> Bool,
+               onFailure: @escaping @MainActor @Sendable () -> Void) async throws
+    func requestKeyframe()
+    func setPaused(_ paused: Bool)
+    func stop() async
+}
+
 /// Source-authoritative, one-window lease. Uses monotonic local time; peer wall
 /// clocks and peer-supplied expiry values never affect ownership.
 public struct WindowPresentationState: Sendable {

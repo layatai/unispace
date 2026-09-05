@@ -283,6 +283,56 @@ final class SeamlessWindowConnectionTests: XCTestCase {
         return try XCTUnwrap(result)
     }
 
+    func testSourceRoutesOnlyItsLeaseInputAndReleasesOnWindowLoss() async throws {
+        let receiver = try WindowReceiverFixture()
+        receiver.start()
+        defer { receiver.stop() }
+        try await eventually { receiver.listeners.allSatisfy { $0.port != nil } }
+        let capture = WindowCaptureFixture()
+        let service = SeamlessWindowService(controlPort: .any, videoPort: .any, enableBonjour: false,
+            directControlPort: try XCTUnwrap(receiver.listeners[0].port),
+            directVideoPort: try XCTUnwrap(receiver.listeners[1].port), capture: capture)
+        defer { service.stop() }
+        let source = DeviceDescriptor(id: receiver.sourceID, name: "Source", platform: .macOS)
+        let destination = DeviceDescriptor(id: receiver.destinationID, name: "Viewer",
+            peerAddresses: [try PeerAddress("127.0.0.1")], platform: .macOS)
+        let workspace = WorkspaceSnapshot(id: receiver.workspaceID, name: "Source fixture", localDeviceID: source.id,
+            devices: [source, destination])
+        try service.start(workspace: workspace, local: source.id, key: receiver.key)
+        try await eventually { !service.isPresenting }
+        let catalog = try await service.catalog()
+        XCTAssertEqual(catalog, [capture.descriptor])
+        try service.present(capture.descriptor, on: destination.id)
+        try await eventually { capture.frameSink != nil && service.status.hasPrefix("Sharing") }
+        let lease = try XCTUnwrap(receiver.lease)
+        let frame = try await encodedFrame(epoch: lease.epoch)
+        XCTAssertTrue(capture.frameSink?(frame) == true)
+        try await eventually { receiver.frames.count == 1 }
+        XCTAssertEqual(receiver.frames[0], frame)
+        let click = SeamlessInput(kind: .leftDown, x: 0.25, y: 0.75)
+        try receiver.send(.input(lease.epoch, click))
+        try await eventually { capture.target.events.contains(click) }
+        let initialReleases = capture.target.releases
+        try receiver.send(.visibility(lease.epoch, false))
+        try await eventually { capture.paused }
+        XCTAssertGreaterThan(capture.target.releases, initialReleases)
+        XCTAssertFalse(capture.frameSink?(frame) == true, "A minimized viewer must not receive video")
+        try receiver.send(.visibility(lease.epoch, true))
+        try await eventually { !capture.paused && capture.keyframes > 0 }
+        let keyframes = capture.keyframes
+        try receiver.send(.keyframe(lease.epoch))
+        try await eventually { capture.keyframes > keyframes }
+        // The source watchdog must restore control when the selected window is
+        // gone, regardless of a still-healthy media connection.
+        let stopped = capture.stops
+        capture.target.isAvailable = false
+        try await eventually { !service.isPresenting && capture.stops > stopped }
+        XCTAssertGreaterThan(capture.target.releases, initialReleases)
+        let oldFailure = capture.failureSink
+        oldFailure?()
+        XCTAssertFalse(service.isPresenting, "An old capture callback cannot revive its lease")
+    }
+
     private func eventually(_ predicate: @MainActor () -> Bool) async throws {
         let deadline = ProcessInfo.processInfo.systemUptime + 5
         while !predicate(), ProcessInfo.processInfo.systemUptime < deadline {
@@ -301,6 +351,85 @@ private final class ForegroundWindowFixture: NSWindow {
     var minimized = false
     override var isKeyWindow: Bool { foreground }
     override var isMiniaturized: Bool { minimized }
+}
+
+@MainActor
+private final class WindowInputFixture: SeamlessInputTarget {
+    var isAvailable = true
+    var events: [SeamlessInput] = []
+    var releases = 0
+    func send(_ input: SeamlessInput) throws { try input.validate(); events.append(input) }
+    func releaseAll() { releases += 1 }
+}
+
+@MainActor
+private final class WindowCaptureFixture: SeamlessCaptureSource {
+    let descriptor = SeamlessWindowDescriptor(id: RemoteWindowID(), title: "Fixture", application: "Fixture", width: 640, height: 480)
+    let target = WindowInputFixture()
+    var frameSink: (@MainActor @Sendable (SeamlessVideoFrame) -> Bool)?
+    var failureSink: (@MainActor @Sendable () -> Void)?
+    var keyframes = 0
+    var paused = false
+    var stops = 0
+    func catalog() async throws -> [SeamlessWindowDescriptor] { [descriptor] }
+    func inputTarget(for id: RemoteWindowID) throws -> any SeamlessInputTarget {
+        guard id == descriptor.id else { throw SeamlessWindowError.unavailable }; return target
+    }
+    func start(id: RemoteWindowID, epoch: UUID,
+               onFrame: @escaping @MainActor @Sendable (SeamlessVideoFrame) -> Bool,
+               onFailure: @escaping @MainActor @Sendable () -> Void) async throws {
+        frameSink = onFrame; failureSink = onFailure
+    }
+    func requestKeyframe() { keyframes += 1 }
+    func setPaused(_ paused: Bool) { self.paused = paused }
+    func stop() async { stops += 1 }
+}
+
+@MainActor
+private final class WindowReceiverFixture {
+    let sourceID = DeviceID(), destinationID = DeviceID(), workspaceID = WorkspaceID()
+    let key = Data(repeating: 5, count: 32)
+    let listeners: [NWListener]
+    var connections: [SeamlessWindowConnection] = []
+    var control: SeamlessWindowConnection?
+    var lease: WindowPresentationLease?
+    var frames: [SeamlessVideoFrame] = []
+    init() throws {
+        listeners = try [NWListener(using: SeamlessWindowConnection.parameters(), on: .any),
+                         NWListener(using: SeamlessWindowConnection.parameters(), on: .any)]
+    }
+    func start() {
+        for (index, listener) in listeners.enumerated() {
+            listener.newConnectionHandler = { [weak self] network in
+                Task { @MainActor [weak self] in
+                    guard let self else { network.cancel(); return }
+                    do {
+                        let connection = try SeamlessWindowConnection(connection: network, lane: index == 0 ? .control : .video,
+                            workspace: self.workspaceID, local: self.destinationID, allowed: [self.sourceID],
+                            expected: self.sourceID, key: self.key)
+                        self.connections.append(connection)
+                        if index == 0 { self.control = connection }
+                        connection.onPacket = { [weak self, weak connection] _, data in
+                            guard let self else { return }
+                            do {
+                                if index == 1 { self.frames.append(try SeamlessWindowCodec.decodeFrame(data)); return }
+                                if case let .offer(lease, _) = try SeamlessWindowCodec.decode(data) {
+                                    self.lease = lease
+                                    connection?.send(try SeamlessWindowCodec.encode(.accept(lease)))
+                                }
+                            } catch { XCTFail("Receiver fixture rejected a valid packet: \(error)") }
+                        }
+                        connection.start()
+                    } catch { XCTFail("Receiver fixture connection failed: \(error)"); network.cancel() }
+                }
+            }
+            listener.start(queue: .global(qos: .userInitiated))
+        }
+    }
+    func send(_ message: SeamlessWindowMessage) throws {
+        XCTAssertTrue(control?.send(try SeamlessWindowCodec.encode(message)) == true)
+    }
+    func stop() { listeners.forEach { $0.cancel() }; connections.forEach { $0.close() } }
 }
 
 @MainActor

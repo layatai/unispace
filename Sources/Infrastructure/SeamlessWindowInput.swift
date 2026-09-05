@@ -3,11 +3,12 @@ import ApplicationServices
 import Carbon
 import ScreenCaptureKit
 import UniSpaceDomain
+import UniSpaceApplication
 
 /// Holds the exact, locally approved AX window. Never accepts a native handle
 /// from a peer and never falls back to injecting into the current frontmost app.
 @MainActor
-public final class SeamlessWindowInput {
+public final class SeamlessWindowInput: SeamlessInputTarget {
     private let window: AXUIElement
     private let application: AXUIElement
     private let process: pid_t

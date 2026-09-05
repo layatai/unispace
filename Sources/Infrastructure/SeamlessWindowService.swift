@@ -12,9 +12,9 @@ public final class SeamlessWindowService {
     public private(set) var availablePeers = Set<DeviceID>()
     public var onChange: (() -> Void)?
     public var isPresenting: Bool { state.phase != .idle || captureTask != nil }
-    private let capture = SeamlessWindowCapture()
+    private let capture: any SeamlessCaptureSource
     private var state = WindowPresentationState()
-    private var input: SeamlessWindowInput?
+    private var input: (any SeamlessInputTarget)?
     private var proxy: SeamlessWindowProxy?
     private var configuration: (workspace: WorkspaceSnapshot, local: DeviceID, key: Data)?
     private var listeners: [NWListener] = []
@@ -35,14 +35,20 @@ public final class SeamlessWindowService {
     private var idleConnectionDeadline: TimeInterval = 0
     private let controlPort: NWEndpoint.Port
     private let videoPort: NWEndpoint.Port
+    private let directControlPort: NWEndpoint.Port
+    private let directVideoPort: NWEndpoint.Port
     private let enableBonjour: Bool
     var listeningPorts: [NWEndpoint.Port] { listeners.compactMap(\.port) }
     private(set) var presentedFrameCount: UInt64 = 0
     nonisolated static let serviceType = "_unispace-win._tcp"
     nonisolated static let videoType = "_unispace-vid._tcp"
 
-    public init(controlPort: NWEndpoint.Port = 61_343, videoPort: NWEndpoint.Port = 61_344, enableBonjour: Bool = true) {
+    public init(controlPort: NWEndpoint.Port = 61_343, videoPort: NWEndpoint.Port = 61_344, enableBonjour: Bool = true,
+                directControlPort: NWEndpoint.Port = 61_343, directVideoPort: NWEndpoint.Port = 61_344,
+                capture: (any SeamlessCaptureSource)? = nil) {
         self.controlPort = controlPort; self.videoPort = videoPort; self.enableBonjour = enableBonjour
+        self.directControlPort = directControlPort; self.directVideoPort = directVideoPort
+        self.capture = capture ?? SeamlessWindowCapture()
     }
 
     public func start(workspace: WorkspaceSnapshot, local: DeviceID, key: Data) throws {
@@ -131,9 +137,8 @@ public final class SeamlessWindowService {
     }
 
     public func present(_ descriptor: SeamlessWindowDescriptor, on peer: DeviceID) throws {
-        guard let configuration, allowed.contains(peer), !isPresenting,
-              let native = capture.windows[descriptor.id] else { throw SeamlessWindowError.unavailable }
-        let input = try SeamlessWindowInput(window: native)
+        guard let configuration, allowed.contains(peer), !isPresenting else { throw SeamlessWindowError.unavailable }
+        let input = try capture.inputTarget(for: descriptor.id)
         let lease = WindowPresentationLease(windowID: descriptor.id, source: configuration.local, destination: peer)
         try state.offer(lease, now: now)
         self.input = input; self.descriptor = descriptor; offerSent = false
@@ -210,7 +215,7 @@ public final class SeamlessWindowService {
         guard let host = configuration?.workspace.devices.first(where: { $0.id == peer })?.peerAddresses.first?.host else {
             throw SeamlessWindowError.unavailable
         }
-        return .hostPort(host: NWEndpoint.Host(host), port: NWEndpoint.Port(rawValue: video ? 61_344 : 61_343)!)
+        return .hostPort(host: NWEndpoint.Host(host), port: video ? directVideoPort : directControlPort)
     }
 
     private func attach(_ network: NWConnection, lane: SeamlessWindowConnection.Lane, expected: DeviceID?) {

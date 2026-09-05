@@ -6,14 +6,20 @@ import CoreMedia
 @preconcurrency import ScreenCaptureKit
 import VideoToolbox
 import UniSpaceDomain
+import UniSpaceApplication
 
 @MainActor
-public final class SeamlessWindowCapture {
+public final class SeamlessWindowCapture: SeamlessCaptureSource {
     public private(set) var windows: [RemoteWindowID: SCWindow] = [:]
     private var stream: SCStream?
     private var output: WindowH264Output?
 
     public init() {}
+
+    public func inputTarget(for id: RemoteWindowID) throws -> any SeamlessInputTarget {
+        guard let window = windows[id] else { throw SeamlessWindowError.unavailable }
+        return try SeamlessWindowInput(window: window)
+    }
 
     public func catalog() async throws -> [SeamlessWindowDescriptor] {
         let content = try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true)
