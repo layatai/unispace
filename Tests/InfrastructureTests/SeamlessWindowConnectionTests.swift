@@ -58,6 +58,9 @@ final class SeamlessWindowConnectionTests: XCTestCase {
 
     func testRealH264FrameRendersAndProxyMapsInput() async throws {
         _ = NSApplication.shared
+        let previousPolicy = NSApp.activationPolicy()
+        NSApp.setActivationPolicy(.regular)
+        defer { NSApp.setActivationPolicy(previousPolicy) }
         let epoch = UUID()
         let frame = try await encodedFrame(epoch: epoch)
         try frame.validate()
@@ -67,6 +70,9 @@ final class SeamlessWindowConnectionTests: XCTestCase {
         defer { proxy.close() }
         XCTAssertTrue(try proxy.display(frame))
         try await eventually { proxy.isRendering }
+        proxy.nativeWindow.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        try await eventually { proxy.nativeWindow.isKeyWindow }
         var inputs: [SeamlessInput] = []
         proxy.onInput = { inputs.append($0) }
         let content = try XCTUnwrap(proxy.nativeWindow.contentView)
