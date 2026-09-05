@@ -53,7 +53,9 @@ final class SeamlessWindowViewModel: ObservableObject {
         guard enabled, !loading, !busy else { return }
         loading = true
         defer { loading = false }
-        guard AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary) else {
+        // Use the documented option key's value; older SDKs import the C
+        // constant as shared mutable state under Swift 6 strict concurrency.
+        guard AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary) else {
             status = "Allow UniSpace in System Settings → Privacy & Security → Accessibility, then refresh."; return
         }
         do {

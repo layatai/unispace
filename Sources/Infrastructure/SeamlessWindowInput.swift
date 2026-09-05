@@ -1,5 +1,6 @@
 import AppKit
 import ApplicationServices
+import Carbon
 import ScreenCaptureKit
 import UniSpaceDomain
 
@@ -37,7 +38,8 @@ public final class SeamlessWindowInput {
     }
 
     public var isAvailable: Bool {
-        guard NSRunningApplication(processIdentifier: process)?.isTerminated == false,
+        guard !IsSecureEventInputEnabled(),
+              NSRunningApplication(processIdentifier: process)?.isTerminated == false,
               let rect = Self.frame(window),
               abs(rect.width - approvedSize.width) < 3,
               abs(rect.height - approvedSize.height) < 3 else { return false }

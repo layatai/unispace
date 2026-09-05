@@ -29,7 +29,7 @@ public final class SeamlessWindowService {
     private var timer: Task<Void, Never>?
     private var captureTask: Task<Void, Never>?
     private var localMonitor: Any?
-    private var sleepObserver: NSObjectProtocol?
+    private var lifecycleObservers: [(NotificationCenter, NSObjectProtocol)] = []
     private var generation = UUID()
     private var idleConnectionDeadline: TimeInterval = 0
     private static let serviceType = "_unispace-win._tcp"
@@ -81,10 +81,18 @@ public final class SeamlessWindowService {
                 }
             }
             browser.start(queue: .global(qos: .userInitiated)); self.browser = browser
-            sleepObserver = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.willSleepNotification,
-                object: nil, queue: .main) { [weak self] _ in
-                    Task { @MainActor [weak self] in self?.returnHome() }
+            let workspaceCenter = NSWorkspace.shared.notificationCenter
+            for (center, notification) in [
+                (workspaceCenter, NSWorkspace.willSleepNotification),
+                (workspaceCenter, NSWorkspace.screensDidSleepNotification),
+                (workspaceCenter, NSWorkspace.sessionDidResignActiveNotification),
+                (NotificationCenter.default, NSApplication.willTerminateNotification)
+            ] {
+                let observer = center.addObserver(forName: notification, object: nil, queue: .main) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.returnHome() }
                 }
+                lifecycleObservers.append((center, observer))
+            }
             timer = Task { [weak self] in
                 while !Task.isCancelled {
                     try? await Task.sleep(for: .seconds(2))
@@ -102,8 +110,7 @@ public final class SeamlessWindowService {
         timer?.cancel(); timer = nil
         browser?.cancel(); browser = nil
         listeners.forEach { $0.cancel() }; listeners.removeAll()
-        if let sleepObserver { NSWorkspace.shared.notificationCenter.removeObserver(sleepObserver) }
-        sleepObserver = nil
+        lifecycleObservers.forEach { $0.0.removeObserver($0.1) }; lifecycleObservers.removeAll()
         configuration = nil; endpoints.removeAll(); availablePeers.removeAll()
         report("Window sharing is off")
     }
