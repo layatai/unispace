@@ -230,6 +230,12 @@ final class SeamlessWindowConnectionTests: XCTestCase {
         let frame = try await encodedFrame(epoch: lease.epoch)
         XCTAssertTrue(clients[1].send(try SeamlessWindowCodec.encode(frame)))
         try await eventually { service.presentedFrameCount == 1 }
+        let competing = WindowPresentationLease(windowID: RemoteWindowID(), source: source, destination: local)
+        let competingDescriptor = SeamlessWindowDescriptor(id: competing.windowID, title: "Second window", application: "Fixture", width: 640, height: 480)
+        XCTAssertTrue(clients[0].send(try SeamlessWindowCodec.encode(.offer(competing, competingDescriptor))))
+        try await eventually { messages.contains(.reject(competing.epoch)) }
+        XCTAssertTrue(service.isPresenting, "A competing offer must not evict the accepted presentation")
+        XCTAssertNil(service.incoming)
         // A replay requests an IDR; it cannot replace the displayed access unit.
         try await eventually { !clients[1].isSending }
         XCTAssertTrue(clients[1].send(try SeamlessWindowCodec.encode(frame)))
