@@ -312,7 +312,9 @@ final class InfrastructureTests: XCTestCase {
                 QUICRealtimeTransport.serviceType,
                 NetworkFileTransferTransport.serviceType,
                 NetworkClipboardTransport.serviceType,
-                PairingNetworkService.serviceType
+                PairingNetworkService.serviceType,
+                SeamlessWindowService.serviceType,
+                SeamlessWindowService.videoType
             ]
         )
         XCTAssertFalse(try XCTUnwrap(plist["NSLocalNetworkUsageDescription"] as? String).isEmpty)

@@ -32,8 +32,8 @@ public final class SeamlessWindowService {
     private var lifecycleObservers: [(NotificationCenter, NSObjectProtocol)] = []
     private var generation = UUID()
     private var idleConnectionDeadline: TimeInterval = 0
-    private static let serviceType = "_unispace-win._tcp"
-    private static let videoType = "_unispace-vid._tcp"
+    nonisolated static let serviceType = "_unispace-win._tcp"
+    nonisolated static let videoType = "_unispace-vid._tcp"
 
     public init() {}
 
