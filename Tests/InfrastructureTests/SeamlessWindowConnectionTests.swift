@@ -10,6 +10,15 @@ import UniSpaceDomain
 
 @MainActor
 final class SeamlessWindowConnectionTests: XCTestCase {
+    func testSeamlessMouseEventsRouteThroughWindowServer() {
+        for type in [CGEventType.mouseMoved, .leftMouseDown, .leftMouseUp, .rightMouseDown,
+                     .rightMouseUp, .leftMouseDragged, .rightMouseDragged, .scrollWheel] {
+            XCTAssertTrue(SeamlessWindowInput.postsThroughWindowServer(type))
+        }
+        XCTAssertFalse(SeamlessWindowInput.postsThroughWindowServer(.keyDown))
+        XCTAssertFalse(SeamlessWindowInput.postsThroughWindowServer(.flagsChanged))
+    }
+
     func testEncryptedLoopbackDeliversControlAndEnforcesPayloadBound() async throws {
         let pair = try ConnectionPair()
         defer { pair.close() }

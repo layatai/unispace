@@ -91,6 +91,9 @@ public final class SeamlessWindowInput: SeamlessInputTarget {
             default: type = .mouseMoved; button = .left
             }
             event = CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: point, mouseButton: button)
+            if [.leftDown, .leftUp, .rightDown, .rightUp].contains(input.kind) {
+                event?.setIntegerValueField(.mouseEventClickState, value: 1)
+            }
         }
         event?.flags = CGEventFlags(rawValue: input.modifiers)
         post(event)
@@ -120,8 +123,23 @@ public final class SeamlessWindowInput: SeamlessInputTarget {
     }
 
     private func post(_ event: CGEvent?) {
-        event?.setIntegerValueField(.eventSourceUserData, value: uniSpaceSyntheticEventMarker)
-        event?.postToPid(process)
+        guard let event else { return }
+        event.setIntegerValueField(.eventSourceUserData, value: uniSpaceSyntheticEventMarker)
+        if Self.postsThroughWindowServer(event.type) {
+            event.post(tap: .cgSessionEventTap)
+        } else {
+            event.postToPid(process)
+        }
+    }
+
+    static func postsThroughWindowServer(_ type: CGEventType) -> Bool {
+        switch type {
+        case .mouseMoved, .leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp,
+             .leftMouseDragged, .rightMouseDragged, .scrollWheel:
+            true
+        default:
+            false
+        }
     }
 
     private static func frame(_ window: AXUIElement) -> CGRect? {
