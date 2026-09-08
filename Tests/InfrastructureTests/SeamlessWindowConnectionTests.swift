@@ -19,6 +19,14 @@ final class SeamlessWindowConnectionTests: XCTestCase {
         XCTAssertFalse(SeamlessWindowInput.postsThroughWindowServer(.flagsChanged))
     }
 
+    func testSeamlessInputMatchesTheStableNativeWindowIdentity() {
+        let frame = CGRect(x: 10, y: 20, width: 800, height: 600)
+        XCTAssertTrue(SeamlessWindowInput.matches(capturedID: 42, capturedFrame: frame,
+                                                  listedID: 42, listedFrame: frame))
+        XCTAssertFalse(SeamlessWindowInput.matches(capturedID: 42, capturedFrame: frame,
+                                                   listedID: 43, listedFrame: frame))
+    }
+
     func testEncryptedLoopbackDeliversControlAndEnforcesPayloadBound() async throws {
         let pair = try ConnectionPair()
         defer { pair.close() }

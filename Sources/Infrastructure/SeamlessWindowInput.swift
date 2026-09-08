@@ -5,66 +5,81 @@ import ScreenCaptureKit
 import UniSpaceDomain
 import UniSpaceApplication
 
-/// Holds the exact, locally approved AX window. Never accepts a native handle
+/// Holds the exact, locally approved window. Never accepts a native handle
 /// from a peer and never falls back to injecting into the current frontmost app.
+///
+/// Sandbox-safe: matches and tracks the window through CGWindowList and injects
+/// through PID-targeted CGEvents. AX IPC is unusable here — the sandbox denies
+/// mach-lookup com.apple.axserver (verified via sandboxd) — so this deliberately
+/// uses no AX API at all.
+/// ponytail: app-level (not window-level) focus gate; per-window focus needs AX.
 @MainActor
 public final class SeamlessWindowInput: SeamlessInputTarget {
-    private let window: AXUIElement
-    private let application: AXUIElement
     private let process: pid_t
-    private let approvedSize: CGSize
+    private let windowID: CGWindowID
+    private let approvedFrame: CGRect
     private var keys = Set<CGKeyCode>()
     private var buttons = Set<UInt32>()
     private var lastPoint = CGPoint.zero
 
     public init(window captured: SCWindow) throws {
-        guard AXIsProcessTrusted(), let owner = captured.owningApplication else {
+        guard let owner = captured.owningApplication else {
             throw SeamlessWindowError.permissionDenied
         }
-        process = owner.processID
-        approvedSize = captured.frame.size
-        application = AXUIElementCreateApplication(process)
-        var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(application, kAXWindowsAttribute as CFString, &value) == .success,
-              let windows = value as? [AXUIElement] else { throw SeamlessWindowError.unavailable }
-        let matches = windows.filter { item in
-            var title: CFTypeRef?
-            AXUIElementCopyAttributeValue(item, kAXTitleAttribute as CFString, &title)
-            guard (title as? String ?? "") == (captured.title ?? ""), let rect = Self.frame(item) else { return false }
-            return abs(rect.minX - captured.frame.minX) < 3 && abs(rect.minY - captured.frame.minY) < 3 &&
-                abs(rect.width - captured.frame.width) < 3 && abs(rect.height - captured.frame.height) < 3
+        guard let match = Self.onScreenWindows(ownerPID: owner.processID).first(where: {
+            Self.matches(capturedID: captured.windowID, capturedFrame: captured.frame,
+                         listedID: $0.id, listedFrame: $0.frame)
+        }) else {
+            throw SeamlessWindowError.unavailable
         }
-        guard matches.count == 1 else { throw SeamlessWindowError.unavailable }
-        window = matches[0]
+        process = owner.processID
+        windowID = match.id
+        approvedFrame = match.frame
     }
 
     public var isAvailable: Bool {
         guard !IsSecureEventInputEnabled(),
-              NSRunningApplication(processIdentifier: process)?.isTerminated == false,
-              let rect = Self.frame(window),
-              abs(rect.width - approvedSize.width) < 3,
-              abs(rect.height - approvedSize.height) < 3 else { return false }
-        var minimized: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(window, kAXMinimizedAttribute as CFString, &minimized) == .success else { return false }
-        return minimized as? Bool != true
+              NSRunningApplication(processIdentifier: process)?.isTerminated == false
+        else { return false }
+        // Minimized/closed windows leave the on-screen list; size drift ends input.
+        return Self.onScreenWindows(ownerPID: process).contains {
+            $0.id == windowID && $0.frame.sizeMatches(approvedFrame.size)
+        }
     }
 
     public func send(_ input: SeamlessInput) throws {
         try input.validate()
         if input.kind == .releaseAll { releaseAll(); return }
-        guard isAvailable, let rect = Self.frame(window) else { throw SeamlessWindowError.unavailable }
-        if input.kind == .leftDown || input.kind == .rightDown {
+        guard isAvailable,
+              let bounds = Self.onScreenWindows(ownerPID: process).first(where: {
+                  $0.id == windowID && $0.frame.sizeMatches(approvedFrame.size)
+              })?.frame
+        else { throw SeamlessWindowError.unavailable }
+        // Keyboard events go straight to the target process regardless of
+        // front/back state, but mouse events are still hit-tested against
+        // real screen position — a click posted before activation actually
+        // lands is swallowed by whatever's really on top. Only mouse-down
+        // needs this; drags/up within the same gesture follow once active.
+        if (input.kind == .leftDown || input.kind == .rightDown),
+           NSRunningApplication(processIdentifier: process)?.isActive != true {
             NSRunningApplication(processIdentifier: process)?.activate(options: [])
-            AXUIElementPerformAction(window, kAXRaiseAction as CFString)
-            AXUIElementSetAttributeValue(application, kAXFocusedWindowAttribute as CFString, window)
+            let deadline = Date().addingTimeInterval(0.15)
+            while NSRunningApplication(processIdentifier: process)?.isActive != true, Date() < deadline {
+                RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.01))
+            }
         }
-        // A menu/dialog or a local focus change must not redirect remote keys.
-        var focused: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(application, kAXFocusedWindowAttribute as CFString, &focused) == .success,
-              let focused, CFEqual(focused, window) else { releaseAll(); return }
-        let point = CGPoint(x: rect.minX + input.x * max(0, rect.width - 1),
-                            y: rect.minY + input.y * max(0, rect.height - 1))
+        // Both CG bounds and the normalized proxy picture use top-left origin.
+        let point = CGPoint(x: bounds.minX + input.x * max(0, bounds.width - 1),
+                            y: bounds.minY + input.y * max(0, bounds.height - 1))
         lastPoint = point
+        // postToPid carries the event's own location, but doesn't move the
+        // real cursor — some apps validate a click/drag against the actual
+        // hardware position instead of trusting the event, so it's silently
+        // dropped without this. The other remote-input path in this codebase
+        // (CGEventInputInjector) already does this for the same reason.
+        if input.kind != .keyDown, input.kind != .keyUp, input.kind != .flagsChanged {
+            CGWarpMouseCursorPosition(point)
+        }
         let event: CGEvent?
         switch input.kind {
         case .keyDown, .keyUp:
@@ -74,6 +89,9 @@ public final class SeamlessWindowInput: SeamlessInputTarget {
         case .flagsChanged:
             event = CGEvent(keyboardEventSource: nil, virtualKey: input.keyCode, keyDown: false)
             event?.type = .flagsChanged
+            event?.flags = CGEventFlags(rawValue: input.modifiers)
+            post(event)
+            return
         case .scroll:
             event = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2,
                             wheel1: Int32(input.deltaY), wheel2: Int32(input.deltaX), wheel3: 0)
@@ -96,17 +114,10 @@ public final class SeamlessWindowInput: SeamlessInputTarget {
             }
         }
         event?.flags = CGEventFlags(rawValue: input.modifiers)
-        post(event)
-    }
-
-    public func resize(width: Int, height: Int) throws {
-        try SeamlessWindowDescriptor.validateSize(width: width, height: height)
-        guard isAvailable else { throw SeamlessWindowError.unavailable }
-        var size = CGSize(width: width, height: height)
-        guard let value = AXValueCreate(.cgSize, &size),
-              AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, value) == .success else {
-            throw SeamlessWindowError.unavailable
+        if input.kind == .leftDown || input.kind == .rightDown {
+            DiagnosticLog().record("click posting event=\(event != nil) toPid=\(process)")
         }
+        post(event)
     }
 
     public func releaseAll() {
@@ -142,16 +153,51 @@ public final class SeamlessWindowInput: SeamlessInputTarget {
         }
     }
 
-    private static func frame(_ window: AXUIElement) -> CGRect? {
-        var position: CFTypeRef?, size: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(window, kAXPositionAttribute as CFString, &position) == .success,
-              AXUIElementCopyAttributeValue(window, kAXSizeAttribute as CFString, &size) == .success,
-              let position, let size, CFGetTypeID(position) == AXValueGetTypeID(),
-              CFGetTypeID(size) == AXValueGetTypeID() else { return nil }
-        var point = CGPoint.zero, dimensions = CGSize.zero
-        guard AXValueGetValue(unsafeDowncast(position, to: AXValue.self), .cgPoint, &point),
-              AXValueGetValue(unsafeDowncast(size, to: AXValue.self), .cgSize, &dimensions),
-              dimensions.width > 0, dimensions.height > 0 else { return nil }
-        return CGRect(origin: point, size: dimensions)
+    static func matches(capturedID: CGWindowID, capturedFrame: CGRect,
+                        listedID: CGWindowID, listedFrame: CGRect) -> Bool {
+        capturedID == listedID && listedFrame.matches(capturedFrame)
+    }
+
+    private struct ListedWindow {
+        let id: CGWindowID
+        let frame: CGRect
+    }
+
+    private static func onScreenWindows(ownerPID: pid_t) -> [ListedWindow] {
+        guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements],
+                                                    kCGNullWindowID) as? [[String: Any]]
+        else { return [] }
+        return list.compactMap { info in
+            guard (info[kCGWindowOwnerPID as String] as? Int32) == ownerPID,
+                  (info[kCGWindowLayer as String] as? Int) == 0,
+                  let id = info[kCGWindowNumber as String] as? CGWindowID,
+                  let bounds = info[kCGWindowBounds as String] as? [String: CGFloat],
+                  let x = bounds["X"], let y = bounds["Y"],
+                  let w = bounds["Width"], let h = bounds["Height"], w >= 16, h >= 16
+            else { return nil }
+            return ListedWindow(id: id, frame: CGRect(x: x, y: y, width: w, height: h))
+        }
+    }
+}
+
+private extension CGRect {
+    /// SC frames may be in backing pixels while CG bounds are in points;
+    /// accept 1x/2x/3x scale on size and origin together.
+    func matches(_ other: CGRect) -> Bool {
+        for scale: CGFloat in [1, 2, 3] {
+            if abs(width - other.width * scale) < 3 * scale &&
+                abs(height - other.height * scale) < 3 * scale &&
+                abs(minX - other.minX * scale) < 3 * scale &&
+                abs(minY - other.minY * scale) < 3 * scale { return true }
+        }
+        return false
+    }
+
+    func sizeMatches(_ other: CGSize) -> Bool {
+        for scale: CGFloat in [1, 2, 3] {
+            if abs(width - other.width * scale) < 3 * scale &&
+                abs(height - other.height * scale) < 3 * scale { return true }
+        }
+        return false
     }
 }
