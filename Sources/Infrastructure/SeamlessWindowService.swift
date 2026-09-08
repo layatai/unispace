@@ -396,7 +396,11 @@ public final class SeamlessWindowService {
                 // brief window between accept and the first video frame — drop
                 // it rather than tearing down an otherwise-healthy session.
                 guard sourceReady else { return }
-                try input?.send(event)
+                do { try input?.send(event) }
+                catch SeamlessWindowError.inputBlocked {
+                    input?.releaseAll()
+                    report("Click blocked: bring the shared window to the front on its source Mac, then retry.")
+                }
             case let .keyframe(epoch):
                 guard state.authorizes(epoch: epoch, peer: peer, now: now) else { throw SeamlessWindowError.staleLease }
                 capture.requestKeyframe()

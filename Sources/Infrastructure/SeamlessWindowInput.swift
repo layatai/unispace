@@ -68,20 +68,23 @@ public final class SeamlessWindowInput: SeamlessInputTarget {
             }
             NSApp.yieldActivation(to: application)
             guard application.activate(options: [.activateAllWindows]) else {
-                throw SeamlessWindowError.unavailable
+                throw SeamlessWindowError.inputBlocked
             }
             let deadline = Date().addingTimeInterval(0.5)
             while (!application.isActive || Self.frontWindow(at: point) != windowID), Date() < deadline {
                 RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.01))
             }
-            guard application.isActive else { throw SeamlessWindowError.unavailable }
+            guard application.isActive else { throw SeamlessWindowError.inputBlocked }
         }
         // Both CG bounds and the normalized proxy picture use top-left origin.
         if input.kind == .leftDown || input.kind == .rightDown {
-            guard isAvailable, Self.frontWindow(at: point) == windowID else {
-                throw SeamlessWindowError.unavailable
+            guard isAvailable else { throw SeamlessWindowError.unavailable }
+            guard Self.frontWindow(at: point) == windowID else {
+                throw SeamlessWindowError.inputBlocked
             }
         }
+        if (input.kind == .leftUp || input.kind == .leftDrag), !buttons.contains(CGMouseButton.left.rawValue) { return }
+        if (input.kind == .rightUp || input.kind == .rightDrag), !buttons.contains(CGMouseButton.right.rawValue) { return }
         lastPoint = point
         // postToPid carries the event's own location, but doesn't move the
         // real cursor — some apps validate a click/drag against the actual

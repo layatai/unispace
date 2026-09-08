@@ -7,6 +7,7 @@ public enum SeamlessWindowError: Error, Equatable, Sendable {
     case busy
     case unavailable
     case permissionDenied
+    case inputBlocked
 }
 
 public enum SeamlessWindowLimits {

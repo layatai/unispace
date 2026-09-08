@@ -491,6 +491,13 @@ final class SeamlessWindowConnectionTests: XCTestCase {
         try await eventually { receiver.frames.count == 1 }
         XCTAssertEqual(receiver.frames[0], frame)
         let click = SeamlessInput(kind: .leftDown, x: 0.25, y: 0.75)
+        capture.target.sendError = .inputBlocked
+        let beforeBlocked = capture.target.releases
+        try receiver.send(.input(lease.epoch, click))
+        try await eventually { capture.target.releases > beforeBlocked }
+        XCTAssertTrue(service.isPresenting, "A blocked title click must preserve the presentation")
+        XCTAssertTrue(capture.target.events.isEmpty)
+        capture.target.sendError = nil
         try receiver.send(.input(lease.epoch, click))
         try await eventually { capture.target.events.contains(click) }
         let initialReleases = capture.target.releases
@@ -541,7 +548,12 @@ private final class WindowInputFixture: SeamlessInputTarget {
     var isAvailable = true
     var events: [SeamlessInput] = []
     var releases = 0
-    func send(_ input: SeamlessInput) throws { try input.validate(); events.append(input) }
+    var sendError: SeamlessWindowError?
+    func send(_ input: SeamlessInput) throws {
+        try input.validate()
+        if let sendError { throw sendError }
+        events.append(input)
+    }
     func releaseAll() { releases += 1 }
 }
 
