@@ -16,6 +16,8 @@ final class SeamlessWindowViewModel: ObservableObject {
     @Published var selectedPeer: DeviceID?
     /// The peer's window list, fetched on demand by `requestRemoteWindows`.
     @Published private(set) var remoteWindows: [SeamlessWindowDescriptor] = []
+    @Published private(set) var remoteCatalogs: [DeviceID: [SeamlessWindowDescriptor]] = [:]
+    @Published private(set) var loadingRemoteWindows = false
     @Published var selectedRemoteWindow: RemoteWindowID?
     private let service = SeamlessWindowService()
     private var subscription: AnyCancellable?
@@ -72,7 +74,7 @@ final class SeamlessWindowViewModel: ObservableObject {
             catch { enabled = false; status = "Window sharing could not start. Check your workspace connection." }
         } else {
             service.stop(); windows = []; selectedWindow = nil
-        remoteWindows = []; selectedRemoteWindow = nil
+            remoteWindows = []; selectedRemoteWindow = nil; remoteCatalogs = [:]
             if value { enabled = false; status = "Join a workspace before enabling window sharing." }
         }
     }
@@ -108,10 +110,23 @@ final class SeamlessWindowViewModel: ObservableObject {
 
     /// Ask the selected Mac what it can share. Answer arrives via `onChange`.
     func requestRemoteWindows() {
-        guard let selectedPeer else { return }
+        guard let selectedPeer, !loadingRemoteWindows else { return }
         remoteWindows = []; selectedRemoteWindow = nil
         do { try service.requestCatalog(from: selectedPeer) }
         catch { status = "Could not reach that Mac. Make sure window sharing is on there too." }
+    }
+
+    func refreshAllRemoteWindows() async {
+        guard enabled, !busy, !loadingRemoteWindows else { return }
+        loadingRemoteWindows = true
+        remoteCatalogs = [:]
+        defer { loadingRemoteWindows = false }
+        for peer in peers {
+            guard enabled, !busy, !Task.isCancelled else { return }
+            if let catalog = try? await service.fetchCatalog(from: peer.id), enabled, !busy {
+                remoteCatalogs[peer.id] = catalog
+            }
+        }
     }
 
     func pullWindow() {
@@ -120,9 +135,19 @@ final class SeamlessWindowViewModel: ObservableObject {
     }
     /// Also used for the menu bar's quick-pull list.
     func pullWindow(_ window: SeamlessWindowDescriptor, from peer: DeviceID) {
+        guard enabled, !busy, !loadingRemoteWindows else { return }
         appModel?.stopControlling()
-        do { try service.pull(window, from: peer) }
-        catch { status = "That window could not be moved here. Ask for its list again and retry." }
+        loadingRemoteWindows = true
+        Task {
+            defer { loadingRemoteWindows = false }
+            do {
+                let catalog = try await service.fetchCatalog(from: peer)
+                guard enabled, let current = catalog.first(where: { $0.id == window.id }) else {
+                    throw SeamlessWindowError.unavailable
+                }
+                try service.pull(current, from: peer)
+            } catch { status = "That window could not be moved here. Ask for its list again and retry." }
+        }
     }
 
     private func refresh(_ context: ContinuityContextSnapshot, local: DeviceDescriptor) {

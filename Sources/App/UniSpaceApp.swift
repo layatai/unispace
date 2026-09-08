@@ -87,6 +87,27 @@ struct UniSpaceApp: App {
         Button("Bring All Windows Home") { seamlessModel.returnHome() }
             .disabled(!seamlessModel.busy)
 
+        Menu("Move Window from Mac") {
+            ForEach(seamlessModel.peers) { peer in
+                ForEach(seamlessModel.remoteCatalogs[peer.id] ?? [], id: \.id) { window in
+                    Button("\(window.application) — \(window.title) — \(peer.name)") {
+                        seamlessModel.pullWindow(window, from: peer.id)
+                    }
+                    .disabled(seamlessModel.loadingRemoteWindows)
+                }
+            }
+            if seamlessModel.remoteCatalogs.values.allSatisfy({ $0.isEmpty }) {
+                Text(seamlessModel.loadingRemoteWindows ? "Loading windows…" : "No remote windows available")
+            }
+            Divider()
+            Button("Refresh Windows from All Macs") {
+                Task { await seamlessModel.refreshAllRemoteWindows() }
+            }
+            .disabled(seamlessModel.loadingRemoteWindows)
+        }
+        .disabled(!seamlessModel.enabled || seamlessModel.busy)
+        .task(id: seamlessModel.enabled) { await seamlessModel.refreshAllRemoteWindows() }
+
         Divider()
 
         if model.workspace != nil {

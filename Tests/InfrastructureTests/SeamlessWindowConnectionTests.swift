@@ -10,6 +10,28 @@ import UniSpaceDomain
 
 @MainActor
 final class SeamlessWindowConnectionTests: XCTestCase {
+    func testRemoteCatalogRequestIsSentAfterAuthentication() async throws {
+        let source = DeviceID(), viewer = DeviceID()
+        let workspace = WorkspaceSnapshot(id: WorkspaceID(), name: "Catalog fixture", localDeviceID: source,
+            devices: [DeviceDescriptor(id: source, name: "Source", peerAddresses: [try PeerAddress("127.0.0.1")], platform: .macOS),
+                      DeviceDescriptor(id: viewer, name: "Viewer", platform: .macOS)])
+        let key = Data(repeating: 7, count: 32)
+        let capture = WindowCaptureFixture()
+        let server = SeamlessWindowService(controlPort: .any, videoPort: .any, enableBonjour: false, capture: capture)
+        defer { server.stop() }
+        try server.start(workspace: workspace, local: source, key: key)
+        try await eventually { server.listeningPorts.count == 2 && !server.isPresenting }
+        let client = SeamlessWindowService(controlPort: .any, videoPort: .any, enableBonjour: false,
+            directControlPort: server.listeningPorts[0], directVideoPort: server.listeningPorts[1])
+        defer { client.stop() }
+        try client.start(workspace: workspace, local: viewer, key: key)
+        try await eventually { !client.isPresenting }
+        let windows = try await client.fetchCatalog(from: source)
+        XCTAssertEqual(windows, [capture.descriptor])
+        XCTAssertFalse(client.isPresenting)
+        XCTAssertFalse(server.isPresenting)
+    }
+
     func testSeamlessMouseEventsRouteThroughWindowServer() {
         for type in [CGEventType.mouseMoved, .leftMouseDown, .leftMouseUp, .rightMouseDown,
                      .rightMouseUp, .leftMouseDragged, .rightMouseDragged, .scrollWheel] {

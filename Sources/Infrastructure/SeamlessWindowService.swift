@@ -175,6 +175,18 @@ public final class SeamlessWindowService {
         } catch { pendingCatalogRequest = nil; throw error }
     }
 
+    public func fetchCatalog(from peer: DeviceID) async throws -> [SeamlessWindowDescriptor] {
+        try requestCatalog(from: peer)
+        let deadline = now + 5
+        while now < deadline {
+            try Task.checkCancellation()
+            guard !isPresenting else { throw SeamlessWindowError.busy }
+            if let catalog = remoteCatalog, catalog.peer == peer { return catalog.windows }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        throw SeamlessWindowError.unavailable
+    }
+
     /// Asks `peer` (the source this time) to present `descriptor` here. Reuses
     /// the control connection `requestCatalog` opened. The peer starts its
     /// own fresh present() in response, which needs that connection's slot
@@ -290,6 +302,7 @@ public final class SeamlessWindowService {
                       (self.control?.peer ?? self.video?.peer).map({ $0 == peer }) ?? true else { connection.close(); return }
                 if lane == .control {
                     guard self.control == nil else { connection.close(); return }; self.control = connection
+                    if self.pendingCatalogRequest == peer { self.send(.catalogRequest) }
                 } else {
                     guard self.video == nil else { connection.close(); return }; self.video = connection
                 }
