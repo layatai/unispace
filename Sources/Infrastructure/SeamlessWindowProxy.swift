@@ -179,6 +179,7 @@ private final class WindowVideoSurface: NSView {
     var emergencyStop: (() -> Void)?
     private var tracking: NSTrackingArea?
     private var draggingLocalWindow = false
+    private var pendingTitleClick: NSEvent?
     override var acceptsFirstResponder: Bool { true }
     override var isFlipped: Bool { true }
 
@@ -203,21 +204,34 @@ private final class WindowVideoSurface: NSView {
     override func mouseMoved(with event: NSEvent) { pointer(event, .move) }
     override func mouseDown(with event: NSEvent) {
         draggingLocalWindow = false
+        pendingTitleClick = nil
+        window?.makeFirstResponder(self)
         if let window, event.locationInWindow.y >= window.contentLayoutRect.maxY {
-            draggingLocalWindow = true
-            window.performDrag(with: event)
+            pendingTitleClick = event
             return
         }
-        window?.makeFirstResponder(self)
         pointer(event, .leftDown)
     }
     override func mouseUp(with event: NSEvent) {
         if draggingLocalWindow { draggingLocalWindow = false; return }
+        if let down = pendingTitleClick {
+            pendingTitleClick = nil
+            pointer(down, .leftDown)
+        }
         pointer(event, .leftUp)
     }
     override func rightMouseDown(with event: NSEvent) { pointer(event, .rightDown) }
     override func rightMouseUp(with event: NSEvent) { pointer(event, .rightUp) }
     override func mouseDragged(with event: NSEvent) {
+        if let down = pendingTitleClick {
+            let distance = hypot(event.locationInWindow.x - down.locationInWindow.x,
+                                 event.locationInWindow.y - down.locationInWindow.y)
+            guard distance >= 4 else { return }
+            pendingTitleClick = nil
+            draggingLocalWindow = true
+            window?.performDrag(with: event)
+            return
+        }
         if !draggingLocalWindow { pointer(event, .leftDrag) }
     }
     override func rightMouseDragged(with event: NSEvent) { pointer(event, .rightDrag) }

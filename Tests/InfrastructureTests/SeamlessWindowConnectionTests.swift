@@ -172,10 +172,22 @@ final class SeamlessWindowConnectionTests: XCTestCase {
             context: nil, eventNumber: 1, clickCount: 1, pressure: 1))
         let beforeTitleDrag = inputs.count
         content.mouseDown(with: titleDrag)
+        content.mouseUp(with: titleDrag)
+        XCTAssertEqual(inputs.dropFirst(beforeTitleDrag).map(\.kind), [.leftDown, .leftUp],
+                       "Tabs in the title area must receive a complete click")
+        XCTAssertEqual(host.localDrags, 0)
+        let beforeLocalDrag = inputs.count
+        let moved = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseDragged,
+            location: CGPoint(x: titleDrag.locationInWindow.x + 20, y: titleDrag.locationInWindow.y),
+            modifierFlags: [], timestamp: 2, windowNumber: proxy.nativeWindow.windowNumber,
+            context: nil, eventNumber: 2, clickCount: 1, pressure: 1))
+        content.mouseDown(with: titleDrag)
         content.mouseDragged(with: titleDrag)
+        XCTAssertEqual(host.localDrags, 0, "Motion below the drag threshold must remain a click")
+        content.mouseDragged(with: moved)
         content.mouseUp(with: titleDrag)
         XCTAssertEqual(host.localDrags, 1)
-        XCTAssertEqual(inputs.count, beforeTitleDrag, "Title-area gestures must not reach the source Mac")
+        XCTAssertEqual(inputs.count, beforeLocalDrag, "Title-area drags must not reach the source Mac")
         let inputsBeforeMove = inputs.count
         proxy.nativeWindow.setFrameOrigin(CGPoint(x: 120, y: 160))
         XCTAssertEqual(inputs.count, inputsBeforeMove, "Moving the proxy must not send remote input")
