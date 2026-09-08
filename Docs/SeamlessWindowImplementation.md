@@ -5,20 +5,20 @@ This branch implements a one-window Mac-to-Mac streaming preview. It is **not ye
 ## Using the preview
 
 1. Build this branch on two paired Macs running macOS 14 or later.
-2. Open **Seamless Windows…** from the UniSpace menu on both Macs. Enable sharing for the current session on both.
-3. On the source Mac, click **Refresh Windows** and grant Accessibility and Screen Recording permission when prompted. Reopen UniSpace if macOS requires it.
-4. Keep the selected source window visible. Choose that window and a paired destination Mac, then click **Move Window to Mac**.
-5. Accept the incoming window on the destination. Its contents appear in a native resizable window alongside local apps; no desktop is captured.
+2. Open the **Seamless Windows** section in the main UniSpace window's sidebar on both Macs (also reachable from the UniSpace menu or the menu bar icon). Enable sharing for the current session on both — this is intentionally not persisted across relaunches, so it resets each time UniSpace restarts; enabling triggers an automatic window scan.
+3. On the source Mac, grant Accessibility and Screen Recording permission when prompted. Reopen UniSpace if macOS requires it.
+4. Keep the source window visible. Either double-click it in the picker's list (auto-moves to the already-selected destination Mac), or use the menu bar icon's **Move Window to Mac** submenu to pick an application window and destination without opening the picker at all.
+5. The destination auto-accepts the incoming window — no confirmation click. Its contents appear in a native resizable window alongside local apps, without its own visible title bar (the captured window already shows one); no desktop is captured.
 6. Click inside the proxy before typing. Close it, use **Bring All Windows Home**, or press Control Option Command Escape to end sharing.
 
-The source app keeps running on its original Mac. Closing the proxy never closes the source application. The current preview also leaves the source window visible. Destination resizing scales the presentation; it does not resize the source application. Resizing the source ends the session so input cannot use stale geometry. Clipboard and file transfer continue through their existing features.
+The source app keeps running on its original Mac. Closing the proxy never closes the source application. The current preview also leaves the source window visible. Destination resizing scales the presentation; it does not resize the source application — an earlier attempt to do this by simulating a corner-drag on the source's real desktop was pulled after it closed the shared window on the receiver, since a synthetic drag at computed screen coordinates has no way to confirm it grabbed the right control. Resizing the source ends the session so input cannot use stale geometry. Clipboard and file transfer continue through their existing features.
 
 ## Architecture and bounds
 
 - Domain: opaque window identity, validated input/geometry, presentation epoch, control messages, bounded H.264 access units. Native handles never cross the network.
-- Application: source-authoritative presentation state, monotonic ten-second lease deadline, acceptance, renewal, expiry, stale-frame and replay rejection. Every new presentation has a new epoch.
-- Infrastructure: ScreenCaptureKit single-window capture, VideoToolbox H.264 encoder, AVSampleBufferDisplayLayer hardware decoding, native NSWindow, AX selection and PID-targeted input, and encrypted connections.
-- App: session opt-in, local window picker, destination picker, explicit receiver acceptance, status, emergency return-home actions. Views contain no network or capture logic.
+- Application: source-authoritative presentation state, monotonic 25-second lease deadline (generous enough for a cold Tailscale/WAN handshake, not just LAN), acceptance, renewal, expiry, stale-frame and replay rejection. Every new presentation has a new epoch.
+- Infrastructure: ScreenCaptureKit single-window capture, VideoToolbox H.264 encoder, AVSampleBufferDisplayLayer hardware decoding, native NSWindow, CGWindowList-based selection and PID-targeted `CGEvent` input (no AX — this app's sandbox denies mach-lookup to `com.apple.axserver`), and encrypted connections.
+- App: session opt-in embedded in the main window's sidebar, local window picker, destination picker, menu bar quick-move, automatic receiver acceptance, status, emergency return-home actions. Views contain no network or capture logic.
 
 Control uses TCP 61343 (`_unispace-win._tcp`); video uses TCP 61344 (`_unispace-vid._tcp`). These do not share the existing input, clipboard, or file-transfer queues. Discovery uses Bonjour; a stored direct address is used when no Bonjour route exists. Both endpoints must use this preview protocol; Windows and Linux are not offered as destinations.
 
@@ -26,7 +26,7 @@ Each connection authenticates the workspace, peer ID, lane and a random nonce wi
 
 Queues are bounded: up to 64 small control messages, one video send, one encode callback, three capture buffers, and four connections per service. Frame bytes are limited to 2 MiB, control messages to 16 KiB, parameter sets to 4 KiB each, dimensions to 4096 and total pixels to 4096 × 2160. Capture is initially capped at 1920 × 1080 and 30 FPS. A dropped encoded unit forces a keyframe; the receiver rejects dependent frames after a sequence gap. A stalled send closes after two seconds. TCP head-of-line blocking remains a limitation; these bounds do not establish the 80 ms latency goal.
 
-Only a locally selected, unambiguously matched AX window accepts input. The service checks the presentation epoch, intended peer and local lease deadline before applying input. Keyboard/mouse state is released on focus loss, return home and disconnect. Local source keyboard/mouse interaction, source minimization/closure, system sleep, capture failure, or lease expiry ends sharing. Reconnect requires a fresh explicit offer and acceptance. No frames, window titles or clipboard contents are written to logs.
+Only a locally selected, unambiguously matched CG window (by title and size) accepts input. The service checks the presentation epoch, intended peer and local lease deadline before applying input. Keyboard/mouse state is released on focus loss, return home and disconnect. Local source keyboard/mouse interaction, source minimization/closure, system sleep, capture failure, or lease expiry ends sharing. Reconnect requires a fresh explicit offer and acceptance. No frames, window titles or clipboard contents are written to logs.
 
 ## Remaining implementation
 

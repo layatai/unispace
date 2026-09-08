@@ -17,6 +17,7 @@ struct UniSpaceApp: App {
                 model: model,
                 clipboardModel: clipboardModel,
                 transferModel: transferModel,
+                seamlessModel: seamlessModel,
                 selection: $selection
             )
                 .frame(minWidth: 760, minHeight: 540)
@@ -27,8 +28,8 @@ struct UniSpaceApp: App {
                     clipboardModel.bind(to: model)
                     seamlessModel.bind(to: model)
                 }
-                .onChange(of: seamlessModel.incomingTitle) { _, title in
-                    if title != nil { openWindow(id: "seamless") }
+                .onChange(of: seamlessModel.busy) { _, busy in
+                    if busy { openSeamless() }
                 }
                 .onDisappear { DockIconVisibility.hideWhenNoVisibleWindows() }
         }
@@ -43,7 +44,7 @@ struct UniSpaceApp: App {
                     .keyboardShortcut(.escape, modifiers: [.control, .option, .command])
                     .disabled(model.workspace == nil)
                 Divider()
-                Button("Show Seamless Windows") { openWindow(id: "seamless") }
+                Button("Show Seamless Windows") { openSeamless() }
                 Button("Bring All Windows Home") { seamlessModel.returnHome() }
                     .disabled(!seamlessModel.busy)
                 Button("Show Continuity") { openContinuity() }
@@ -55,25 +56,36 @@ struct UniSpaceApp: App {
             }
         }
 
-        Window("Seamless Windows", id: "seamless") {
-            SeamlessWindowView(model: seamlessModel)
-                .onAppear { seamlessModel.bind(to: model) }
-        }
-
         MenuBarExtra {
             menuContent
         } label: {
-            Image(systemName: model.isLocalController ? "cursorarrow.motionlines" : "display")
+            Image(systemName: seamlessModel.busy ? "macwindow.on.rectangle"
+                : model.isLocalController ? "cursorarrow.motionlines" : "display")
         }
     }
 
     @ViewBuilder
     private var menuContent: some View {
-        Button("Seamless Windows…") { openWindow(id: "seamless") }
+        Text(model.workspace?.name ?? "UniSpace")
+        Text(seamlessModel.busy ? seamlessModel.status : model.statusMessage)
+
+        Divider()
+
+        Button("Seamless Windows…") { openSeamless() }
+        if seamlessModel.enabled && !seamlessModel.windows.isEmpty && !seamlessModel.peers.isEmpty {
+            Menu("Move Window to Mac") {
+                ForEach(seamlessModel.peers) { peer in
+                    Menu(peer.name) {
+                        ForEach(seamlessModel.windows, id: \.id) { window in
+                            Button("\(window.application) — \(window.title)") { seamlessModel.moveWindow(window, to: peer.id) }
+                        }
+                    }
+                }
+            }
+            .disabled(seamlessModel.busy)
+        }
         Button("Bring All Windows Home") { seamlessModel.returnHome() }
             .disabled(!seamlessModel.busy)
-        Text(model.workspace?.name ?? "UniSpace")
-        Text(model.statusMessage)
 
         Divider()
 
@@ -119,6 +131,10 @@ struct UniSpaceApp: App {
 
     private func openTransferCenter() {
         openMainWindow(selecting: .transfers)
+    }
+
+    private func openSeamless() {
+        openMainWindow(selecting: .seamless)
     }
 
     private func openMainWindow(selecting destination: WorkspaceView.Destination) {

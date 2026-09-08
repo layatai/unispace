@@ -13,6 +13,7 @@ final class SeamlessWindowTests: XCTestCase {
     func testOnlyAcceptedDestinationCanControlUnexpiredLease() throws {
         let lease = lease()
         var state = WindowPresentationState()
+        let duration = SeamlessWindowLimits.leaseDuration
         try state.offer(lease, now: 10)
         XCTAssertFalse(state.authorizes(epoch: lease.epoch, peer: lease.destination, now: 11))
         XCTAssertThrowsError(try state.offer(self.lease(), now: 11))
@@ -20,30 +21,32 @@ final class SeamlessWindowTests: XCTestCase {
         XCTAssertTrue(state.authorizes(epoch: lease.epoch, peer: lease.destination, now: 12))
         XCTAssertFalse(state.authorizes(epoch: UUID(), peer: lease.destination, now: 12))
         XCTAssertFalse(state.authorizes(epoch: lease.epoch, peer: lease.source, now: 12))
-        XCTAssertFalse(state.authorizes(epoch: lease.epoch, peer: lease.destination, now: 21))
-        XCTAssertTrue(state.expire(now: 21))
+        XCTAssertFalse(state.authorizes(epoch: lease.epoch, peer: lease.destination, now: 11 + duration))
+        XCTAssertTrue(state.expire(now: 11 + duration))
         XCTAssertEqual(state.phase, .idle)
     }
     func testExpiredLeaseCannotBeRevivedByLateHeartbeatOrAcceptance() throws {
         let lease = lease()
         var state = WindowPresentationState()
+        let duration = SeamlessWindowLimits.leaseDuration
         try state.offer(lease, now: 0)
-        XCTAssertThrowsError(try state.accept(lease, now: 10))
+        XCTAssertThrowsError(try state.accept(lease, now: duration))
         state.release()
         try state.offer(lease, now: 20)
         try state.accept(lease, now: 21)
-        XCTAssertThrowsError(try state.renew(epoch: lease.epoch, now: 31))
+        XCTAssertThrowsError(try state.renew(epoch: lease.epoch, now: 21 + duration))
         XCTAssertFalse(state.authorizes(epoch: lease.epoch, peer: lease.destination, now: .nan))
         XCTAssertTrue(state.expire(now: .infinity))
     }
     func testHeartbeatRenewsOnlyCurrentEpoch() throws {
         let lease = lease()
         var state = WindowPresentationState()
+        let duration = SeamlessWindowLimits.leaseDuration
         try state.offer(lease, now: 0); try state.accept(lease, now: 1)
         XCTAssertThrowsError(try state.renew(epoch: UUID(), now: 2))
         try state.renew(epoch: lease.epoch, now: 9)
-        XCTAssertFalse(state.expire(now: 18))
-        XCTAssertTrue(state.expire(now: 19))
+        XCTAssertFalse(state.expire(now: 9 + duration - 1))
+        XCTAssertTrue(state.expire(now: 9 + duration))
     }
     func testDecodeRequiresIDRAfterGapAndRejectsReplays() throws {
         let lease = lease()

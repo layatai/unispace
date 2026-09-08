@@ -14,7 +14,12 @@ public enum SeamlessWindowLimits {
     public static let maximumControlBytes = 16 * 1_024
     public static let maximumDimension = 4_096
     public static let maximumPixels = 4_096 * 2_160
-    public static let leaseDuration: TimeInterval = 10
+    // 10s was tuned for LAN; over a Tailscale/WAN route the video lane's cold
+    // handshake (TCP + workspace-key crypto, possibly DERP-relayed) can eat
+    // most of that before the receiver ever gets to send its .accept back,
+    // which the source then rejects as a stale lease — the window flashes
+    // open on the receiver and immediately closes. 25s gives that room.
+    public static let leaseDuration: TimeInterval = 25
 }
 
 public struct RemoteWindowID: UUIDIdentifier {
@@ -107,6 +112,9 @@ public enum SeamlessWindowMessage: Codable, Equatable, Sendable {
     case resize(UUID, Int, Int)
     case keyframe(UUID)
     case visibility(UUID, Bool)
+    case catalogRequest
+    case catalogOffer([SeamlessWindowDescriptor])
+    case pullRequest(SeamlessWindowDescriptor)
 
     public func validate() throws {
         switch self {
@@ -118,6 +126,10 @@ public enum SeamlessWindowMessage: Codable, Equatable, Sendable {
         case let .input(_, event): try event.validate()
         case let .resize(_, width, height):
             try SeamlessWindowDescriptor.validateSize(width: width, height: height)
+        case let .catalogOffer(descriptors):
+            guard descriptors.count <= 64 else { throw SeamlessWindowError.invalidMessage }
+            for descriptor in descriptors { try descriptor.validate() }
+        case let .pullRequest(descriptor): try descriptor.validate()
         default: break
         }
     }

@@ -114,9 +114,6 @@ public final class SeamlessWindowInput: SeamlessInputTarget {
             }
         }
         event?.flags = CGEventFlags(rawValue: input.modifiers)
-        if input.kind == .leftDown || input.kind == .rightDown {
-            DiagnosticLog().record("click posting event=\(event != nil) toPid=\(process)")
-        }
         post(event)
     }
 

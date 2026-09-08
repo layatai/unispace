@@ -19,7 +19,11 @@ public final class SeamlessWindowProxy: NSObject, NSWindowDelegate {
     var isRendering: Bool { surface.video.status == .rendering }
 
     public convenience init(descriptor: SeamlessWindowDescriptor, sourceName: String) {
-        let scale = min(1, 1_000 / Double(descriptor.width), 700 / Double(descriptor.height))
+        // Actual size (1:1 with the source, in points) whenever it fits this
+        // screen; only shrink, preserving aspect, if it's literally bigger
+        // than the available space.
+        let available = NSScreen.main?.visibleFrame.size ?? CGSize(width: 1_280, height: 800)
+        let scale = min(1, available.width / Double(descriptor.width), available.height / Double(descriptor.height))
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: Double(descriptor.width) * scale,
             height: Double(descriptor.height) * scale), styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered, defer: false)
@@ -31,7 +35,13 @@ public final class SeamlessWindowProxy: NSObject, NSWindowDelegate {
     init(descriptor: SeamlessWindowDescriptor, sourceName: String, window: NSWindow) {
         self.window = window
         super.init()
+        // The captured frame already shows the source's own title bar, so the
+        // proxy's native one would duplicate it — keep the title for Mission
+        // Control/window-switcher, but don't draw a second one on screen.
         window.title = "\(descriptor.title) — \(sourceName)"
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+        window.styleMask.insert(.fullSizeContentView)
         window.isReleasedWhenClosed = false
         window.contentMinSize = NSSize(width: 160, height: 100)
         window.contentView = surface

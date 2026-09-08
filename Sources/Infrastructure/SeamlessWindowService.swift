@@ -10,6 +10,8 @@ public final class SeamlessWindowService {
     public private(set) var status = "Window sharing is off"
     public private(set) var incoming: (WindowPresentationLease, SeamlessWindowDescriptor)?
     public private(set) var availablePeers = Set<DeviceID>()
+    public private(set) var remoteCatalog: (peer: DeviceID, windows: [SeamlessWindowDescriptor])?
+    private var pendingCatalogRequest: DeviceID?
     public var onChange: (() -> Void)?
     public var isPresenting: Bool { state.phase != .idle || captureTask != nil }
     private let capture: any SeamlessCaptureSource
@@ -157,6 +159,42 @@ public final class SeamlessWindowService {
         } catch { returnHome(); throw error }
     }
 
+    /// Asks a peer for its window catalog, over a lightweight control-only
+    /// connection (no lease, no video). The peer answers with `.catalogOffer`;
+    /// see `remoteCatalog`. Idle-connection expiry (tick()) reclaims this if
+    /// the user never follows up with `pull(_:from:)`.
+    public func requestCatalog(from peer: DeviceID) throws {
+        guard let configuration, allowed.contains(peer), !isPresenting else { throw SeamlessWindowError.unavailable }
+        closeConnections()
+        pendingCatalogRequest = peer
+        remoteCatalog = nil
+        do {
+            let endpoint = try endpoint(for: peer, video: false)
+            attach(NWConnection(to: endpoint, using: SeamlessWindowConnection.parameters()), lane: .control, expected: peer)
+            report("Asking \(name(peer)) for its windows…")
+        } catch { pendingCatalogRequest = nil; throw error }
+    }
+
+    /// Asks `peer` (the source this time) to present `descriptor` here. Reuses
+    /// the control connection `requestCatalog` opened. The peer starts its
+    /// own fresh present() in response, which needs that connection's slot
+    /// free on both ends — closed here after a beat so the request itself
+    /// (an async, queued send) has time to actually reach the wire first.
+    public func pull(_ descriptor: SeamlessWindowDescriptor, from peer: DeviceID) throws {
+        guard let requestConnection = control, requestConnection.peer == peer, !isPresenting else {
+            throw SeamlessWindowError.unavailable
+        }
+        send(.pullRequest(descriptor))
+        report("Asking \(name(peer)) to move \(descriptor.application) here…")
+        // Only tear down if nothing has superseded this connection yet — the
+        // peer's own present() may already be attaching its fresh pair.
+        Task { [weak self, weak requestConnection] in
+            try? await Task.sleep(for: .milliseconds(200))
+            guard let self, self.control === requestConnection else { return }
+            self.closeConnections()
+        }
+    }
+
     public func accept() {
         guard let incoming, control?.peer == incoming.0.source else { returnHome(); return }
         guard video?.peer == incoming.0.source else {
@@ -190,19 +228,26 @@ public final class SeamlessWindowService {
         input?.releaseAll(); input = nil
         if let localMonitor { NSEvent.removeMonitor(localMonitor) }; localMonitor = nil
         proxy?.close(); proxy = nil
+        // Capture teardown must finish before another session can use its
+        // SCStream, so it takes over captureTask. This must run unconditionally:
+        // cancel() doesn't nil the reference, so the old `if captureTask == nil`
+        // guard skipped the stop exactly when a capture was live, leaving
+        // captureTask set forever — isPresenting stuck true, no further window
+        // movable until relaunch.
         captureTask?.cancel()
-        // Capture teardown must finish before another session can use its SCStream.
-        if captureTask == nil {
-            captureTask = Task { [weak self] in
-                guard let self else { return }
-                await self.capture.stop()
-                self.captureTask = nil; self.onChange?()
-            }
+        captureTask = Task { [weak self] in
+            guard let self else { return }
+            await self.capture.stop()
+            self.captureTask = nil; self.onChange?()
         }
+        closeConnections()
+        if configuration != nil { report("Window returned to its source Mac") }
+    }
+
+    private func closeConnections() {
         let old = Array(connections.values)
         connections.removeAll(); control = nil; video = nil
         old.forEach { $0.close() }
-        if configuration != nil { report("Window returned to its source Mac") }
     }
 
     private var now: TimeInterval { ProcessInfo.processInfo.systemUptime }
@@ -288,7 +333,29 @@ public final class SeamlessWindowService {
                 }
                 try state.offer(lease, now: now)
                 incoming = (lease, descriptor)
-                report("\(name(peer)) wants to show \(descriptor.application). Accept to open its window.")
+                accept()
+                return
+            }
+            if case .catalogRequest = message {
+                guard !isPresenting else { return }
+                Task { [weak self] in
+                    guard let self, let list = try? await self.catalog() else { return }
+                    self.send(.catalogOffer(Array(list.prefix(64))))
+                }
+                return
+            }
+            if case let .catalogOffer(descriptors) = message {
+                guard pendingCatalogRequest == peer else { return }
+                remoteCatalog = (peer, descriptors)
+                pendingCatalogRequest = nil
+                report("\(name(peer)) has \(descriptors.count) window\(descriptors.count == 1 ? "" : "s") available")
+                onChange?()
+                return
+            }
+            if case let .pullRequest(descriptor) = message {
+                guard !isPresenting else { return }
+                closeConnections()
+                try? present(descriptor, on: peer)
                 return
             }
             guard let lease = state.lease, peer == (lease.source == configuration?.local ? lease.destination : lease.source) else {
@@ -304,7 +371,11 @@ public final class SeamlessWindowService {
                 guard epoch == lease.epoch else { throw SeamlessWindowError.staleLease }
                 returnHome()
             case let .input(epoch, event):
-                guard sourceReady, state.authorizes(epoch: epoch, peer: peer, now: now) else { throw SeamlessWindowError.staleLease }
+                guard state.authorizes(epoch: epoch, peer: peer, now: now) else { throw SeamlessWindowError.staleLease }
+                // The proxy can send input (e.g. a resign-key releaseAll) in the
+                // brief window between accept and the first video frame — drop
+                // it rather than tearing down an otherwise-healthy session.
+                guard sourceReady else { return }
                 try input?.send(event)
             case let .keyframe(epoch):
                 guard state.authorizes(epoch: epoch, peer: peer, now: now) else { throw SeamlessWindowError.staleLease }
@@ -314,7 +385,7 @@ public final class SeamlessWindowService {
                 self.visible = visible; input?.releaseAll()
                 capture.setPaused(!visible)
                 if visible { capture.requestKeyframe() }
-            case .resize, .offer: throw SeamlessWindowError.invalidMessage
+            case .resize, .offer, .catalogRequest, .catalogOffer, .pullRequest: throw SeamlessWindowError.invalidMessage
             }
         } catch { returnHome(); report("Window sharing stopped because the session was no longer valid.") }
     }

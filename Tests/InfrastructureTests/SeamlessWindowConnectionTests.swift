@@ -237,11 +237,11 @@ final class SeamlessWindowConnectionTests: XCTestCase {
         let lease = WindowPresentationLease(windowID: RemoteWindowID(), source: source, destination: local)
         let descriptor = SeamlessWindowDescriptor(id: lease.windowID, title: "Fixture", application: "Fixture", width: 640, height: 480)
         XCTAssertTrue(clients[0].send(try SeamlessWindowCodec.encode(.offer(lease, descriptor))))
-        try await eventually { service.incoming != nil }
-        XCTAssertEqual(service.incoming?.0, lease)
-        service.accept()
+        // An offer auto-accepts. With no video connection yet it waits (leaving
+        // `incoming` set) until one arrives; otherwise it completes atomically.
         if delayedVideo {
-            XCTAssertNotNil(service.incoming)
+            try await eventually { service.incoming != nil }
+            XCTAssertEqual(service.incoming?.0, lease)
             clients[1].start()
             let videoConnected = await XCTWaiter.fulfillment(of: [videoReady], timeout: 5)
             XCTAssertEqual(videoConnected, .completed)
@@ -305,6 +305,37 @@ final class SeamlessWindowConnectionTests: XCTestCase {
         return try XCTUnwrap(result)
     }
 
+    /// returnHome() while capture start is still in flight must not leave
+    /// captureTask set: isPresenting would stay true forever and every later
+    /// present() would fail with .unavailable until relaunch.
+    func testReturnHomeDuringCaptureStartupDoesNotWedgePresenting() async throws {
+        let receiver = try WindowReceiverFixture()
+        receiver.start()
+        defer { receiver.stop() }
+        try await eventually { receiver.listeners.allSatisfy { ($0.port?.rawValue ?? 0) != 0 } }
+        let capture = WindowCaptureFixture()
+        capture.blocksStart = true
+        let service = SeamlessWindowService(controlPort: .any, videoPort: .any, enableBonjour: false,
+            directControlPort: try XCTUnwrap(receiver.listeners[0].port),
+            directVideoPort: try XCTUnwrap(receiver.listeners[1].port), capture: capture)
+        defer { capture.releaseStart(); service.stop() }
+        let source = DeviceDescriptor(id: receiver.sourceID, name: "Source", platform: .macOS)
+        let destination = DeviceDescriptor(id: receiver.destinationID, name: "Viewer",
+            peerAddresses: [try PeerAddress("127.0.0.1")], platform: .macOS)
+        let workspace = WorkspaceSnapshot(id: receiver.workspaceID, name: "Source fixture", localDeviceID: source.id,
+            devices: [source, destination])
+        try service.start(workspace: workspace, local: source.id, key: receiver.key)
+        try await eventually { !service.isPresenting }
+        try service.present(capture.descriptor, on: destination.id)
+        // Accepted, so beginCapture() is running and parked inside start().
+        try await eventually { capture.starts == 1 }
+        service.returnHome()
+        try await eventually { !service.isPresenting }
+        XCTAssertGreaterThan(capture.stops, 0, "Teardown must stop capture even mid-startup")
+        // The service must be usable again rather than permanently busy.
+        try service.present(capture.descriptor, on: destination.id)
+    }
+
     func testSourceRoutesOnlyItsLeaseInputAndReleasesOnWindowLoss() async throws {
         let receiver = try WindowReceiverFixture()
         receiver.start()
@@ -327,6 +358,12 @@ final class SeamlessWindowConnectionTests: XCTestCase {
         try service.present(capture.descriptor, on: destination.id)
         try await eventually { capture.frameSink != nil && service.status.hasPrefix("Sharing") }
         let lease = try XCTUnwrap(receiver.lease)
+        // The proxy can send input (e.g. a resign-key releaseAll) before the
+        // very first video frame is sent; it must be dropped, not treated as
+        // stale and used to tear down an otherwise-healthy session.
+        try receiver.send(.input(lease.epoch, SeamlessInput(kind: .releaseAll)))
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertTrue(service.isPresenting, "An early input before the first frame must not end the session")
         let frame = try await encodedFrame(epoch: lease.epoch)
         XCTAssertTrue(capture.frameSink?(frame) == true)
         try await eventually { receiver.frames.count == 1 }
@@ -393,6 +430,14 @@ private final class WindowCaptureFixture: SeamlessCaptureSource {
     var keyframes = 0
     var paused = false
     var stops = 0
+    /// Reproduces returnHome() running while capture startup is still in
+    /// flight. Parks on a continuation rather than Task.sleep because a real
+    /// SCStream.startCapture() is not cancellation-aware — a cancellable sleep
+    /// would unblock on cancel and hide the wedge.
+    var blocksStart = false
+    private var startGate: CheckedContinuation<Void, Never>?
+    var starts = 0
+    func releaseStart() { startGate?.resume(); startGate = nil }
     func catalog() async throws -> [SeamlessWindowDescriptor] { [descriptor] }
     func inputTarget(for id: RemoteWindowID) throws -> any SeamlessInputTarget {
         guard id == descriptor.id else { throw SeamlessWindowError.unavailable }; return target
@@ -400,6 +445,8 @@ private final class WindowCaptureFixture: SeamlessCaptureSource {
     func start(id: RemoteWindowID, epoch: UUID,
                onFrame: @escaping @MainActor @Sendable (SeamlessVideoFrame) -> Bool,
                onFailure: @escaping @MainActor @Sendable () -> Void) async throws {
+        starts += 1
+        if blocksStart { await withCheckedContinuation { startGate = $0 } }
         frameSink = onFrame; failureSink = onFailure
     }
     func requestKeyframe() { keyframes += 1 }

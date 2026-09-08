@@ -7,6 +7,7 @@ public enum PermissionKind: String, CaseIterable, Sendable {
     case inputMonitoring
     case postEvents
     case localNetwork
+    case screenRecording
 }
 
 public enum PermissionState: String, Sendable {
