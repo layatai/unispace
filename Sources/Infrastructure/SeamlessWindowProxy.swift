@@ -1,0 +1,331 @@
+import AppKit
+import AVFoundation
+import CoreMedia
+import ImageIO
+import UniSpaceDomain
+
+@MainActor
+public final class SeamlessWindowProxy: NSObject, NSWindowDelegate {
+    public var onInput: ((SeamlessInput) -> Void)?
+    public var onClose: (() -> Void)?
+    public var onVisibility: ((Bool) -> Void)?
+    public var onKeyframeNeeded: (() -> Void)?
+    private let window: NSWindow
+    private let surface = WindowVideoSurface(frame: .zero)
+    private var closing = false
+    private var originalIcon: NSImage?
+    private var format: CMVideoFormatDescription?
+    private var parameters: [Data] = []
+    private var needsKeyframe = true
+    var nativeWindow: NSWindow { window }
+    var isRendering: Bool { surface.video.status == .rendering }
+
+    public convenience init(descriptor: SeamlessWindowDescriptor, sourceName: String) {
+        // Actual size (1:1 with the source, in points) whenever it fits this
+        // screen; only shrink, preserving aspect, if it's literally bigger
+        // than the available space.
+        let available = NSScreen.main?.visibleFrame.size ?? CGSize(width: 1_280, height: 800)
+        let scale = min(1, available.width / Double(descriptor.width), available.height / Double(descriptor.height))
+        let window = SeamlessProxyWindow(contentRect: NSRect(x: 0, y: 0, width: Double(descriptor.width) * scale,
+            height: Double(descriptor.height) * scale), styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            backing: .buffered, defer: false)
+        self.init(descriptor: descriptor, sourceName: sourceName, window: window)
+    }
+
+    /// Accepts a native host window so foreground routing can be verified
+    /// independently of the process activation policy of an XCTest runner.
+    init(descriptor: SeamlessWindowDescriptor, sourceName: String, window: NSWindow) {
+        self.window = window
+        super.init()
+        // AppKit owns title-bar dragging; only the video surface forwards input.
+        window.title = "\(descriptor.title) — \(sourceName)"
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+        window.styleMask.insert(.fullSizeContentView)
+        window.identifier = NSUserInterfaceItemIdentifier("seamless-proxy")
+        NSApp.setActivationPolicy(.regular)
+        originalIcon = NSApp.applicationIconImage
+        if let icon = descriptor.applicationIconPNG.flatMap(WindowApplicationIcon.pngImage)
+            ?? descriptor.applicationIconRGBA.flatMap(WindowApplicationIcon.iconImage) {
+            NSApp.applicationIconImage = icon
+            window.miniwindowImage = icon
+        }
+        window.isReleasedWhenClosed = false
+        window.contentMinSize = NSSize(width: 160, height: 100)
+        window.contentView = surface
+        window.delegate = self
+        window.acceptsMouseMovedEvents = true
+        surface.input = { [weak self] in self?.onInput?($0) }
+        surface.emergencyStop = { [weak self] in self?.onClose?() }
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+        window.makeFirstResponder(surface)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    /// AVSampleBufferDisplayLayer owns hardware decoding. No unbounded array of
+    /// frames is retained: after a decoder stall, wait for an IDR to recover.
+    @discardableResult public func display(_ frame: SeamlessVideoFrame) throws -> Bool {
+        try frame.validate()
+        guard !window.isMiniaturized else { return false }
+        if surface.video.status == .failed || !surface.video.isReadyForMoreMediaData {
+            surface.video.flushAndRemoveImage(); needsKeyframe = true
+            surface.inputEnabled = false; onInput?(SeamlessInput(kind: .releaseAll))
+            onKeyframeNeeded?()
+        }
+        let changed = parameters != [frame.sps, frame.pps]
+        guard (!needsKeyframe && !changed) || frame.keyframe else { return false }
+        if changed {
+            var next: CMFormatDescription?
+            let status = frame.sps.withUnsafeBytes { sps in
+                frame.pps.withUnsafeBytes { pps in
+                    let pointers = [sps.bindMemory(to: UInt8.self).baseAddress!, pps.bindMemory(to: UInt8.self).baseAddress!]
+                    let sizes = [sps.count, pps.count]
+                    return pointers.withUnsafeBufferPointer { pointers in
+                        sizes.withUnsafeBufferPointer { sizes in
+                            CMVideoFormatDescriptionCreateFromH264ParameterSets(allocator: kCFAllocatorDefault,
+                                parameterSetCount: 2, parameterSetPointers: pointers.baseAddress!,
+                                parameterSetSizes: sizes.baseAddress!, nalUnitHeaderLength: 4, formatDescriptionOut: &next)
+                        }
+                    }
+                }
+            }
+            guard status == noErr, let next else { throw SeamlessWindowError.invalidMessage }
+            let size = CMVideoFormatDescriptionGetDimensions(next)
+            guard size.width == frame.width, size.height == frame.height else { throw SeamlessWindowError.invalidMessage }
+            format = next; parameters = [frame.sps, frame.pps]
+            surface.video.flushAndRemoveImage()
+        }
+        guard let format else { throw SeamlessWindowError.invalidMessage }
+        let dimensions = CMVideoFormatDescriptionGetDimensions(format)
+        guard dimensions.width == frame.width, dimensions.height == frame.height else { throw SeamlessWindowError.invalidMessage }
+        var block: CMBlockBuffer?
+        guard CMBlockBufferCreateWithMemoryBlock(allocator: kCFAllocatorDefault, memoryBlock: nil,
+            blockLength: frame.bytes.count, blockAllocator: kCFAllocatorDefault, customBlockSource: nil,
+            offsetToData: 0, dataLength: frame.bytes.count, flags: 0, blockBufferOut: &block) == noErr,
+              let block else { throw SeamlessWindowError.unavailable }
+        let copied = frame.bytes.withUnsafeBytes {
+            CMBlockBufferReplaceDataBytes(with: $0.baseAddress!, blockBuffer: block, offsetIntoDestination: 0, dataLength: $0.count)
+        }
+        guard copied == noErr else { throw SeamlessWindowError.unavailable }
+        var sample: CMSampleBuffer?
+        var size = frame.bytes.count
+        var timing = CMSampleTimingInfo(duration: .invalid,
+            presentationTimeStamp: CMTime(seconds: ProcessInfo.processInfo.systemUptime, preferredTimescale: 1_000_000),
+            decodeTimeStamp: .invalid)
+        guard CMSampleBufferCreateReady(allocator: kCFAllocatorDefault, dataBuffer: block, formatDescription: format,
+            sampleCount: 1, sampleTimingEntryCount: 1, sampleTimingArray: &timing,
+            sampleSizeEntryCount: 1, sampleSizeArray: &size, sampleBufferOut: &sample) == noErr,
+              let sample else { throw SeamlessWindowError.unavailable }
+        if let attachments = CMSampleBufferGetSampleAttachmentsArray(sample, createIfNecessary: true) {
+            let dictionary = unsafeBitCast(CFArrayGetValueAtIndex(attachments, 0), to: CFMutableDictionary.self)
+            CFDictionarySetValue(dictionary, Unmanaged.passUnretained(kCMSampleAttachmentKey_DisplayImmediately).toOpaque(),
+                                 Unmanaged.passUnretained(kCFBooleanTrue).toOpaque())
+        }
+        surface.sourceSize = CGSize(width: frame.width, height: frame.height)
+        surface.video.enqueue(sample)
+        surface.inputEnabled = true
+        needsKeyframe = false
+        return true
+    }
+
+    public func close() {
+        guard !closing else { return }
+        closing = true
+        NSApp.applicationIconImage = originalIcon
+        surface.video.flushAndRemoveImage()
+        surface.input = nil; surface.emergencyStop = nil
+        window.close()
+    }
+
+    public func windowWillClose(_ notification: Notification) { if !closing { onClose?() } }
+    public func windowDidResignKey(_ notification: Notification) { onInput?(SeamlessInput(kind: .releaseAll)) }
+    public func windowDidMiniaturize(_ notification: Notification) { onInput?(SeamlessInput(kind: .releaseAll)); onVisibility?(false) }
+    public func windowDidDeminiaturize(_ notification: Notification) { needsKeyframe = true; onVisibility?(true); onKeyframeNeeded?() }
+}
+
+@MainActor
+class SeamlessProxyWindow: NSWindow {
+    private var forwardingTitleClick = false
+
+    override func sendEvent(_ event: NSEvent) {
+        if event.type == .leftMouseDown {
+            forwardingTitleClick = event.locationInWindow.y >= contentLayoutRect.maxY &&
+                ![NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton].contains { type in
+                    guard let button = standardWindowButton(type), !button.isHidden else { return false }
+                    return button.convert(button.bounds, to: nil).contains(event.locationInWindow)
+                }
+        }
+        if forwardingTitleClick, let contentView {
+            switch event.type {
+            case .leftMouseDown:
+                makeKeyAndOrderFront(nil)
+                contentView.mouseDown(with: event)
+                return
+            case .leftMouseDragged:
+                contentView.mouseDragged(with: event)
+                return
+            case .leftMouseUp:
+                forwardingTitleClick = false
+                contentView.mouseUp(with: event)
+                return
+            default: break
+            }
+        }
+        super.sendEvent(event)
+    }
+}
+
+@MainActor
+enum WindowApplicationIcon {
+    static func png(_ image: NSImage) -> Data? {
+        for size in [256, 128, 64] {
+            guard let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: size, pixelsHigh: size,
+                bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                colorSpaceName: .deviceRGB, bytesPerRow: size * 4, bitsPerPixel: 32),
+                  let context = NSGraphicsContext(bitmapImageRep: bitmap) else { continue }
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current = context
+            image.draw(in: CGRect(x: 0, y: 0, width: size, height: size), from: .zero, operation: .copy, fraction: 1)
+            NSGraphicsContext.restoreGraphicsState()
+            if let data = bitmap.representation(using: .png, properties: [:]), data.count <= 12_288 { return data }
+        }
+        return nil
+    }
+
+    static func pngImage(_ data: Data) -> NSImage? {
+        guard data.count <= 12_288,
+              let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let width = properties[kCGImagePropertyPixelWidth] as? Int,
+              let height = properties[kCGImagePropertyPixelHeight] as? Int,
+              (1...256).contains(width), (1...256).contains(height),
+              let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else { return nil }
+        return NSImage(cgImage: image, size: NSSize(width: width, height: height))
+    }
+
+    static func iconPixels(_ image: NSImage) -> Data? {
+        guard let bitmap = iconBitmap(), let bytes = bitmap.bitmapData,
+              let context = NSGraphicsContext(bitmapImageRep: bitmap) else { return nil }
+        NSGraphicsContext.saveGraphicsState()
+        defer { NSGraphicsContext.restoreGraphicsState() }
+        NSGraphicsContext.current = context
+        image.draw(in: CGRect(x: 0, y: 0, width: 32, height: 32), from: .zero,
+                   operation: .copy, fraction: 1)
+        return Data(bytes: bytes, count: 4_096)
+    }
+
+    static func iconImage(_ pixels: Data) -> NSImage? {
+        guard pixels.count == 4_096, let bitmap = iconBitmap(), let bytes = bitmap.bitmapData else { return nil }
+        pixels.copyBytes(to: bytes, count: pixels.count)
+        let image = NSImage(size: NSSize(width: 32, height: 32))
+        image.addRepresentation(bitmap)
+        return image
+    }
+
+    private static func iconBitmap() -> NSBitmapImageRep? {
+        NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 32, pixelsHigh: 32,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+            colorSpaceName: .deviceRGB, bytesPerRow: 128, bitsPerPixel: 32)
+    }
+}
+
+@MainActor
+private final class WindowVideoSurface: NSView {
+    let video = AVSampleBufferDisplayLayer()
+    var sourceSize = CGSize(width: 16, height: 16)
+    var inputEnabled = false
+    var input: ((SeamlessInput) -> Void)?
+    var emergencyStop: (() -> Void)?
+    private var tracking: NSTrackingArea?
+    private var draggingLocalWindow = false
+    private var pendingTitleClick: NSEvent?
+    override var acceptsFirstResponder: Bool { true }
+    override var isFlipped: Bool { true }
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        video.videoGravity = .resizeAspect
+        layer?.backgroundColor = NSColor.black.cgColor
+        layer?.addSublayer(video)
+        setAccessibilityLabel("Remote application window")
+        setAccessibilityHelp("Control Option Command Escape returns the window to its source Mac.")
+    }
+    required init?(coder: NSCoder) { nil }
+    override func layout() { super.layout(); video.frame = bounds }
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let tracking { removeTrackingArea(tracking) }
+        let next = NSTrackingArea(rect: .zero, options: [.activeInKeyWindow, .mouseMoved, .inVisibleRect], owner: self, userInfo: nil)
+        addTrackingArea(next); tracking = next
+    }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override func mouseMoved(with event: NSEvent) { pointer(event, .move) }
+    override func mouseDown(with event: NSEvent) {
+        draggingLocalWindow = false
+        pendingTitleClick = nil
+        window?.makeFirstResponder(self)
+        if let window, event.locationInWindow.y >= window.contentLayoutRect.maxY {
+            pendingTitleClick = event
+            return
+        }
+        pointer(event, .leftDown)
+    }
+    override func mouseUp(with event: NSEvent) {
+        if draggingLocalWindow { draggingLocalWindow = false; return }
+        if let down = pendingTitleClick {
+            pendingTitleClick = nil
+            pointer(down, .leftDown)
+        }
+        pointer(event, .leftUp)
+    }
+    override func rightMouseDown(with event: NSEvent) { pointer(event, .rightDown) }
+    override func rightMouseUp(with event: NSEvent) { pointer(event, .rightUp) }
+    override func mouseDragged(with event: NSEvent) {
+        if let down = pendingTitleClick {
+            let distance = hypot(event.locationInWindow.x - down.locationInWindow.x,
+                                 event.locationInWindow.y - down.locationInWindow.y)
+            guard distance >= 4 else { return }
+            pendingTitleClick = nil
+            draggingLocalWindow = true
+            window?.performDrag(with: event)
+            return
+        }
+        if !draggingLocalWindow { pointer(event, .leftDrag) }
+    }
+    override func rightMouseDragged(with event: NSEvent) { pointer(event, .rightDrag) }
+    override func scrollWheel(with event: NSEvent) { pointer(event, .scroll) }
+    override func keyDown(with event: NSEvent) {
+        if event.keyCode == 53 && event.modifierFlags.intersection([.command, .control, .option]) == [.command, .control, .option] {
+            emergencyStop?(); return
+        }
+        keyboard(event, .keyDown)
+    }
+    override func keyUp(with event: NSEvent) { keyboard(event, .keyUp) }
+    override func flagsChanged(with event: NSEvent) { keyboard(event, .flagsChanged) }
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        guard window?.isKeyWindow == true else { return false }
+        keyDown(with: event); return true
+    }
+    private func keyboard(_ event: NSEvent, _ kind: SeamlessInput.Kind) {
+        guard inputEnabled else { return }
+        input?(SeamlessInput(kind: kind, keyCode: event.keyCode, modifiers: UInt64(event.modifierFlags.rawValue) & 0x00ff0000))
+    }
+    private func pointer(_ event: NSEvent, _ kind: SeamlessInput.Kind) {
+        guard inputEnabled else { return }
+        let scale = min(bounds.width / sourceSize.width, bounds.height / sourceSize.height)
+        guard scale.isFinite, scale > 0 else { return }
+        let rect = CGRect(x: (bounds.width - sourceSize.width * scale) / 2,
+                          y: (bounds.height - sourceSize.height * scale) / 2,
+                          width: sourceSize.width * scale, height: sourceSize.height * scale)
+        let point = convert(event.locationInWindow, from: nil)
+        // Button-up outside the letterbox still releases the held button.
+        guard rect.contains(point) || [.leftUp, .rightUp, .leftDrag, .rightDrag].contains(kind) else { return }
+        input?(SeamlessInput(kind: kind, x: min(1, max(0, (point.x - rect.minX) / rect.width)),
+            y: min(1, max(0, (point.y - rect.minY) / rect.height)),
+            modifiers: UInt64(event.modifierFlags.rawValue) & 0x00ff0000,
+            deltaX: kind == .scroll ? max(-4_096, min(4_096, Double(event.scrollingDeltaX))) : 0,
+            deltaY: kind == .scroll ? max(-4_096, min(4_096, Double(event.scrollingDeltaY))) : 0))
+    }
+}

@@ -34,6 +34,7 @@ final class AppModel: ObservableObject {
     @Published var lastError: String?
     @Published private(set) var inputMonitoringPermission: PermissionState = .unknown
     @Published private(set) var postEventsPermission: PermissionState = .unknown
+    @Published private(set) var screenRecordingPermission: PermissionState = .unknown
     @Published private(set) var launchAtLogin = false
     @Published private(set) var diagnosticLoggingEnabled = false
 
@@ -395,6 +396,7 @@ final class AppModel: ObservableObject {
     func refreshPermissions() {
         inputMonitoringPermission = permissionService.state(for: .inputMonitoring)
         postEventsPermission = permissionService.state(for: .postEvents)
+        screenRecordingPermission = permissionService.state(for: .screenRecording)
     }
 
     func refreshConnections() {
@@ -477,6 +479,7 @@ final class AppModel: ObservableObject {
         case .inputMonitoring: anchor = "Privacy_ListenEvent"
         case .postEvents: anchor = "Privacy_Accessibility"
         case .localNetwork: anchor = "Privacy_LocalNetwork"
+        case .screenRecording: anchor = "Privacy_ScreenCapture"
         }
         guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(anchor)") else { return }
         NSWorkspace.shared.open(url)

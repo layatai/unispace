@@ -30,6 +30,8 @@
 		<string>_unispace-xfer._tcp</string>
 		<string>_unispace-clip._tcp</string>
 		<string>_unispace-pair._tcp</string>
+		<string>_unispace-win._tcp</string>
+		<string>_unispace-vid._tcp</string>
 	</array>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>UniSpace discovers and connects to trusted Macs, Linux PCs, and Windows PCs so you can control them and share clipboard data and files over your private network.</string>
