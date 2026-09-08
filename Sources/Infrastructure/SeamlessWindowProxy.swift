@@ -35,13 +35,11 @@ public final class SeamlessWindowProxy: NSObject, NSWindowDelegate {
     init(descriptor: SeamlessWindowDescriptor, sourceName: String, window: NSWindow) {
         self.window = window
         super.init()
-        // The captured frame already shows the source's own title bar, so the
-        // proxy's native one would duplicate it — keep the title for Mission
-        // Control/window-switcher, but don't draw a second one on screen.
+        // AppKit owns title-bar dragging; only the video surface forwards input.
         window.title = "\(descriptor.title) — \(sourceName)"
-        window.titleVisibility = .hidden
-        window.titlebarAppearsTransparent = true
-        window.styleMask.insert(.fullSizeContentView)
+        window.titleVisibility = .visible
+        window.titlebarAppearsTransparent = false
+        window.styleMask.remove(.fullSizeContentView)
         window.isReleasedWhenClosed = false
         window.contentMinSize = NSSize(width: 160, height: 100)
         window.contentView = surface

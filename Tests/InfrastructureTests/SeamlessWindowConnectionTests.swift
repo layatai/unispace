@@ -111,6 +111,12 @@ final class SeamlessWindowConnectionTests: XCTestCase {
         var inputs: [SeamlessInput] = []
         proxy.onInput = { inputs.append($0) }
         let content = try XCTUnwrap(proxy.nativeWindow.contentView)
+        XCTAssertFalse(proxy.nativeWindow.styleMask.contains(.fullSizeContentView))
+        XCTAssertLessThan(content.frame.height, proxy.nativeWindow.frame.height,
+                          "Local title-bar dragging must remain outside the remote input surface")
+        let inputsBeforeMove = inputs.count
+        proxy.nativeWindow.setFrameOrigin(CGPoint(x: 120, y: 160))
+        XCTAssertEqual(inputs.count, inputsBeforeMove, "Moving the proxy must not send remote input")
         let click = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseDown,
             location: CGPoint(x: content.bounds.midX, y: content.bounds.midY), modifierFlags: [], timestamp: 1,
             windowNumber: proxy.nativeWindow.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: 1))
