@@ -136,9 +136,19 @@ final class SeamlessWindowConnectionTests: XCTestCase {
         var inputs: [SeamlessInput] = []
         proxy.onInput = { inputs.append($0) }
         let content = try XCTUnwrap(proxy.nativeWindow.contentView)
-        XCTAssertFalse(proxy.nativeWindow.styleMask.contains(.fullSizeContentView))
-        XCTAssertLessThan(content.frame.height, proxy.nativeWindow.frame.height,
-                          "Local title-bar dragging must remain outside the remote input surface")
+        XCTAssertTrue(proxy.nativeWindow.styleMask.contains(.fullSizeContentView))
+        XCTAssertTrue(proxy.nativeWindow.titlebarAppearsTransparent)
+        XCTAssertEqual(proxy.nativeWindow.titleVisibility, .hidden)
+        let titleDrag = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseDown,
+            location: CGPoint(x: content.bounds.midX, y: proxy.nativeWindow.frame.height - 5),
+            modifierFlags: [], timestamp: 1, windowNumber: proxy.nativeWindow.windowNumber,
+            context: nil, eventNumber: 1, clickCount: 1, pressure: 1))
+        let beforeTitleDrag = inputs.count
+        content.mouseDown(with: titleDrag)
+        content.mouseDragged(with: titleDrag)
+        content.mouseUp(with: titleDrag)
+        XCTAssertEqual(host.localDrags, 1)
+        XCTAssertEqual(inputs.count, beforeTitleDrag, "Title-area gestures must not reach the source Mac")
         let inputsBeforeMove = inputs.count
         proxy.nativeWindow.setFrameOrigin(CGPoint(x: 120, y: 160))
         XCTAssertEqual(inputs.count, inputsBeforeMove, "Moving the proxy must not send remote input")
@@ -469,6 +479,8 @@ final class SeamlessWindowConnectionTests: XCTestCase {
 
 @MainActor
 private final class ForegroundWindowFixture: NSWindow {
+    var localDrags = 0
+    override func performDrag(with event: NSEvent) { localDrags += 1 }
     var foreground = false
     var minimized = false
     override var isKeyWindow: Bool { foreground }

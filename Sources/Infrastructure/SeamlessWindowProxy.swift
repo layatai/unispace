@@ -38,9 +38,9 @@ public final class SeamlessWindowProxy: NSObject, NSWindowDelegate {
         super.init()
         // AppKit owns title-bar dragging; only the video surface forwards input.
         window.title = "\(descriptor.title) — \(sourceName)"
-        window.titleVisibility = .visible
-        window.titlebarAppearsTransparent = false
-        window.styleMask.remove(.fullSizeContentView)
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+        window.styleMask.insert(.fullSizeContentView)
         window.identifier = NSUserInterfaceItemIdentifier("seamless-proxy")
         NSApp.setActivationPolicy(.regular)
         originalIcon = NSApp.applicationIconImage
@@ -178,6 +178,7 @@ private final class WindowVideoSurface: NSView {
     var input: ((SeamlessInput) -> Void)?
     var emergencyStop: (() -> Void)?
     private var tracking: NSTrackingArea?
+    private var draggingLocalWindow = false
     override var acceptsFirstResponder: Bool { true }
     override var isFlipped: Bool { true }
 
@@ -200,11 +201,25 @@ private final class WindowVideoSurface: NSView {
     }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     override func mouseMoved(with event: NSEvent) { pointer(event, .move) }
-    override func mouseDown(with event: NSEvent) { window?.makeFirstResponder(self); pointer(event, .leftDown) }
-    override func mouseUp(with event: NSEvent) { pointer(event, .leftUp) }
+    override func mouseDown(with event: NSEvent) {
+        draggingLocalWindow = false
+        if let window, event.locationInWindow.y >= window.contentLayoutRect.maxY {
+            draggingLocalWindow = true
+            window.performDrag(with: event)
+            return
+        }
+        window?.makeFirstResponder(self)
+        pointer(event, .leftDown)
+    }
+    override func mouseUp(with event: NSEvent) {
+        if draggingLocalWindow { draggingLocalWindow = false; return }
+        pointer(event, .leftUp)
+    }
     override func rightMouseDown(with event: NSEvent) { pointer(event, .rightDown) }
     override func rightMouseUp(with event: NSEvent) { pointer(event, .rightUp) }
-    override func mouseDragged(with event: NSEvent) { pointer(event, .leftDrag) }
+    override func mouseDragged(with event: NSEvent) {
+        if !draggingLocalWindow { pointer(event, .leftDrag) }
+    }
     override func rightMouseDragged(with event: NSEvent) { pointer(event, .rightDrag) }
     override func scrollWheel(with event: NSEvent) { pointer(event, .scroll) }
     override func keyDown(with event: NSEvent) {
