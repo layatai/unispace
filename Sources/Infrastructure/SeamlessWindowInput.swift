@@ -177,7 +177,10 @@ public final class SeamlessWindowInput: SeamlessInputTarget {
 
     static func frontWindow(at point: CGPoint, in list: [[String: Any]]) -> CGWindowID? {
         return list.first(where: { item in
-            guard let bounds = item[kCGWindowBounds as String] as? [String: Any],
+            // Dock/WindowServer overlays can span the screen without receiving
+            // clicks. Match the normal-window layer used by source selection.
+            guard (item[kCGWindowLayer as String] as? Int) == 0,
+                  let bounds = item[kCGWindowBounds as String] as? [String: Any],
                   let rect = CGRect(dictionaryRepresentation: bounds as CFDictionary),
                   (item[kCGWindowAlpha as String] as? Double ?? 1) > 0 else { return false }
             return rect.contains(point)

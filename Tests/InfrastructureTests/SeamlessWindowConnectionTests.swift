@@ -12,11 +12,14 @@ import UniSpaceDomain
 final class SeamlessWindowConnectionTests: XCTestCase {
     func testClickHitTestIdentifiesOccludingWindow() {
         let bounds = CGRect(x: 0, y: 0, width: 640, height: 480).dictionaryRepresentation
-        let shared: [String: Any] = [kCGWindowNumber as String: UInt32(42), kCGWindowBounds as String: bounds]
-        let cover: [String: Any] = [kCGWindowNumber as String: UInt32(99), kCGWindowBounds as String: bounds]
+        let shared: [String: Any] = [kCGWindowNumber as String: UInt32(42), kCGWindowBounds as String: bounds, kCGWindowLayer as String: 0]
+        let cover: [String: Any] = [kCGWindowNumber as String: UInt32(99), kCGWindowBounds as String: bounds, kCGWindowLayer as String: 0]
+        let dockOverlay: [String: Any] = [kCGWindowNumber as String: UInt32(23),
+            kCGWindowBounds as String: bounds, kCGWindowLayer as String: 20, kCGWindowAlpha as String: 1]
         let point = CGPoint(x: 100, y: 100)
         XCTAssertEqual(SeamlessWindowInput.frontWindow(at: point, in: [cover, shared]), 99)
         XCTAssertEqual(SeamlessWindowInput.frontWindow(at: point, in: [shared, cover]), 42)
+        XCTAssertEqual(SeamlessWindowInput.frontWindow(at: point, in: [dockOverlay, shared]), 42)
         XCTAssertNil(SeamlessWindowInput.frontWindow(at: CGPoint(x: 800, y: 800), in: [shared]))
     }
 
