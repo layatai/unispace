@@ -55,22 +55,33 @@ public final class SeamlessWindowInput: SeamlessInputTarget {
                   $0.id == windowID && $0.frame.sizeMatches(approvedFrame.size)
               })?.frame
         else { throw SeamlessWindowError.unavailable }
+        let point = CGPoint(x: bounds.minX + input.x * max(0, bounds.width - 1),
+                            y: bounds.minY + input.y * max(0, bounds.height - 1))
         // Keyboard events go straight to the target process regardless of
         // front/back state, but mouse events are still hit-tested against
         // real screen position — a click posted before activation actually
         // lands is swallowed by whatever's really on top. Only mouse-down
         // needs this; drags/up within the same gesture follow once active.
-        if (input.kind == .leftDown || input.kind == .rightDown),
-           NSRunningApplication(processIdentifier: process)?.isActive != true {
-            NSRunningApplication(processIdentifier: process)?.activate(options: [])
-            let deadline = Date().addingTimeInterval(0.15)
-            while NSRunningApplication(processIdentifier: process)?.isActive != true, Date() < deadline {
+        if input.kind == .leftDown || input.kind == .rightDown {
+            guard let application = NSRunningApplication(processIdentifier: process) else {
+                throw SeamlessWindowError.unavailable
+            }
+            NSApp.yieldActivation(to: application)
+            guard application.activate(options: [.activateAllWindows]) else {
+                throw SeamlessWindowError.unavailable
+            }
+            let deadline = Date().addingTimeInterval(0.5)
+            while (!application.isActive || Self.frontWindow(at: point) != windowID), Date() < deadline {
                 RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.01))
             }
+            guard application.isActive else { throw SeamlessWindowError.unavailable }
         }
         // Both CG bounds and the normalized proxy picture use top-left origin.
-        let point = CGPoint(x: bounds.minX + input.x * max(0, bounds.width - 1),
-                            y: bounds.minY + input.y * max(0, bounds.height - 1))
+        if input.kind == .leftDown || input.kind == .rightDown {
+            guard isAvailable, Self.frontWindow(at: point) == windowID else {
+                throw SeamlessWindowError.unavailable
+            }
+        }
         lastPoint = point
         // postToPid carries the event's own location, but doesn't move the
         // real cursor — some apps validate a click/drag against the actual
@@ -153,6 +164,21 @@ public final class SeamlessWindowInput: SeamlessInputTarget {
     static func matches(capturedID: CGWindowID, capturedFrame: CGRect,
                         listedID: CGWindowID, listedFrame: CGRect) -> Bool {
         capturedID == listedID && listedFrame.matches(capturedFrame)
+    }
+
+    private static func frontWindow(at point: CGPoint) -> CGWindowID? {
+        guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements],
+            kCGNullWindowID) as? [[String: Any]] else { return nil }
+        return frontWindow(at: point, in: list)
+    }
+
+    static func frontWindow(at point: CGPoint, in list: [[String: Any]]) -> CGWindowID? {
+        return list.first(where: { item in
+            guard let bounds = item[kCGWindowBounds as String] as? [String: Any],
+                  let rect = CGRect(dictionaryRepresentation: bounds as CFDictionary),
+                  (item[kCGWindowAlpha as String] as? Double ?? 1) > 0 else { return false }
+            return rect.contains(point)
+        })?[kCGWindowNumber as String] as? CGWindowID
     }
 
     private struct ListedWindow {

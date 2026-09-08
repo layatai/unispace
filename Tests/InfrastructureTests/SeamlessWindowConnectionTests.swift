@@ -10,6 +10,16 @@ import UniSpaceDomain
 
 @MainActor
 final class SeamlessWindowConnectionTests: XCTestCase {
+    func testClickHitTestIdentifiesOccludingWindow() {
+        let bounds = CGRect(x: 0, y: 0, width: 640, height: 480).dictionaryRepresentation
+        let shared: [String: Any] = [kCGWindowNumber as String: UInt32(42), kCGWindowBounds as String: bounds]
+        let cover: [String: Any] = [kCGWindowNumber as String: UInt32(99), kCGWindowBounds as String: bounds]
+        let point = CGPoint(x: 100, y: 100)
+        XCTAssertEqual(SeamlessWindowInput.frontWindow(at: point, in: [cover, shared]), 99)
+        XCTAssertEqual(SeamlessWindowInput.frontWindow(at: point, in: [shared, cover]), 42)
+        XCTAssertNil(SeamlessWindowInput.frontWindow(at: CGPoint(x: 800, y: 800), in: [shared]))
+    }
+
     func testCapturePreservesRetinaPixelsWithinProtocolLimits() throws {
         let retina = try SeamlessWindowCapture.captureSize(points: CGSize(width: 1280, height: 800), scale: 2)
         XCTAssertEqual(retina.width, 2560)
