@@ -53,8 +53,13 @@ public final class SeamlessWindowService {
     }
 
     public func start(workspace: WorkspaceSnapshot, local: DeviceID, key: Data) throws {
-        stop()
         guard key.count == 32 else { throw SeamlessWindowError.permissionDenied }
+        if let current = configuration,
+           current.workspace.id == workspace.id, current.local == local, current.key == key {
+            configuration = (workspace, local, key)
+            return
+        }
+        stop()
         configuration = (workspace, local, key)
         let generation = self.generation
         do {

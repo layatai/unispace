@@ -177,6 +177,11 @@ final class SeamlessWindowConnectionTests: XCTestCase {
             devices: [DeviceDescriptor(id: local, name: "Fixture", platform: .macOS)])
         try service.start(workspace: workspace, local: local, key: Data(repeating: 4, count: 32))
         try await eventually { service.listeningPorts.count == 2 && !service.isPresenting }
+        let ports = service.listeningPorts
+        let refreshed = WorkspaceSnapshot(id: workspace.id, name: "Refreshed fixture", localDeviceID: local,
+            devices: workspace.devices)
+        try service.start(workspace: refreshed, local: local, key: Data(repeating: 4, count: 32))
+        XCTAssertEqual(service.listeningPorts, ports, "Workspace refresh must not rebind active listeners")
         XCTAssertNil(service.incoming)
         service.stop()
         try await eventually { !service.isPresenting }
