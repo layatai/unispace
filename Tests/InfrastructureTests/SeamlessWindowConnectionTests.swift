@@ -181,8 +181,12 @@ final class SeamlessWindowConnectionTests: XCTestCase {
             modifierFlags: [], timestamp: 1, windowNumber: proxy.nativeWindow.windowNumber,
             context: nil, eventNumber: 1, clickCount: 1, pressure: 1))
         let beforeTitleDrag = inputs.count
-        content.mouseDown(with: titleDrag)
-        content.mouseUp(with: titleDrag)
+        let titleUp = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseUp,
+            location: titleDrag.locationInWindow, modifierFlags: [], timestamp: 2,
+            windowNumber: proxy.nativeWindow.windowNumber, context: nil,
+            eventNumber: 2, clickCount: 1, pressure: 0))
+        host.sendEvent(titleDrag)
+        host.sendEvent(titleUp)
         XCTAssertEqual(inputs.dropFirst(beforeTitleDrag).map(\.kind), [.leftDown, .leftUp],
                        "Tabs in the title area must receive a complete click")
         XCTAssertEqual(host.localDrags, 0)
@@ -534,7 +538,7 @@ final class SeamlessWindowConnectionTests: XCTestCase {
 }
 
 @MainActor
-private final class ForegroundWindowFixture: NSWindow {
+private final class ForegroundWindowFixture: SeamlessProxyWindow {
     var localDrags = 0
     override func performDrag(with event: NSEvent) { localDrags += 1 }
     var foreground = false

@@ -25,7 +25,7 @@ public final class SeamlessWindowProxy: NSObject, NSWindowDelegate {
         // than the available space.
         let available = NSScreen.main?.visibleFrame.size ?? CGSize(width: 1_280, height: 800)
         let scale = min(1, available.width / Double(descriptor.width), available.height / Double(descriptor.height))
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: Double(descriptor.width) * scale,
+        let window = SeamlessProxyWindow(contentRect: NSRect(x: 0, y: 0, width: Double(descriptor.width) * scale,
             height: Double(descriptor.height) * scale), styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered, defer: false)
         self.init(descriptor: descriptor, sourceName: sourceName, window: window)
@@ -140,6 +140,38 @@ public final class SeamlessWindowProxy: NSObject, NSWindowDelegate {
     public func windowDidResignKey(_ notification: Notification) { onInput?(SeamlessInput(kind: .releaseAll)) }
     public func windowDidMiniaturize(_ notification: Notification) { onInput?(SeamlessInput(kind: .releaseAll)); onVisibility?(false) }
     public func windowDidDeminiaturize(_ notification: Notification) { needsKeyframe = true; onVisibility?(true); onKeyframeNeeded?() }
+}
+
+@MainActor
+class SeamlessProxyWindow: NSWindow {
+    private var forwardingTitleClick = false
+
+    override func sendEvent(_ event: NSEvent) {
+        if event.type == .leftMouseDown {
+            forwardingTitleClick = event.locationInWindow.y >= contentLayoutRect.maxY &&
+                ![NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton].contains { type in
+                    guard let button = standardWindowButton(type), !button.isHidden else { return false }
+                    return button.convert(button.bounds, to: nil).contains(event.locationInWindow)
+                }
+        }
+        if forwardingTitleClick, let contentView {
+            switch event.type {
+            case .leftMouseDown:
+                makeKeyAndOrderFront(nil)
+                contentView.mouseDown(with: event)
+                return
+            case .leftMouseDragged:
+                contentView.mouseDragged(with: event)
+                return
+            case .leftMouseUp:
+                forwardingTitleClick = false
+                contentView.mouseUp(with: event)
+                return
+            default: break
+            }
+        }
+        super.sendEvent(event)
+    }
 }
 
 @MainActor
