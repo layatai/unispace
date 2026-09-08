@@ -10,6 +10,33 @@ import UniSpaceDomain
 
 @MainActor
 final class SeamlessWindowConnectionTests: XCTestCase {
+    func testCapturePreservesRetinaPixelsWithinProtocolLimits() throws {
+        let retina = try SeamlessWindowCapture.captureSize(points: CGSize(width: 1280, height: 800), scale: 2)
+        XCTAssertEqual(retina.width, 2560)
+        XCTAssertEqual(retina.height, 1600)
+        let standard = try SeamlessWindowCapture.captureSize(points: CGSize(width: 1280, height: 800), scale: 1)
+        XCTAssertEqual(standard.width, 1280)
+        XCTAssertEqual(standard.height, 800)
+        let large = try SeamlessWindowCapture.captureSize(points: CGSize(width: 4000, height: 3000), scale: 2)
+        XCTAssertLessThanOrEqual(large.width * large.height, SeamlessWindowLimits.maximumPixels)
+        XCTAssertLessThanOrEqual(max(large.width, large.height), SeamlessWindowLimits.maximumDimension)
+        XCTAssertEqual(large.width % 2, 0)
+        XCTAssertEqual(large.height % 2, 0)
+        XCTAssertThrowsError(try SeamlessWindowCapture.captureSize(points: .zero, scale: 2))
+    }
+
+    func testRetinaFrameEncodesAndDisplaysAtNativeResolution() async throws {
+        _ = NSApplication.shared
+        let frame = try await encodedFrame(epoch: UUID(), width: 2560, height: 1600)
+        XCTAssertEqual(frame.width, 2560)
+        XCTAssertEqual(frame.height, 1600)
+        let descriptor = SeamlessWindowDescriptor(id: RemoteWindowID(), title: "Retina fixture",
+            application: "Fixture", width: 1280, height: 800)
+        let proxy = SeamlessWindowProxy(descriptor: descriptor, sourceName: "Source")
+        defer { proxy.close() }
+        XCTAssertTrue(try proxy.display(frame))
+    }
+
     func testSourceIconRoundTripAndProxyWindowControls() throws {
         _ = NSApplication.shared
         var descriptor = SeamlessWindowDescriptor(id: RemoteWindowID(), title: "Icon fixture",

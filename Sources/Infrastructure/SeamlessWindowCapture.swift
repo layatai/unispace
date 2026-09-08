@@ -52,9 +52,9 @@ public final class SeamlessWindowCapture: SeamlessCaptureSource {
                       onFailure: @escaping @MainActor @Sendable () -> Void) async throws {
         await stop()
         guard let window = windows[id] else { throw SeamlessWindowError.unavailable }
-        let ratio = min(1, min(1_920 / window.frame.width, 1_080 / window.frame.height))
-        let width = max(16, Int(window.frame.width * ratio) / 2 * 2)
-        let height = max(16, Int(window.frame.height * ratio) / 2 * 2)
+        let filter = SCContentFilter(desktopIndependentWindow: window)
+        let size = try Self.captureSize(points: filter.contentRect.size, scale: CGFloat(filter.pointPixelScale))
+        let width = size.width, height = size.height
         let output = try WindowH264Output(epoch: epoch, width: width, height: height,
                                         onFrame: onFrame, onFailure: onFailure)
         let configuration = SCStreamConfiguration()
@@ -66,12 +66,25 @@ public final class SeamlessWindowCapture: SeamlessCaptureSource {
         configuration.ignoreShadowsSingleWindow = true
         configuration.scalesToFit = true
         configuration.pixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
-        let stream = SCStream(filter: SCContentFilter(desktopIndependentWindow: window),
+        let stream = SCStream(filter: filter,
                               configuration: configuration, delegate: output)
         try stream.addStreamOutput(output, type: .screen, sampleHandlerQueue: output.queue)
         self.stream = stream; self.output = output
         do { try await stream.startCapture() }
         catch { await stop(); throw error }
+    }
+
+    static func captureSize(points: CGSize, scale: CGFloat) throws -> (width: Int, height: Int) {
+        let width = points.width * scale, height = points.height * scale
+        guard width.isFinite, height.isFinite, width >= 16, height >= 16 else {
+            throw SeamlessWindowError.invalidMessage
+        }
+        let ratio = min(1, CGFloat(SeamlessWindowLimits.maximumDimension) / max(width, height),
+            sqrt(CGFloat(SeamlessWindowLimits.maximumPixels) / width / height))
+        let result = (width: max(16, Int(width * ratio) / 2 * 2),
+                      height: max(16, Int(height * ratio) / 2 * 2))
+        try SeamlessWindowDescriptor.validateSize(width: result.width, height: result.height)
+        return result
     }
 
     public func requestKeyframe() { output?.requestKeyframe() }
@@ -122,7 +135,8 @@ final class WindowH264Output: NSObject, SCStreamOutput, SCStreamDelegate, @unche
         for (key, value) in [
             (kVTCompressionPropertyKey_RealTime, kCFBooleanTrue as CFTypeRef),
             (kVTCompressionPropertyKey_AllowFrameReordering, kCFBooleanFalse as CFTypeRef),
-            (kVTCompressionPropertyKey_AverageBitRate, NSNumber(value: 8_000_000)),
+            (kVTCompressionPropertyKey_AverageBitRate,
+             NSNumber(value: max(8_000_000, min(32_000_000, width * height * 4)))),
             (kVTCompressionPropertyKey_MaxKeyFrameInterval, NSNumber(value: 60)),
             (kVTCompressionPropertyKey_ExpectedFrameRate, NSNumber(value: 30))
         ] {
