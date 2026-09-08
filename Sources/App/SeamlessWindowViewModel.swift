@@ -18,9 +18,11 @@ final class SeamlessWindowViewModel: ObservableObject {
     @Published private(set) var remoteWindows: [SeamlessWindowDescriptor] = []
     @Published private(set) var remoteCatalogs: [DeviceID: [SeamlessWindowDescriptor]] = [:]
     @Published private(set) var loadingRemoteWindows = false
+    @Published private(set) var remoteCatalogError: String?
     @Published var selectedRemoteWindow: RemoteWindowID?
     private let service = SeamlessWindowService()
     private var subscription: AnyCancellable?
+    private var catalogRefreshTask: Task<Void, Never>?
     private var configuration: ContinuityWorkspaceConfiguration?
     private weak var appModel: AppModel?
     private static let enabledPreferenceKey = "SeamlessWindowSharingEnabled"
@@ -38,6 +40,7 @@ final class SeamlessWindowViewModel: ObservableObject {
             // so local and remote input don't fight over the same window.
             if self.busy && !wasBusy { self.appModel?.stopControlling() }
             let catalog = self.service.remoteCatalog
+            if let catalog { self.remoteCatalogs[catalog.peer] = catalog.windows }
             self.remoteWindows = catalog?.peer == self.selectedPeer ? (catalog?.windows ?? []) : []
             if !self.remoteWindows.contains(where: { $0.id == self.selectedRemoteWindow }) {
                 self.selectedRemoteWindow = self.remoteWindows.first?.id
@@ -52,7 +55,16 @@ final class SeamlessWindowViewModel: ObservableObject {
             guard let self, let appModel else { return }
             self.refresh(context, local: appModel.localDevice)
         }
+        catalogRefreshTask = Task { [weak self] in
+            while !Task.isCancelled {
+                await self?.refreshAllRemoteWindows()
+                do { try await Task.sleep(for: .seconds(15)) }
+                catch { return }
+            }
+        }
     }
+
+    deinit { catalogRefreshTask?.cancel() }
 
     /// The user-facing toggle: always remembers the preference. Internal
     /// paths that force sharing off for a reason other than the user's own
@@ -119,12 +131,18 @@ final class SeamlessWindowViewModel: ObservableObject {
     func refreshAllRemoteWindows() async {
         guard enabled, !busy, !loadingRemoteWindows else { return }
         loadingRemoteWindows = true
-        remoteCatalogs = [:]
+        remoteCatalogError = nil
+        remoteCatalogs = remoteCatalogs.filter { id, _ in peers.contains(where: { $0.id == id }) }
         defer { loadingRemoteWindows = false }
         for peer in peers {
             guard enabled, !busy, !Task.isCancelled else { return }
-            if let catalog = try? await service.fetchCatalog(from: peer.id), enabled, !busy {
+            do {
+                let catalog = try await service.fetchCatalog(from: peer.id)
+                guard enabled, !busy else { return }
                 remoteCatalogs[peer.id] = catalog
+            } catch {
+                remoteCatalogs.removeValue(forKey: peer.id)
+                remoteCatalogError = "Could not fetch windows from \(peer.name). Check window sharing on that Mac."
             }
         }
     }

@@ -97,7 +97,8 @@ struct UniSpaceApp: App {
                 }
             }
             if seamlessModel.remoteCatalogs.values.allSatisfy({ $0.isEmpty }) {
-                Text(seamlessModel.loadingRemoteWindows ? "Loading windows…" : "No remote windows available")
+                Text(seamlessModel.loadingRemoteWindows ? "Loading windows…" :
+                    (seamlessModel.remoteCatalogError ?? "No remote windows available"))
             }
             Divider()
             Button("Refresh Windows from All Macs") {
@@ -106,7 +107,6 @@ struct UniSpaceApp: App {
             .disabled(seamlessModel.loadingRemoteWindows)
         }
         .disabled(!seamlessModel.enabled || seamlessModel.busy)
-        .task(id: seamlessModel.enabled) { await seamlessModel.refreshAllRemoteWindows() }
 
         Divider()
 
