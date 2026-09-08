@@ -28,9 +28,6 @@ struct UniSpaceApp: App {
                     clipboardModel.bind(to: model)
                     seamlessModel.bind(to: model)
                 }
-                .onChange(of: seamlessModel.busy) { _, busy in
-                    if busy { openSeamless() }
-                }
                 .onDisappear { DockIconVisibility.hideWhenNoVisibleWindows() }
         }
         .defaultSize(width: 900, height: 640)
@@ -72,7 +69,7 @@ struct UniSpaceApp: App {
         Divider()
 
         Button("Seamless Windows…") { openSeamless() }
-        if seamlessModel.enabled && !seamlessModel.windows.isEmpty && !seamlessModel.peers.isEmpty {
+        if seamlessModel.enabled {
             Menu("Move Window to Mac") {
                 ForEach(seamlessModel.peers) { peer in
                     Menu(peer.name) {
@@ -81,6 +78,11 @@ struct UniSpaceApp: App {
                         }
                     }
                 }
+                Divider()
+                Button("Refresh Windows on This Mac") {
+                    Task { await seamlessModel.refreshWindows() }
+                }
+                .disabled(seamlessModel.loading)
             }
             .disabled(seamlessModel.busy)
         }

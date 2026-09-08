@@ -53,6 +53,7 @@ public struct SeamlessWindowDescriptor: Codable, Equatable, Sendable {
 
     /// Optional 32-by-32 RGBA pixels, sent only with the presentation offer.
     public var applicationIconRGBA: Data?
+    public var applicationIconPNG: Data?
 
     public init(id: RemoteWindowID, title: String, application: String, width: Int, height: Int) {
         self.id = id; self.title = title; self.application = application
@@ -64,6 +65,9 @@ public struct SeamlessWindowDescriptor: Codable, Equatable, Sendable {
             throw SeamlessWindowError.invalidMessage
         }
         guard applicationIconRGBA == nil || applicationIconRGBA?.count == 4_096 else {
+            throw SeamlessWindowError.invalidMessage
+        }
+        if let applicationIconPNG, applicationIconPNG.isEmpty || applicationIconPNG.count > 12_288 {
             throw SeamlessWindowError.invalidMessage
         }
         try Self.validateSize(width: width, height: height)

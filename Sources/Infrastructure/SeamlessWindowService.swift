@@ -150,7 +150,8 @@ public final class SeamlessWindowService {
         let lease = WindowPresentationLease(windowID: descriptor.id, source: configuration.local, destination: peer)
         try state.offer(lease, now: now)
         var offered = descriptor
-        offered.applicationIconRGBA = capture.applicationIcon(for: descriptor.id)
+        offered.applicationIconRGBA = nil
+        offered.applicationIconPNG = capture.applicationIcon(for: descriptor.id)
         self.input = input; self.descriptor = offered; offerSent = false
         do {
             let endpoint = try endpoint(for: peer, video: false)

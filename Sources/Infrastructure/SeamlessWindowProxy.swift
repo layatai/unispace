@@ -1,6 +1,7 @@
 import AppKit
 import AVFoundation
 import CoreMedia
+import ImageIO
 import UniSpaceDomain
 
 @MainActor
@@ -44,7 +45,8 @@ public final class SeamlessWindowProxy: NSObject, NSWindowDelegate {
         window.identifier = NSUserInterfaceItemIdentifier("seamless-proxy")
         NSApp.setActivationPolicy(.regular)
         originalIcon = NSApp.applicationIconImage
-        if let pixels = descriptor.applicationIconRGBA, let icon = WindowApplicationIcon.iconImage(pixels) {
+        if let icon = descriptor.applicationIconPNG.flatMap(WindowApplicationIcon.pngImage)
+            ?? descriptor.applicationIconRGBA.flatMap(WindowApplicationIcon.iconImage) {
             NSApp.applicationIconImage = icon
             window.miniwindowImage = icon
         }
@@ -176,6 +178,32 @@ class SeamlessProxyWindow: NSWindow {
 
 @MainActor
 enum WindowApplicationIcon {
+    static func png(_ image: NSImage) -> Data? {
+        for size in [256, 128, 64] {
+            guard let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: size, pixelsHigh: size,
+                bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                colorSpaceName: .deviceRGB, bytesPerRow: size * 4, bitsPerPixel: 32),
+                  let context = NSGraphicsContext(bitmapImageRep: bitmap) else { continue }
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current = context
+            image.draw(in: CGRect(x: 0, y: 0, width: size, height: size), from: .zero, operation: .copy, fraction: 1)
+            NSGraphicsContext.restoreGraphicsState()
+            if let data = bitmap.representation(using: .png, properties: [:]), data.count <= 12_288 { return data }
+        }
+        return nil
+    }
+
+    static func pngImage(_ data: Data) -> NSImage? {
+        guard data.count <= 12_288,
+              let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let width = properties[kCGImagePropertyPixelWidth] as? Int,
+              let height = properties[kCGImagePropertyPixelHeight] as? Int,
+              (1...256).contains(width), (1...256).contains(height),
+              let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else { return nil }
+        return NSImage(cgImage: image, size: NSSize(width: width, height: height))
+    }
+
     static func iconPixels(_ image: NSImage) -> Data? {
         guard let bitmap = iconBitmap(), let bytes = bitmap.bitmapData,
               let context = NSGraphicsContext(bitmapImageRep: bitmap) else { return nil }

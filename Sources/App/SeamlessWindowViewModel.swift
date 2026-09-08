@@ -12,14 +12,9 @@ final class SeamlessWindowViewModel: ObservableObject {
     @Published private(set) var windows: [SeamlessWindowDescriptor] = []
     @Published private(set) var peers: [DeviceDescriptor] = []
     @Published private(set) var loading = false
-    @Published var selectedWindow: RemoteWindowID?
-    @Published var selectedPeer: DeviceID?
-    /// The peer's window list, fetched on demand by `requestRemoteWindows`.
-    @Published private(set) var remoteWindows: [SeamlessWindowDescriptor] = []
     @Published private(set) var remoteCatalogs: [DeviceID: [SeamlessWindowDescriptor]] = [:]
     @Published private(set) var loadingRemoteWindows = false
     @Published private(set) var remoteCatalogError: String?
-    @Published var selectedRemoteWindow: RemoteWindowID?
     private let service = SeamlessWindowService()
     private var subscription: AnyCancellable?
     private var catalogRefreshTask: Task<Void, Never>?
@@ -41,10 +36,6 @@ final class SeamlessWindowViewModel: ObservableObject {
             if self.busy && !wasBusy { self.appModel?.stopControlling() }
             let catalog = self.service.remoteCatalog
             if let catalog { self.remoteCatalogs[catalog.peer] = catalog.windows }
-            self.remoteWindows = catalog?.peer == self.selectedPeer ? (catalog?.windows ?? []) : []
-            if !self.remoteWindows.contains(where: { $0.id == self.selectedRemoteWindow }) {
-                self.selectedRemoteWindow = self.remoteWindows.first?.id
-            }
         }
     }
 
@@ -85,8 +76,7 @@ final class SeamlessWindowViewModel: ObservableObject {
             }
             catch { enabled = false; status = "Window sharing could not start. Check your workspace connection." }
         } else {
-            service.stop(); windows = []; selectedWindow = nil
-            remoteWindows = []; selectedRemoteWindow = nil; remoteCatalogs = [:]
+            service.stop(); windows = []; remoteCatalogs = [:]
             if value { enabled = false; status = "Join a workspace before enabling window sharing." }
         }
     }
@@ -104,14 +94,9 @@ final class SeamlessWindowViewModel: ObservableObject {
             let list = try await service.catalog()
             guard enabled else { return }
             windows = list
-            if !list.contains(where: { $0.id == selectedWindow }) { selectedWindow = list.first?.id }
         } catch { status = "Allow UniSpace in System Settings → Privacy & Security → Screen Recording, then refresh." }
     }
 
-    func moveWindow() {
-        guard let selectedPeer, let window = windows.first(where: { $0.id == selectedWindow }) else { return }
-        moveWindow(window, to: selectedPeer)
-    }
     /// Also used for the menu bar's quick-move list, which skips the picker entirely.
     func moveWindow(_ window: SeamlessWindowDescriptor, to peer: DeviceID) {
         appModel?.stopControlling()
@@ -119,14 +104,6 @@ final class SeamlessWindowViewModel: ObservableObject {
         catch { status = "This window could not be shared (\(error)). Keep it visible, check permissions, and enable sharing on the other Mac." }
     }
     func returnHome() { service.returnHome() }
-
-    /// Ask the selected Mac what it can share. Answer arrives via `onChange`.
-    func requestRemoteWindows() {
-        guard let selectedPeer, !loadingRemoteWindows else { return }
-        remoteWindows = []; selectedRemoteWindow = nil
-        do { try service.requestCatalog(from: selectedPeer) }
-        catch { status = "Could not reach that Mac. Make sure window sharing is on there too." }
-    }
 
     func refreshAllRemoteWindows() async {
         guard enabled, !busy, !loadingRemoteWindows else { return }
@@ -147,10 +124,6 @@ final class SeamlessWindowViewModel: ObservableObject {
         }
     }
 
-    func pullWindow() {
-        guard let selectedPeer, let window = remoteWindows.first(where: { $0.id == selectedRemoteWindow }) else { return }
-        pullWindow(window, from: selectedPeer)
-    }
     /// Also used for the menu bar's quick-pull list.
     func pullWindow(_ window: SeamlessWindowDescriptor, from peer: DeviceID) {
         guard enabled, !busy, !loadingRemoteWindows else { return }
@@ -170,7 +143,6 @@ final class SeamlessWindowViewModel: ObservableObject {
 
     private func refresh(_ context: ContinuityContextSnapshot, local: DeviceDescriptor) {
         peers = (context.workspace?.devices ?? []).filter { $0.id != local.id && $0.platform == .macOS }
-        if !peers.contains(where: { $0.id == selectedPeer }) { selectedPeer = peers.first?.id }
         // This runs on every continuity-context change — device online/offline
         // flicker, control-session updates — not just real workspace changes.
         // Only a genuinely absent workspace should disable an active session;
@@ -212,12 +184,8 @@ struct SeamlessWindowView: View {
 
                 permissionsCard
                 sharingCard
-                if model.enabled {
-                    windowsCard
-                    remoteWindowsCard
-                }
 
-                Text("One Mac-to-Mac window at a time. Double-click a window (or use the menu bar icon) to move it quickly. Keep its source window visible. Closing the remote window ends sharing. Control Option Command Escape returns it home.")
+                Text("Use the menu-bar icon to move windows to or from another Mac. Keep the source window visible. Closing the moved window ends sharing. Control Option Command Escape returns it home.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             .frame(maxWidth: Metrics.contentWidth)
@@ -279,78 +247,4 @@ struct SeamlessWindowView: View {
         .card()
     }
 
-    private var windowsCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Label("Windows on this Mac", systemImage: "macwindow")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                Spacer(minLength: 12)
-                Picker("Destination Mac", selection: $model.selectedPeer) {
-                    Text("Select a Mac").tag(Optional<DeviceID>.none)
-                    ForEach(model.peers) { Text($0.name).tag(Optional($0.id)) }
-                }
-                .labelsHidden()
-                .frame(maxWidth: 200)
-                Button("Refresh") { Task { await model.refreshWindows() } }
-                    .disabled(model.busy || model.loading)
-            }
-            List(selection: $model.selectedWindow) {
-                ForEach(model.windows, id: \.id) { window in
-                    VStack(alignment: .leading) {
-                        Text(window.title).lineLimit(1)
-                        Text(window.application).font(.caption).foregroundStyle(.secondary)
-                    }.tag(window.id)
-                    // Double-click to move immediately, skipping the button below.
-                    .onTapGesture(count: 2) {
-                        if let peer = model.selectedPeer { model.moveWindow(window, to: peer) }
-                    }
-                }
-            }
-            .frame(minHeight: 220)
-            .clipShape(.rect(cornerRadius: Metrics.smallRadius, style: .continuous))
-            HStack {
-                Button("Move Window to Mac") { model.moveWindow() }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(model.busy || model.selectedWindow == nil || model.selectedPeer == nil)
-                Button("Bring All Windows Home") { model.returnHome() }.disabled(!model.busy)
-            }
-        }
-        .card()
-    }
-
-    private var remoteWindowsCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Label("Windows on the other Mac", systemImage: "macwindow.badge.plus")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                Spacer(minLength: 12)
-                Button("Get List") { model.requestRemoteWindows() }
-                    .disabled(model.busy || model.selectedPeer == nil)
-            }
-            if model.remoteWindows.isEmpty {
-                Text("Pick a Mac above and choose Get List to see what it can send here.")
-                    .font(.caption).foregroundStyle(.secondary)
-            } else {
-                List(selection: $model.selectedRemoteWindow) {
-                    ForEach(model.remoteWindows, id: \.id) { window in
-                        VStack(alignment: .leading) {
-                            Text(window.title).lineLimit(1)
-                            Text(window.application).font(.caption).foregroundStyle(.secondary)
-                        }.tag(window.id)
-                        .onTapGesture(count: 2) {
-                            if let peer = model.selectedPeer { model.pullWindow(window, from: peer) }
-                        }
-                    }
-                }
-                .frame(minHeight: 160)
-                .clipShape(.rect(cornerRadius: Metrics.smallRadius, style: .continuous))
-            }
-            Button("Move Window from Mac") { model.pullWindow() }
-                .buttonStyle(.borderedProminent)
-                .disabled(model.busy || model.selectedRemoteWindow == nil || model.selectedPeer == nil)
-        }
-        .card()
-    }
 }

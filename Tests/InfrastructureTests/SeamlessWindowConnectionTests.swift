@@ -55,6 +55,11 @@ final class SeamlessWindowConnectionTests: XCTestCase {
             NSColor.red.setFill(); rect.fill(); return true
         }
         descriptor.applicationIconRGBA = try XCTUnwrap(WindowApplicationIcon.iconPixels(icon))
+        descriptor.applicationIconPNG = try XCTUnwrap(WindowApplicationIcon.png(icon))
+        let decodedIcon = try XCTUnwrap(WindowApplicationIcon.pngImage(descriptor.applicationIconPNG!))
+        XCTAssertEqual(decodedIcon.size, NSSize(width: 256, height: 256))
+        XCTAssertNil(WindowApplicationIcon.pngImage(Data([0, 1, 2])))
+        XCTAssertNil(WindowApplicationIcon.pngImage(Data(count: 12_289)))
         try descriptor.validate()
         XCTAssertEqual(try PropertyListDecoder().decode(SeamlessWindowDescriptor.self,
             from: PropertyListEncoder().encode(descriptor)), descriptor)
