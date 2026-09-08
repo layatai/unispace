@@ -193,6 +193,15 @@ private final class UniSpaceApplicationDelegate: NSObject, NSApplicationDelegate
     @objc private func windowVisibilityDidChange(_ notification: Notification) {
         DockIconVisibility.hideWhenNoVisibleWindows()
     }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if let proxy = sender.windows.first(where: { $0.identifier?.rawValue == "seamless-proxy" }) {
+            proxy.deminiaturize(nil)
+            proxy.makeKeyAndOrderFront(nil)
+            return false
+        }
+        return true
+    }
 }
 
 @MainActor
@@ -204,8 +213,7 @@ private enum DockIconVisibility {
     static func hideWhenNoVisibleWindows() {
         DispatchQueue.main.async {
             let hasVisibleWindow = NSApplication.shared.windows.contains {
-                $0.isVisible
-                    && !$0.isMiniaturized
+                ($0.isVisible && !$0.isMiniaturized || $0.identifier?.rawValue == "seamless-proxy")
                     && $0.styleMask.contains(.titled)
                     && $0.level == .normal
             }

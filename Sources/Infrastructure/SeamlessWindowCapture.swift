@@ -16,6 +16,12 @@ public final class SeamlessWindowCapture: SeamlessCaptureSource {
 
     public init() {}
 
+    public func applicationIcon(for id: RemoteWindowID) -> Data? {
+        guard let pid = windows[id]?.owningApplication?.processID,
+              let icon = NSRunningApplication(processIdentifier: pid)?.icon else { return nil }
+        return WindowApplicationIcon.iconPixels(icon)
+    }
+
     public func inputTarget(for id: RemoteWindowID) throws -> any SeamlessInputTarget {
         guard let window = windows[id] else { throw SeamlessWindowError.unavailable }
         return try SeamlessWindowInput(window: window)

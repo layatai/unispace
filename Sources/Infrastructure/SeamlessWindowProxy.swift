@@ -12,6 +12,7 @@ public final class SeamlessWindowProxy: NSObject, NSWindowDelegate {
     private let window: NSWindow
     private let surface = WindowVideoSurface(frame: .zero)
     private var closing = false
+    private var originalIcon: NSImage?
     private var format: CMVideoFormatDescription?
     private var parameters: [Data] = []
     private var needsKeyframe = true
@@ -40,6 +41,13 @@ public final class SeamlessWindowProxy: NSObject, NSWindowDelegate {
         window.titleVisibility = .visible
         window.titlebarAppearsTransparent = false
         window.styleMask.remove(.fullSizeContentView)
+        window.identifier = NSUserInterfaceItemIdentifier("seamless-proxy")
+        NSApp.setActivationPolicy(.regular)
+        originalIcon = NSApp.applicationIconImage
+        if let pixels = descriptor.applicationIconRGBA, let icon = WindowApplicationIcon.iconImage(pixels) {
+            NSApp.applicationIconImage = icon
+            window.miniwindowImage = icon
+        }
         window.isReleasedWhenClosed = false
         window.contentMinSize = NSSize(width: 160, height: 100)
         window.contentView = surface
@@ -120,7 +128,9 @@ public final class SeamlessWindowProxy: NSObject, NSWindowDelegate {
     }
 
     public func close() {
+        guard !closing else { return }
         closing = true
+        NSApp.applicationIconImage = originalIcon
         surface.video.flushAndRemoveImage()
         surface.input = nil; surface.emergencyStop = nil
         window.close()
@@ -130,6 +140,34 @@ public final class SeamlessWindowProxy: NSObject, NSWindowDelegate {
     public func windowDidResignKey(_ notification: Notification) { onInput?(SeamlessInput(kind: .releaseAll)) }
     public func windowDidMiniaturize(_ notification: Notification) { onInput?(SeamlessInput(kind: .releaseAll)); onVisibility?(false) }
     public func windowDidDeminiaturize(_ notification: Notification) { needsKeyframe = true; onVisibility?(true); onKeyframeNeeded?() }
+}
+
+@MainActor
+enum WindowApplicationIcon {
+    static func iconPixels(_ image: NSImage) -> Data? {
+        guard let bitmap = iconBitmap(), let bytes = bitmap.bitmapData,
+              let context = NSGraphicsContext(bitmapImageRep: bitmap) else { return nil }
+        NSGraphicsContext.saveGraphicsState()
+        defer { NSGraphicsContext.restoreGraphicsState() }
+        NSGraphicsContext.current = context
+        image.draw(in: CGRect(x: 0, y: 0, width: 32, height: 32), from: .zero,
+                   operation: .copy, fraction: 1)
+        return Data(bytes: bytes, count: 4_096)
+    }
+
+    static func iconImage(_ pixels: Data) -> NSImage? {
+        guard pixels.count == 4_096, let bitmap = iconBitmap(), let bytes = bitmap.bitmapData else { return nil }
+        pixels.copyBytes(to: bytes, count: pixels.count)
+        let image = NSImage(size: NSSize(width: 32, height: 32))
+        image.addRepresentation(bitmap)
+        return image
+    }
+
+    private static func iconBitmap() -> NSBitmapImageRep? {
+        NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 32, pixelsHigh: 32,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+            colorSpaceName: .deviceRGB, bytesPerRow: 128, bitsPerPixel: 32)
+    }
 }
 
 @MainActor

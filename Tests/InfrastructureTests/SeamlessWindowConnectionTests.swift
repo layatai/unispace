@@ -10,6 +10,31 @@ import UniSpaceDomain
 
 @MainActor
 final class SeamlessWindowConnectionTests: XCTestCase {
+    func testSourceIconRoundTripAndProxyWindowControls() throws {
+        _ = NSApplication.shared
+        var descriptor = SeamlessWindowDescriptor(id: RemoteWindowID(), title: "Icon fixture",
+            application: "Fixture", width: 640, height: 480)
+        let icon = NSImage(size: NSSize(width: 32, height: 32), flipped: false) { rect in
+            NSColor.red.setFill(); rect.fill(); return true
+        }
+        descriptor.applicationIconRGBA = try XCTUnwrap(WindowApplicationIcon.iconPixels(icon))
+        try descriptor.validate()
+        XCTAssertEqual(try PropertyListDecoder().decode(SeamlessWindowDescriptor.self,
+            from: PropertyListEncoder().encode(descriptor)), descriptor)
+        let original = NSApp.applicationIconImage
+        let proxy = SeamlessWindowProxy(descriptor: descriptor, sourceName: "Source")
+        defer { proxy.close() }
+        XCTAssertNotNil(proxy.nativeWindow.miniwindowImage)
+        for button in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
+            XCTAssertFalse(try XCTUnwrap(proxy.nativeWindow.standardWindowButton(button)).isHidden)
+        }
+        proxy.close()
+        XCTAssertTrue(NSApp.applicationIconImage === original)
+        descriptor.applicationIconRGBA = Data(count: 4_097)
+        XCTAssertThrowsError(try descriptor.validate())
+        XCTAssertNil(WindowApplicationIcon.iconImage(Data(count: 4_097)))
+    }
+
     func testRemoteCatalogRequestIsSentAfterAuthentication() async throws {
         let source = DeviceID(), viewer = DeviceID()
         let workspace = WorkspaceSnapshot(id: WorkspaceID(), name: "Catalog fixture", localDeviceID: source,
