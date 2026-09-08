@@ -177,6 +177,16 @@ final class SeamlessWindowConnectionTests: XCTestCase {
         XCTAssertTrue(returnedHome)
     }
 
+    func testScaledOddSizedWindowFrameRenders() async throws {
+        _ = NSApplication.shared
+        let frame = try await encodedFrame(epoch: UUID(), width: 1_036, height: 1_080)
+        let descriptor = SeamlessWindowDescriptor(id: RemoteWindowID(), title: "Odd fixture",
+            application: "Fixture", width: 1_281, height: 1_335)
+        let proxy = SeamlessWindowProxy(descriptor: descriptor, sourceName: "Test Mac")
+        defer { proxy.close() }
+        XCTAssertTrue(try proxy.display(frame))
+    }
+
     func testBonjourServiceCanStartAndStopWithoutCapturingAWindow() async throws {
         let service = SeamlessWindowService(controlPort: .any, videoPort: .any)
         defer { service.stop() }
@@ -277,17 +287,17 @@ final class SeamlessWindowConnectionTests: XCTestCase {
         XCTAssertTrue(service.listeningPorts.isEmpty)
     }
 
-    private func encodedFrame(epoch: UUID) async throws -> SeamlessVideoFrame {
+    private func encodedFrame(epoch: UUID, width: Int = 640, height: Int = 480) async throws -> SeamlessVideoFrame {
         let encoded = expectation(description: "VideoToolbox emits H264")
         var result: SeamlessVideoFrame?
-        let encoder = try WindowH264Output(epoch: epoch, width: 640, height: 480, onFrame: { frame in
+        let encoder = try WindowH264Output(epoch: epoch, width: width, height: height, onFrame: { frame in
             result = frame; encoded.fulfill(); return true
         }, onFailure: { XCTFail("Encoder failed") })
         defer { encoder.stop() }
         encoder.requestKeyframe()
         encoder.queue.async {
             var buffer: CVPixelBuffer?
-            let status = CVPixelBufferCreate(kCFAllocatorDefault, 640, 480, kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
+            let status = CVPixelBufferCreate(kCFAllocatorDefault, width, height, kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
                 [kCVPixelBufferIOSurfacePropertiesKey: [:]] as CFDictionary, &buffer)
             guard status == kCVReturnSuccess, let buffer else { XCTFail("Pixel buffer allocation failed"); return }
             CVPixelBufferLockBaseAddress(buffer, [])

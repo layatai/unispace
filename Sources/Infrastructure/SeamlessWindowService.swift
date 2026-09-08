@@ -113,7 +113,7 @@ public final class SeamlessWindowService {
                 (NotificationCenter.default, NSApplication.willTerminateNotification)
             ] {
                 let observer = center.addObserver(forName: notification, object: nil, queue: .main) { [weak self] _ in
-                    MainActor.assumeIsolated { self?.returnHome() }
+                    MainActor.assumeIsolated { self?.end("system lifecycle") }
                 }
                 lifecycleObservers.append((center, observer))
             }
@@ -156,7 +156,7 @@ public final class SeamlessWindowService {
             attach(NWConnection(to: endpoint, using: SeamlessWindowConnection.parameters()), lane: .control, expected: peer)
             attach(NWConnection(to: videoEndpoint, using: SeamlessWindowConnection.parameters()), lane: .video, expected: peer)
             report("Connecting to \(name(peer))…")
-        } catch { returnHome(); throw error }
+        } catch { end("connection setup failed"); throw error }
     }
 
     /// Asks a peer for its window catalog, over a lightweight control-only
@@ -196,7 +196,7 @@ public final class SeamlessWindowService {
     }
 
     public func accept() {
-        guard let incoming, control?.peer == incoming.0.source else { returnHome(); return }
+        guard let incoming, control?.peer == incoming.0.source else { end("accept without control"); return }
         guard video?.peer == incoming.0.source else {
             acceptanceRequested = true
             report("Waiting for the encrypted video connection…")
@@ -212,14 +212,14 @@ public final class SeamlessWindowService {
                 guard let self, self.state.lease?.epoch == epoch else { return }
                 self.send(.input(epoch, event))
             }
-            proxy.onClose = { [weak self] in self?.returnHome() }
+            proxy.onClose = { [weak self] in self?.end("proxy closed") }
             proxy.onVisibility = { [weak self] in self?.send(.visibility(epoch, $0)) }
             proxy.onKeyframeNeeded = { [weak self] in self?.send(.keyframe(epoch)) }
             self.proxy = proxy
             presentedFrameCount = 0
             send(.accept(incoming.0))
             report("Showing \(incoming.1.application) from \(name(incoming.0.source))")
-        } catch { returnHome() }
+        } catch { end("accept failed") }
     }
 
     public func returnHome() {
@@ -242,6 +242,11 @@ public final class SeamlessWindowService {
         }
         closeConnections()
         if configuration != nil { report("Window returned to its source Mac") }
+    }
+
+    private func end(_ reason: String) {
+        DiagnosticLog().record("Seamless window ended: \(reason)")
+        returnHome()
     }
 
     private func closeConnections() {
@@ -295,7 +300,7 @@ public final class SeamlessWindowService {
             connection.onClosed = { [weak self, weak connection] in
                 guard let self, self.connections.removeValue(forKey: id) != nil else { return }
                 if self.control === connection || self.video === connection {
-                    self.returnHome(); self.report("Connection ended. The window is available on its source Mac.")
+                    self.end("connection closed"); self.report("Connection ended. The window is available on its source Mac.")
                 }
             }
             connection.start()
@@ -369,7 +374,7 @@ public final class SeamlessWindowService {
             case let .heartbeat(epoch): try state.renew(epoch: epoch, now: now)
             case let .release(epoch), let .reject(epoch):
                 guard epoch == lease.epoch else { throw SeamlessWindowError.staleLease }
-                returnHome()
+                end("peer release")
             case let .input(epoch, event):
                 guard state.authorizes(epoch: epoch, peer: peer, now: now) else { throw SeamlessWindowError.staleLease }
                 // The proxy can send input (e.g. a resign-key releaseAll) in the
@@ -387,11 +392,11 @@ public final class SeamlessWindowService {
                 if visible { capture.requestKeyframe() }
             case .resize, .offer, .catalogRequest, .catalogOffer, .pullRequest: throw SeamlessWindowError.invalidMessage
             }
-        } catch { returnHome(); report("Window sharing stopped because the session was no longer valid.") }
+        } catch { end("invalid session message"); report("Window sharing stopped because the session was no longer valid.") }
     }
 
     private func beginCapture(_ lease: WindowPresentationLease) {
-        guard captureTask == nil else { returnHome(); return }
+        guard captureTask == nil else { end("capture already active"); return }
         captureTask = Task { [weak self] in
             guard let self else { return }
             do {
@@ -403,7 +408,7 @@ public final class SeamlessWindowService {
                     return sent
                 }, onFailure: { [weak self] in
                     guard self?.state.lease?.epoch == lease.epoch else { return }
-                    self?.returnHome()
+                    self?.end("capture stopped")
                 })
                 guard !Task.isCancelled, self.state.lease == lease else {
                     await self.capture.stop(); self.captureTask = nil; self.onChange?(); return
@@ -411,21 +416,21 @@ public final class SeamlessWindowService {
                 self.captureTask = nil
                 self.localMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .keyDown]) { [weak self] event in
                     guard event.cgEvent?.getIntegerValueField(.eventSourceUserData) != uniSpaceSyntheticEventMarker else { return }
-                    Task { @MainActor [weak self] in self?.returnHome() }
+                    Task { @MainActor [weak self] in self?.end("local input") }
                 }
                 self.report("Sharing \(self.descriptor?.application ?? "window") with \(self.name(lease.destination))")
             } catch {
                 self.captureTask = nil
-                self.returnHome(); self.report("Could not capture this window. Check Screen Recording and Accessibility permissions.")
+                self.end("capture start failed"); self.report("Could not capture this window. Check Screen Recording and Accessibility permissions.")
             }
         }
     }
 
     private func tick() {
-        if state.phase == .idle, !connections.isEmpty, now >= idleConnectionDeadline { returnHome(); return }
-        if state.expire(now: now) { returnHome(); report("The window session expired and returned home."); return }
+        if state.phase == .idle, !connections.isEmpty, now >= idleConnectionDeadline { end("idle timeout"); return }
+        if state.expire(now: now) { end("lease expired"); report("The window session expired and returned home."); return }
         if state.phase == .presenting, let lease = state.lease {
-            if lease.source == configuration?.local && input?.isAvailable != true { returnHome(); return }
+            if lease.source == configuration?.local && input?.isAvailable != true { end("input unavailable"); return }
             send(.heartbeat(lease.epoch))
         }
     }
