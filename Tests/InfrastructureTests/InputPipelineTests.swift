@@ -193,12 +193,14 @@ final class InputPipelineTests: XCTestCase {
     func testInjectorMapsActivationAndEveryInputKindWithoutPostingGlobally() throws {
         let posted = LockedValues<EventSnapshot>()
         let warped = LockedValues<CGPoint>()
+        let wakes = LockedValues<Bool>()
         let bounds = [CGRect(x: 0, y: 0, width: 100, height: 80)]
         let injector = CGEventInputInjector(
             displayBoundsProvider: { bounds },
             initialCursorPosition: CGPoint(x: 50, y: 40),
             eventPoster: { posted.append(EventSnapshot($0)) },
-            cursorWarpHandler: warped.append
+            cursorWarpHandler: warped.append,
+            displayWakeHandler: { wakes.append(true) }
         )
         let deviceID = DeviceID()
         let display = DisplayDescriptor(
@@ -218,6 +220,8 @@ final class InputPipelineTests: XCTestCase {
             CGPoint(x: 25, y: 78),
             CGPoint(x: 25, y: 2)
         ])
+        // Every activation pokes the display awake.
+        XCTAssertEqual(wakes.values.count, DisplayEdge.allCases.count)
 
         injector.inject(.flags(rawValue: CGEventFlags.maskCommand.rawValue))
         injector.inject(.key(code: 8, isDown: true, isRepeat: false))
