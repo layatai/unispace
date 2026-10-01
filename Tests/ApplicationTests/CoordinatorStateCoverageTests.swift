@@ -331,6 +331,34 @@ final class CoordinatorStateCoverageTests: XCTestCase {
         await coordinator.stop()
     }
 
+    func testSlowReliablePointerDoesNotBlockFollowingCapturedInput() async throws {
+        let clock = ManualMonotonicClock()
+        let transport = BlockingInputTransport()
+        let coordinator = ControlSessionCoordinator(
+            localDeviceID: DeviceID(), workspaceID: WorkspaceID(),
+            capture: CoordinatorCaptureSpy(), injector: CoordinatorInjectorSpy(),
+            transport: transport, clock: clock
+        )
+        _ = await coordinator.makeLocalController()
+        try await coordinator.activate(
+            target: DeviceID(), displayID: DisplayID(), entryEdge: .left,
+            normalizedPosition: 0.5, targetPlatform: .macOS
+        )
+        clock.advanceWithoutWakingSleepers(by: ControlSessionCoordinator.pointerFlushIntervalNanos)
+        let returned = SendableFlag()
+        let captureTask = Task {
+            _ = await coordinator.handleCaptured(.pointerMove(deltaX: 4, deltaY: 0, absoluteX: 10, absoluteY: 10))
+            returned.set()
+        }
+        let started = await waitUntil { transport.inputSendStarted }
+        XCTAssertTrue(started)
+        let didReturn = await waitUntil { returned.value }
+        XCTAssertTrue(didReturn, "Pointer backpressure must not hold up the capture event consumer")
+        transport.resumeInputSend()
+        await captureTask.value
+        await coordinator.stop()
+    }
+
     func testStopRemoteControlDoesNotWaitForBlockedInputSend() async throws {
         let localID = DeviceID()
         let remoteID = DeviceID()
@@ -657,4 +685,147 @@ private final class CoordinatorInjectorSpy: InputInjector, @unchecked Sendable {
     func activate(on display: DisplayDescriptor, enteringFrom edge: DisplayEdge, normalizedPosition: Double) {}
     func inject(_ event: InputEvent) {}
     func releaseAll() { lock.withLock { storedReleaseAllCount += 1 } }
+}
+
+
+final class InputRecoveryTests: XCTestCase {
+    func testSuccessfulBatchRecoversAfterPreviousSendFailure() async throws {
+        let transport = ControlledInputTransport()
+        let sender = OrderedInputSender(transport: transport, clock: ManualMonotonicClock())
+        let local = DeviceID()
+        let target = DeviceID()
+        let workspace = WorkspaceID()
+        let session = SessionID()
+        for sequence: UInt64 in [0, 1] {
+            let frame = InputFrame(
+                workspaceID: workspace, sessionID: session, controllerID: local,
+                epoch: .init(generation: 1, controllerID: local), sequence: sequence,
+                timestampNanos: sequence, event: .flags(rawValue: sequence)
+            )
+            await sender.enqueue(frame, to: target)
+            let started = await waitUntil { transport.hasPending(sequence) }
+            XCTAssertTrue(started)
+            transport.complete(sequence, error: sequence == 0 ? CoordinatorTestError.expected : nil)
+            let delivered = await sender.drainOrCancel(after: .milliseconds(750))
+            XCTAssertEqual(delivered, sequence == 1)
+        }
+        await sender.cancelPending()
+        transport.completeAll()
+    }
+
+    func testSlowLinkCoalescesMotionWithoutCrossingButtonBoundaries() async throws {
+        let transport = ControlledInputTransport()
+        let sender = OrderedInputSender(transport: transport, clock: ManualMonotonicClock())
+        let local = DeviceID()
+        let target = DeviceID()
+        let workspace = WorkspaceID()
+        let session = SessionID()
+        func frame(_ sequence: UInt64, _ event: InputEvent) -> InputFrame {
+            .init(workspaceID: workspace, sessionID: session, controllerID: local,
+                  epoch: .init(generation: 1, controllerID: local), sequence: sequence,
+                  timestampNanos: sequence, event: event)
+        }
+        let down = InputEvent.mouseButton(button: .left, isDown: true, clickCount: 1)
+        let up = InputEvent.mouseButton(button: .left, isDown: false, clickCount: 1)
+        await sender.enqueue(frame(0, .flags(rawValue: 0)), to: target)
+        let started = await waitUntil { transport.hasPending(0) }
+        XCTAssertTrue(started)
+        for sequence in 1...1_000 {
+            await sender.enqueue(frame(UInt64(sequence), .pointerMove(
+                deltaX: 1, deltaY: 2, absoluteX: Double(sequence), absoluteY: 9
+            )), to: target)
+        }
+        await sender.enqueue(frame(1_001, down), to: target)
+        await sender.enqueue(frame(1_002, .pointerMove(deltaX: 3, deltaY: 4, absoluteX: 1003, absoluteY: 13)), to: target)
+        await sender.enqueue(frame(1_003, .pointerMove(deltaX: 5, deltaY: 6, absoluteX: 1008, absoluteY: 19)), to: target)
+        await sender.enqueue(frame(1_004, up), to: target)
+        for sequence: UInt64 in [0, 1_000, 1_001, 1_003, 1_004] {
+            let pending = await waitUntil { transport.hasPending(sequence) }
+            XCTAssertTrue(pending, "Missing sequence \(sequence)")
+            transport.complete(sequence)
+        }
+        await sender.cancelPending()
+        transport.completeAll()
+        XCTAssertEqual(transport.frames.map(\.sequence), [0, 1_000, 1_001, 1_003, 1_004])
+        XCTAssertEqual(transport.frames.map(\.event), [
+            .flags(rawValue: 0),
+            .pointerMove(deltaX: 1000, deltaY: 2000, absoluteX: 1000, absoluteY: 9),
+            down, .pointerMove(deltaX: 8, deltaY: 10, absoluteX: 1008, absoluteY: 19), up
+        ])
+    }
+
+    func testCancelledSendFailureCannotDiscardReplacementQueue() async throws {
+        let transport = ControlledInputTransport()
+        let sender = OrderedInputSender(transport: transport, clock: ManualMonotonicClock())
+        let local = DeviceID()
+        let target = DeviceID()
+        let workspace = WorkspaceID()
+        let session = SessionID()
+        func frame(_ sequence: UInt64) -> InputFrame {
+            .init(workspaceID: workspace, sessionID: session, controllerID: local,
+                  epoch: .init(generation: 1, controllerID: local), sequence: sequence,
+                  timestampNanos: sequence, event: .flags(rawValue: sequence))
+        }
+        await sender.enqueue(frame(0), to: target)
+        let firstStarted = await waitUntil { transport.hasPending(0) }
+        XCTAssertTrue(firstStarted)
+        await sender.cancelPending()
+        await sender.enqueue(frame(1), to: target)
+        let replacementStarted = await waitUntil { transport.hasPending(1) }
+        XCTAssertTrue(replacementStarted)
+        await sender.enqueue(frame(2), to: target)
+        transport.complete(0, error: CoordinatorTestError.expected)
+        for _ in 0..<100 { await Task.yield() }
+        transport.complete(1)
+        let replacementPreserved = await waitUntil { transport.hasPending(2) }
+        XCTAssertTrue(replacementPreserved, "A late error from the cancelled worker must not erase new input")
+        transport.complete(2)
+        let delivered = await sender.drainOrCancel(after: .milliseconds(750))
+        XCTAssertTrue(delivered)
+        XCTAssertEqual(transport.frames.map(\.sequence), [0, 1, 2])
+        await sender.cancelPending()
+        transport.completeAll()
+    }
+
+    private func waitUntil(_ predicate: () -> Bool) async -> Bool {
+        for _ in 0..<1_000 {
+            if predicate() { return true }
+            await Task.yield()
+        }
+        return predicate()
+    }
+}
+
+private final class ControlledInputTransport: PeerTransport, @unchecked Sendable {
+    private let lock = NSLock()
+    private var waiters: [UInt64: CheckedContinuation<Void, Error>] = [:]
+    private var storedFrames: [InputFrame] = []
+    var frames: [InputFrame] { lock.withLock { storedFrames } }
+    func hasPending(_ sequence: UInt64) -> Bool { lock.withLock { waiters[sequence] != nil } }
+    func start(localDevice: DeviceDescriptor, workspace: WorkspaceSnapshot, key: Data) async throws {}
+    func stop() async {}
+    func reconnect(to deviceID: DeviceID) {}
+    func events() -> AsyncStream<PeerEvent> { AsyncStream { $0.finish() } }
+    func send(_ envelope: ControlEnvelope, to deviceID: DeviceID) async throws {}
+    func send(_ frame: InputFrame, to deviceID: DeviceID) async throws {
+        // Deliberately ignores cancellation to model a late socket completion.
+        try await withCheckedThrowingContinuation { continuation in
+            lock.withLock {
+                storedFrames.append(frame)
+                waiters[frame.sequence] = continuation
+            }
+        }
+    }
+    func complete(_ sequence: UInt64, error: Error? = nil) {
+        let waiter = lock.withLock { waiters.removeValue(forKey: sequence) }
+        if let error { waiter?.resume(throwing: error) } else { waiter?.resume() }
+    }
+    func completeAll() {
+        let pending = lock.withLock {
+            let result = Array(waiters.values)
+            waiters.removeAll()
+            return result
+        }
+        pending.forEach { $0.resume(throwing: CancellationError()) }
+    }
 }

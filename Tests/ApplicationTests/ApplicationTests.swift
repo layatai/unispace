@@ -1166,6 +1166,71 @@ final class ApplicationTests: XCTestCase {
         await coordinator.stop()
     }
 
+    func testAcknowledgedPointerLaneSurvivesIdleAndStillDetectsLostProgress() async throws {
+        let local = DeviceID()
+        let remote = DeviceID()
+        let clock = ManualMonotonicClock()
+        let transport = TransportSpy(useRealtime: true)
+        let sender = RealtimePointerCaptureSender(
+            workspaceID: WorkspaceID(), localDeviceID: local, transport: transport, clock: clock
+        )
+        let sessionID = SessionID()
+        sender.enable(
+            epoch: .init(generation: 1, controllerID: local), target: remote,
+            sessionID: sessionID, generation: 1, sequence: 1,
+            cumulativePointerX: 0, cumulativePointerY: 0,
+            acknowledgedSequence: 0, acknowledgedAtNanos: 0
+        )
+        let motion = InputEvent.pointerMove(deltaX: 3, deltaY: 2, absoluteX: 13, absoluteY: 12)
+        clock.advanceWithoutWakingSleepers(by: 10_000_000_000)
+        XCTAssertTrue(sender.send(motion), "An idle, fully acknowledged lane must resume immediately")
+        XCTAssertTrue(sender.acknowledge(
+            .init(sessionID: sessionID, generation: 1, sequence: 1), from: remote
+        ))
+        clock.advanceWithoutWakingSleepers(by: 10_000_000_000)
+        XCTAssertTrue(sender.send(motion), "A second idle pause must not force a reconnect")
+        clock.advanceWithoutWakingSleepers(by: ControlSessionCoordinator.realtimeProgressTimeoutNanos + 1)
+        XCTAssertFalse(sender.acknowledge(
+            .init(sessionID: sessionID, generation: 1, sequence: 1), from: remote
+        ), "Duplicate progress cannot hide an outstanding, unacknowledged movement")
+        XCTAssertFalse(sender.send(motion), "Lost progress must still expire the lane")
+    }
+
+    func testReliableOnlyPeerKeepsControlDuringTransientSendFailureWithFreshHeartbeat() async throws {
+        let local = DeviceID()
+        let remote = DeviceID()
+        let capture = CaptureSpy()
+        let clock = ManualMonotonicClock()
+        let transport = TransportSpy(frameSendError: SpyError.failure)
+        let coordinator = ControlSessionCoordinator(
+            localDeviceID: local, workspaceID: WorkspaceID(), capture: capture,
+            injector: InjectorSpy(), transport: transport, clock: clock
+        )
+        _ = await coordinator.makeLocalController()
+        try await coordinator.activate(
+            target: remote, displayID: DisplayID(), entryEdge: .left,
+            normalizedPosition: 0.5, targetPlatform: .macOS
+        )
+        guard case let .controlling(_, _, session) = await coordinator.currentState() else {
+            return XCTFail("Expected active session")
+        }
+        _ = await coordinator.receiveHeartbeatEcho(sessionID: session, from: remote, sentAtNanos: 0)
+        _ = await coordinator.handleCaptured(.pointerMove(deltaX: 4, deltaY: 0, absoluteX: 10, absoluteY: 10))
+        await coordinator.flushPendingInput()
+        guard case .controlling = await coordinator.currentState() else {
+            return XCTFail("Fresh heartbeat must preserve control without requiring pointer-progress support")
+        }
+        XCTAssertTrue(capture.suppressed)
+        XCTAssertTrue(transport.realtimeReconnects.isEmpty, "Reliable-only peers must keep their negotiated lane")
+        clock.advanceWithoutWakingSleepers(by: ControlSessionCoordinator.minimumHeartbeatTimeoutNanos + 1)
+        _ = await coordinator.handleCaptured(.pointerMove(deltaX: 4, deltaY: 0, absoluteX: 14, absoluteY: 10))
+        await coordinator.flushPendingInput()
+        let state = await coordinator.currentState()
+        XCTAssertEqual(state, .idle, "A failed input lane with expired heartbeat must release control")
+        XCTAssertFalse(capture.suppressed)
+        await coordinator.stop()
+    }
+
     func testReceiverReportsLatestAcceptedRealtimeProgress() async throws {
         let local = DeviceID()
         let remote = DeviceID()

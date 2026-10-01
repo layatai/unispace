@@ -12,6 +12,7 @@ final class RealtimePointerCaptureSender: @unchecked Sendable {
         var cumulativePointerY: Double
         var lastAcknowledgedSequence: UInt64?
         var lastAcknowledgementNanos: UInt64?
+        var unacknowledgedSinceNanos: UInt64?
         var isSuspended = false
     }
 
@@ -55,7 +56,9 @@ final class RealtimePointerCaptureSender: @unchecked Sendable {
                 cumulativePointerX: cumulativePointerX,
                 cumulativePointerY: cumulativePointerY,
                 lastAcknowledgedSequence: acknowledgedSequence,
-                lastAcknowledgementNanos: acknowledgedAtNanos
+                lastAcknowledgementNanos: acknowledgedAtNanos,
+                unacknowledgedSinceNanos: acknowledgedSequence.map { $0 &+ 1 == sequence } == true
+                    ? nil : acknowledgedAtNanos
             )
         }
     }
@@ -78,13 +81,17 @@ final class RealtimePointerCaptureSender: @unchecked Sendable {
         }
         let prepared = lock.withLock { () -> (RealtimePointerFrame, DeviceID)? in
             guard var active = session, !active.isSuspended else { return nil }
-            if active.lastAcknowledgementNanos != nil {
+            // Idle time is not packet loss. Start the deadline only when there
+            // is movement outstanding, and never extend it just by sending.
+            if let unacknowledgedSince = active.unacknowledgedSinceNanos {
                 let now = clock.nowNanoseconds()
-                guard let acknowledgedAt = active.lastAcknowledgementNanos,
-                      now >= acknowledgedAt,
-                      now - acknowledgedAt <= ControlSessionCoordinator.realtimeProgressTimeoutNanos else {
+                guard now >= unacknowledgedSince,
+                      now - unacknowledgedSince <= ControlSessionCoordinator.realtimeProgressTimeoutNanos else {
                     return nil
                 }
+            }
+            if active.lastAcknowledgementNanos != nil, active.unacknowledgedSinceNanos == nil {
+                active.unacknowledgedSinceNanos = clock.nowNanoseconds()
             }
             active.cumulativePointerX += deltaX
             active.cumulativePointerY += deltaY
@@ -124,6 +131,8 @@ final class RealtimePointerCaptureSender: @unchecked Sendable {
             }
             active.lastAcknowledgedSequence = progress.sequence
             active.lastAcknowledgementNanos = clock.nowNanoseconds()
+            active.unacknowledgedSinceNanos = progress.sequence &+ 1 == active.sequence
+                ? nil : active.lastAcknowledgementNanos
             session = active
             return true
         }

@@ -98,6 +98,8 @@ public actor ControlSessionCoordinator {
     private var pendingPointerEvent: InputEvent?
     private var pendingScrollEvent: InputEvent?
     private var pointerFlushTask: Task<Void, Never>?
+    private var reliablePointerTask: Task<Void, Never>?
+    private var reliablePointerRevision: UInt64 = 0
     private var lastMotionFlushNanos: UInt64?
     private var heartbeatTask: Task<Void, Never>?
     private var watchdogTask: Task<Void, Never>?
@@ -550,6 +552,7 @@ public actor ControlSessionCoordinator {
     public func flushPendingInput() async {
         await flushPendingMotion()
         await inputSender.drain()
+        await reliablePointerTask?.value
     }
 
     public func stop() async {
@@ -566,6 +569,8 @@ public actor ControlSessionCoordinator {
         activationInputTask = nil
         pointerFlushTask?.cancel()
         pointerFlushTask = nil
+        reliablePointerTask?.cancel()
+        reliablePointerTask = nil
         lastMotionFlushNanos = nil
         pendingPointerEvent = nil
         pendingScrollEvent = nil
@@ -849,8 +854,32 @@ public actor ControlSessionCoordinator {
     private func sendReliablePointer(_ event: InputEvent) async {
         guard case let .controlling(_, target, sessionID) = state else { return }
         await sendInput(event)
+        guard case let .controlling(_, currentTarget, currentSessionID) = state,
+              currentTarget == target, currentSessionID == sessionID else { return }
+        reliablePointerRevision &+= 1
+        guard reliablePointerTask == nil else { return }
+        reliablePointerTask = Task { [weak self] in
+            await self?.monitorReliablePointer(target: target, sessionID: sessionID)
+        }
+    }
+
+    private func monitorReliablePointer(target: DeviceID, sessionID: SessionID) async {
+        while !Task.isCancelled {
+            let revision = reliablePointerRevision
+            await checkReliablePointerDelivery(target: target, sessionID: sessionID)
+            guard !Task.isCancelled else { return }
+            // Input can arrive while the drain completes. Keep monitoring that
+            // new work without making the capture consumer wait for the socket.
+            if revision == reliablePointerRevision {
+                reliablePointerTask = nil
+                return
+            }
+        }
+    }
+
+    private func checkReliablePointerDelivery(target: DeviceID, sessionID: SessionID) async {
         let delivered = await inputSender.drainOrCancel(after: Self.reliablePointerTimeout)
-        guard !delivered else { return }
+        guard !Task.isCancelled, !delivered else { return }
         diagnostic("Reliable pointer timed out for session \(sessionID); mode=\(realtimeDeliveryMode)")
         guard case let .controlling(_, currentTarget, currentSessionID) = state,
               currentTarget == target, currentSessionID == sessionID else { return }
@@ -860,12 +889,13 @@ public actor ControlSessionCoordinator {
             return
         }
         let now = clock.nowNanoseconds()
-        if activeControlRoute?.targetCapabilities.contains(.realtimePointerProgressV1) == true,
-           let lastHeartbeatEchoNanos,
+        if let lastHeartbeatEchoNanos,
            now >= lastHeartbeatEchoNanos,
            now - lastHeartbeatEchoNanos <= Self.minimumHeartbeatTimeoutNanos {
             diagnostic("Keeping session \(sessionID); control heartbeat is fresh")
-            enterRealtimeFallback(target: target)
+            if activeControlRoute?.targetCapabilities.contains(.realtimePointerProgressV1) == true {
+                enterRealtimeFallback(target: target)
+            }
             return
         }
         await endCurrentSession(notifyPeer: false, reason: "reliable pointer delivery timed out")
@@ -964,7 +994,7 @@ public actor ControlSessionCoordinator {
 
 /// Preserves reliable input ordering without letting a slow network send block
 /// the coordinator's heartbeat and reconnect state machine.
-private actor OrderedInputSender {
+actor OrderedInputSender {
     private struct PendingFrame: Sendable {
         let frame: InputFrame
         let target: DeviceID
@@ -985,7 +1015,31 @@ private actor OrderedInputSender {
     }
 
     func enqueue(_ frame: InputFrame, to target: DeviceID) {
-        pending.append(PendingFrame(frame: frame, target: target))
+        if worker == nil, failedGeneration == generation {
+            // A completed failed batch must not poison later successful sends.
+            generation &+= 1
+        }
+        if pending.count > nextIndex,
+           let previous = pending.last,
+           previous.target == target,
+           previous.frame.workspaceID == frame.workspaceID,
+           previous.frame.sessionID == frame.sessionID,
+           previous.frame.epoch == frame.epoch,
+           case let .pointerMove(previousX, previousY, _, _) = previous.frame.event,
+           case let .pointerMove(deltaX, deltaY, absoluteX, absoluteY) = frame.event {
+            // Only adjacent, unsent motion can be replaced. Keys and buttons
+            // remain ordering barriers, including the start and end of a drag.
+            let merged = InputFrame(
+                workspaceID: frame.workspaceID, sessionID: frame.sessionID,
+                controllerID: frame.controllerID, epoch: frame.epoch,
+                sequence: frame.sequence, timestampNanos: frame.timestampNanos,
+                event: .pointerMove(deltaX: previousX + deltaX, deltaY: previousY + deltaY,
+                                    absoluteX: absoluteX, absoluteY: absoluteY)
+            )
+            pending[pending.count - 1] = PendingFrame(frame: merged, target: target)
+        } else {
+            pending.append(PendingFrame(frame: frame, target: target))
+        }
         guard worker == nil else { return }
         let activeGeneration = generation
         worker = Task { [weak self] in
@@ -1042,6 +1096,7 @@ private actor OrderedInputSender {
             do {
                 try await transport.send(item.frame, to: item.target)
             } catch {
+                guard !Task.isCancelled, generation == activeGeneration else { return }
                 failedGeneration = activeGeneration
                 pending.removeAll(keepingCapacity: true)
                 nextIndex = 0
