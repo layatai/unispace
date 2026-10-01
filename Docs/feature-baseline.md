@@ -48,7 +48,7 @@ Clipboard probe (temporarily uses both clipboards; avoid copying during the run)
 
 ```sh
 python3 Scripts/verify-live-continuity.py clipboard \
-  --peer fox@foxs-macbook-pro.tailda4c05.ts.net --expected-build 43
+  --peer fox@foxs-macbook-pro.tailda4c05.ts.net --expected-build 45
 ```
 
 The probe tests text and URL delivery in both directions. Original clipboard
@@ -58,6 +58,27 @@ Restoration adds origin markers to prevent broadcasting private original data.
 Newer user clipboard contents are preserved. Successful restoration removes the
 snapshots; a failed restoration reports the private snapshot path for recovery.
 Only generated test markers, booleans, file hashes, and app identity enter reports.
+The probe refuses to overwrite an existing multi-item clipboard: a short-lived
+helper cannot reliably restore that selection after exiting. Preserve such a
+selection manually before running a clipboard-mutating probe.
+
+Automated Finder file-copy continuity uses fresh fixtures and preserves both
+clipboards with the same rules:
+
+```sh
+python3 Scripts/verify-live-continuity.py finder-files \
+  --peer fox@foxs-macbook-pro.tailda4c05.ts.net --expected-build 45 --timeout 30
+```
+
+The native helper writes real file URLs to the sender pasteboard, exercising the
+installed app's file polling and transfer path. It verifies receiver-local bytes,
+hashes, and Finder publication and checks that both app PIDs remained stable.
+It keeps the pasteboard writer alive until verification and restoration finish,
+and requires all three source files to be readable before testing delivery.
+Filename comparison uses Unicode NFC equivalence (macOS supplies decomposed
+names); file count, byte count, contents, case, and accents remain strict.
+This covers Finder copy continuity; use the manual steps below to verify the
+explicit **Send Files** interface separately.
 
 Prepare fresh empty, Unicode-name, and 2 MiB binary fixtures:
 
@@ -71,7 +92,7 @@ After completion, before copying anything else on Fox:
 
 ```sh
 python3 Scripts/verify-live-continuity.py verify-files \
-  --peer fox@foxs-macbook-pro.tailda4c05.ts.net --expected-build 43 \
+  --peer fox@foxs-macbook-pro.tailda4c05.ts.net --expected-build 45 \
   --manifest .build/feature-baseline/files-run1/manifest.json
 ```
 
@@ -128,3 +149,30 @@ actor and consumes it asynchronously, preserving cancellation without a nested
 actor-capturing continuation callback. Wake-up also rechecks transfer cancellation
 and peer disconnect before permitting entry completion. The production-framework
 probe is a required release gate; build 44's mixed-file live result remains FAIL.
+
+## Build 45 acceptance — 2026-10-01
+
+Installed `/Applications/UniSpace.app` version 1.2.0, build 45, from commit
+`0ca8731` on taimb2 and Fox. Both passed signature verification, stapler validation,
+and Gatekeeper with `source=Notarized Developer ID`; main/framework SHA-256 hashes
+match on both hosts. App notarization: `093caab3-5134-42d7-b409-a126270a0e7c`.
+DMG notarization: `7f731ace-9f5b-4a17-a6e3-b502073b81d1`. Both were Accepted.
+
+| Check | Result |
+| --- | --- |
+| Clean unit/app-layer suite | 291 passed, 0 failed, 1 intentional signed-native-input skip |
+| Existing coverage gates and 500-sample two-process simulation | PASS; thresholds unchanged |
+| Optimized production-framework probe and exact archived-framework probe | PASS; delayed ACK, task/transfer cancellation, disconnect, reset, mixed batch |
+| Live text and URL clipboard delivery, both directions | PASS, all four cases; both clipboards restored |
+| Live file-copy continuity, taimb2 → Fox | PASS; all three source files confirmed and all receiver bytes/hashes matched; all three receiver-local Finder URLs published |
+| App process stability during successful live probes | PASS; taimb2 PID 32802 and Fox PID 51612 unchanged |
+| New explicit Send Files UI check, reverse-direction files, interruption under physical control, physical keyboard/drag/scroll, native Windows | NOT_TESTED on build 45 |
+| Physical cursor stability | Still unverified; previous armed recording captured no UniSpace handoff |
+
+Successful evidence: `.build/feature-baseline/build45-clipboard/report.json` and
+`.build/feature-baseline/build45-finder-final/report.json`. The live file receipt
+is transfer `EC05F035-8047-4BF8-A4DC-683D6B451056`: 0-byte empty file, 29-byte Unicode
+text file, and 2,097,152-byte binary. Earlier prototype file-probe runs lacked a
+complete validated source clipboard and are not evidence of a product failure;
+their original reports are retained. The final probe verifies source setup,
+keeps the writer alive, and handles canonical Unicode filenames explicitly.

@@ -1,5 +1,6 @@
 import copy
 import unittest
+import unicodedata
 
 from evidence import clipboard_status, files_status, overall_status
 
@@ -20,6 +21,11 @@ class FeatureEvidenceTests(unittest.TestCase):
         received = dict(unispaceOrigin=True, fileCount=2, files=[
             dict(item, path="/app/Transfers/Incoming/id/Completed/" + item["name"]) for item in expected])
         self.assertEqual(files_status(expected, received), "PASS")
+        decomposed = copy.deepcopy(received)
+        decomposed["files"][1]["name"] = unicodedata.normalize("NFD", expected[1]["name"])
+        self.assertEqual(files_status(expected, decomposed), "PASS")
+        decomposed["files"][1]["name"] = "UniSpaceVerify-dac-biet.txt"
+        self.assertEqual(files_status(expected, decomposed), "FAIL")
         for key, value in [("bytes", 99), ("sha256", "wrong"), ("path", "/tmp/copied-by-scp")]:
             damaged = copy.deepcopy(received)
             damaged["files"][0][key] = value

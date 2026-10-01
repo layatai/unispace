@@ -19,6 +19,12 @@ func argument(_ index: Int) -> String {
 switch mode {
 case "snapshot":
     let path = argument(1)
+    // Short-lived pasteboard owners cannot reliably restore a multi-item
+    // selection after they exit. Refuse before touching the user's clipboard.
+    guard (board.pasteboardItems ?? []).count <= 1 else {
+        try output(["saved": false, "reason": "Existing multi-item clipboard requires manual preservation"])
+        exit(3)
+    }
     let items = (board.pasteboardItems ?? []).map { item in
         Dictionary(uniqueKeysWithValues: item.types.compactMap { type in
             item.data(forType: type).map { (type.rawValue, $0) }
@@ -41,6 +47,21 @@ case "check":
     try output(["matches": board.string(forType: .string) == token,
                 "urlMatches": board.string(forType: .URL) == token,
                 "unispaceOrigin": board.string(forType: textOrigin) != nil])
+case "copy-files":
+    let urls = arguments.dropFirst().map { URL(fileURLWithPath: $0) }
+    guard !urls.isEmpty,
+          urls.allSatisfy({ $0.lastPathComponent.hasPrefix("UniSpaceVerify-") && FileManager.default.fileExists(atPath: $0.path) }) else { exit(2) }
+    let items = urls.map { url in
+        let item = NSPasteboardItem()
+        item.setString(url.absoluteString, forType: .fileURL)
+        return item
+    }
+    board.clearContents()
+    try output(["written": board.writeObjects(items)])
+    fflush(stdout)
+    // Keep all file-item providers alive while the installed app reads them.
+    // The runner terminates this writer after receipt and clipboard restoration.
+    withExtendedLifetime(items) { RunLoop.current.run(until: Date(timeIntervalSinceNow: 90)) }
 case "files":
     let prefix = argument(1)
     guard prefix.hasPrefix("UniSpaceVerify-") else { exit(2) }
