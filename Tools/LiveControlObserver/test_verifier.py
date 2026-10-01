@@ -20,10 +20,12 @@ def recording():
     for index in range(120):
         t=3+index/2
         events.append(dict(kind='cursor', host='receiver', observedSeconds=t, x=index, y=100))
+        events.append(dict(kind='cursor', host='controller', observedSeconds=t, x=0, y=100))
         log(t, f'Realtime progress accepted for session {SESSION}; generation=1, sequence={index}')
         log(t, f'heartbeat echo for session {SESSION}; latency=50ms')
     for t in (17,32,47):log(t, 'Seamless window ended: connection closed')
     log(64, f'Ending session; reason=peer crossed boundary right, state=controlling(epoch: example, session: {SESSION}), notifyPeer=true')
+    events.extend(dict(kind='done',host=host,observedSeconds=90,observerExitCode=0) for host in ('controller','receiver'))
     return events
 
 
@@ -44,8 +46,21 @@ class LiveVerifierTests(unittest.TestCase):
             line=f'Ending session; reason=manual stop, state=controlling(epoch: example, session: {SESSION}), notifyPeer=true'))
         self.assertEqual(module.analyze(events,43)['status'],'FAIL')
 
+    def test_partial_or_failed_observer_cannot_pass(self):
+        events=[e for e in recording() if e['kind']!='done']
+        self.assertEqual(module.analyze(events,43)['status'],'INCONCLUSIVE')
+        events=recording()
+        events[-1]['observerExitCode']=2
+        self.assertEqual(module.analyze(events,43)['status'],'FAIL')
+
     def test_wrong_build_fails(self):
         self.assertEqual(module.analyze(recording(),42)['status'],'FAIL')
+
+    def test_controller_cursor_leak_fails_even_when_remote_delivery_continues(self):
+        events=recording()
+        for event in events:
+            if event['kind']=='cursor' and event['host']=='controller':event['x']=event['observedSeconds']*10
+        self.assertEqual(module.analyze(events,43)['status'],'FAIL')
 
     def test_stationary_os_cursor_cannot_pass(self):
         events=recording()

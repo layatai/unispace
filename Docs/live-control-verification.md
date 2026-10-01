@@ -33,7 +33,8 @@ python3 Tools/LiveControlObserver/test_verifier.py
 python3 Scripts/verify-live-control.py \
   --peer user@receiver-host \
   --expected-build 43 \
-  --duration 90 \
+  --duration 75 \
+  --arm-timeout 600 \
   --output .build/live-verification/build43
 ```
 
@@ -43,7 +44,9 @@ or types an event. It reads the app's sandboxed diagnostic log and samples the
 actual OS cursor position on both hosts at approximately 50 Hz. Host identity,
 installed build, running PID, and logging status are recorded before the test.
 
-Wait for both `READY` messages. Move the physical controller mouse across the
+Wait for both `READY` messages. The recorder stays armed for up to ten minutes;
+its capture timer starts only after an actual UniSpace handoff is logged.
+Move the physical controller mouse across the
 configured edge, then make small continuous movements within the receiver display
 for about one minute. Avoid buttons, typing, and display edges during this baseline.
 Afterward, return normally across the configured edge. Background window-catalog
@@ -51,9 +54,11 @@ refresh must remain enabled so the original failure path is exercised.
 
 The automated stability gate requires:
 
+- Both passive recorders completing successfully.
 - The intended app build running and diagnostic logging enabled on both hosts.
 - At least 45 seconds of uninterrupted control of the nominated receiver.
 - At least 100 real receiver cursor-position changes during that session.
+- The controller cursor remains anchored while remote input is suppressed.
 - At least 100 application input-progress acknowledgments.
 - At least two catalog connection closures during active control.
 - No unexpected desktop-session stop and heartbeat RTT p95 at most 250 ms.
@@ -82,3 +87,13 @@ The live logs are at:
 
 The non-container Application Support directory is not the installed sandboxed
 app's log location.
+
+## Build 43 live recording outcome
+
+Two paired recordings were made with the installed build 43 apps and real OS
+cursor observation. Neither contained a new UniSpace control-session handoff or
+input-progress acknowledgments, so both were classified **INCONCLUSIVE**. Cursor
+movement on the receiver alone is not accepted as proof of UniSpace delivery.
+Catalog connection closures continued without the previous generic stop-control
+calls. An active-session acceptance run is still required; do not describe these
+recordings as a reliability pass.

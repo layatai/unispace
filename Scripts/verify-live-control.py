@@ -34,9 +34,13 @@ thread=threading.Thread(target=cursor);thread.start()
 emit({'kind':'ready','build':info['CFBundleVersion'],'version':info['CFBundleShortVersionString'],
       'deviceID':workspace['localDeviceID']['rawValue'],'diagnosticsEnabled':prefs.get('DiagnosticLoggingEnabled',False),
       'pids':subprocess.check_output(['pgrep','-f',r'^/Applications/UniSpace[.]app/Contents/MacOS/UniSpace([[:space:]]|$)'],text=True).split()})
+stop=threading.Event()
+def control():
+ if sys.stdin.readline().strip()=='stop':stop.set()
+threading.Thread(target=control,daemon=True).start()
 started=time.monotonic()
 try:
- while time.monotonic()-started<duration:
+ while time.monotonic()-started<duration and not stop.is_set():
   if log.exists():
    if log.stat().st_size<offset:offset=0
    with log.open() as stream:
@@ -48,7 +52,7 @@ try:
 finally:
  if process.poll() is None: process.terminate()
  process.wait(timeout=5);thread.join(timeout=5)
-emit({'kind':'done'})
+emit({'kind':'done','observerExitCode':process.returncode})
 '''
 
 
@@ -66,6 +70,10 @@ def analyze(events, expected_build, minimum_active=45):
             missing.append(f'{host}: no live recorder metadata')
         elif meta['build'] != str(expected_build) or not meta['diagnosticsEnabled'] or not meta['pids']:
             failures.append(f'{host}: wrong build, disabled diagnostics, or app not running')
+    completed = {event['host']: event for event in events if event['kind']=='done'}
+    for host in ('controller','receiver'):
+        if host not in completed: missing.append(f'{host}: recording has not completed')
+        elif completed[host].get('observerExitCode') not in (0,-15): failures.append(f'{host}: cursor observer failed')
     peer = metadata.get('receiver', {}).get('deviceID', '')
     sessions, starts, ends, bad_stops = {}, {}, {}, []
     latencies, reliable, realtime, catalog_closes = [], [], [], []
@@ -78,7 +86,7 @@ def analyze(events, expected_build, minimum_active=45):
             starts[match[1]] = stamp
         match = re.search(r'Ending session; reason=(.*?), state=(?:controlling|recoveringController)\(.*?session: ([A-F0-9-]+)\)', line)
         if match and match[2] in starts:
-            ends[match[2]] = stamp
+            ends.setdefault(match[2], stamp)
             if not match[1].startswith('peer crossed boundary'):
                 bad_stops.append({'session': match[2], 'reason': match[1], 'atSeconds': stamp})
         if 'Input injected through sequence' in line: reliable.append(stamp)
@@ -94,6 +102,13 @@ def analyze(events, expected_build, minimum_active=45):
         missing.append(f'No continuous remote session lasting {minimum_active} seconds')
     cursor = [event for event in events if event['host']=='receiver' and event['kind']=='cursor'
               and best['start']+1 <= event['observedSeconds'] <= best['end']-1]
+    local_cursor = [event for event in events if event['host']=='controller' and event['kind']=='cursor'
+                    and best['start']+1 <= event['observedSeconds'] <= best['end']-1]
+    local_changes = sum(math.hypot(b['x']-a['x'], b['y']-a['y']) >= .5 for a,b in zip(local_cursor,local_cursor[1:]))
+    local_span = math.hypot(max((p['x'] for p in local_cursor),default=0)-min((p['x'] for p in local_cursor),default=0),
+                           max((p['y'] for p in local_cursor),default=0)-min((p['y'] for p in local_cursor),default=0))
+    if len(local_cursor)<100:missing.append('Insufficient controller OS cursor samples')
+    if local_changes>=10 and local_span>8:failures.append('Controller cursor moved while remote input should be suppressed')
     changed = sum(math.hypot(b['x']-a['x'], b['y']-a['y']) >= 0.5 for a,b in zip(cursor,cursor[1:]))
     if changed < 100: missing.append('Fewer than 100 actual receiver cursor-position changes during remote control')
     inside = lambda values: sum(best['start'] <= value <= best['end'] for value in values)
@@ -108,6 +123,7 @@ def analyze(events, expected_build, minimum_active=45):
             'scope':'Live session stability and OS cursor delivery; not physical end-to-end cursor latency',
             'metadata':metadata,'longestSessionSeconds':round(best['seconds'],2),
             'receiverCursorChanges':changed,'receiverCursorSamples':len(cursor),
+            'controllerCursorChanges':local_changes,'controllerCursorSpanPoints':round(local_span,2),
             'reliableProgressEvents':reliable_count,'realtimeProgressEvents':realtime_count,
             'catalogClosuresDuringSession':closes,'heartbeatRTTp95Milliseconds':percentile(latencies,.95),
             'unexpectedStops':bad_stops,'failures':failures,'missingEvidence':missing,
@@ -118,7 +134,8 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--peer', required=True, help='SSH identity for the receiving Mac')
     parser.add_argument('--expected-build', required=True)
-    parser.add_argument('--duration',type=int,default=90)
+    parser.add_argument('--duration',type=int,default=75,help='Seconds to record after an actual control handoff')
+    parser.add_argument('--arm-timeout',type=int,default=600,help='Maximum seconds to wait for the handoff')
     parser.add_argument('--minimum-active',type=int,default=45)
     parser.add_argument('--output',type=Path,default=ROOT/'.build/live-verification/latest')
     args=parser.parse_args()
@@ -129,9 +146,10 @@ def main():
     subprocess.run(ssh+['mkdir -p .unispace-live-verification/build'],check=True)
     subprocess.run(['scp','-o','BatchMode=yes','-o','StrictHostKeyChecking=yes',str(observer),
                     args.peer+':.unispace-live-verification/build/CursorObserver'],check=True)
+    recorder_limit=args.arm_timeout+args.duration+15
     commands={
-        'controller':[sys.executable,'-u','-c',MONITOR,str(args.duration),str(observer)],
-        'receiver':ssh+[shlex.join(['python3','-u','-c',MONITOR,str(args.duration),'~/.unispace-live-verification/build/CursorObserver'])],
+        'controller':[sys.executable,'-u','-c',MONITOR,str(recorder_limit),str(observer)],
+        'receiver':ssh+[shlex.join(['python3','-u','-c',MONITOR,str(recorder_limit),'~/.unispace-live-verification/build/CursorObserver'])],
     }
     started=time.monotonic(); events=[]; lock=threading.Lock(); processes=[]; threads=[]
     stream=(args.output/'events.jsonl').open('w')
@@ -143,13 +161,33 @@ def main():
             if value['kind']=='ready':print(f'READY {host}: build {value["build"]}, PID {value["pids"]}',flush=True)
     try:
         for host,command in commands.items():
-            process=subprocess.Popen(command,stdout=subprocess.PIPE,stderr=(args.output/(host+'-stderr.log')).open('w'),text=True)
+            process=subprocess.Popen(command,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=(args.output/(host+'-stderr.log')).open('w'),text=True)
             processes.append(process)
             thread=threading.Thread(target=consume,args=(host,process));thread.start();threads.append(thread)
+        triggered_at=None; stopping=False
         while any(process.poll() is None for process in processes):
-            with lock: report=analyze(list(events),args.expected_build,args.minimum_active)
+            with lock:
+                captured=list(events)
+            report=analyze(captured,args.expected_build,args.minimum_active)
+            if triggered_at is None:
+                peer=report['metadata'].get('receiver',{}).get('deviceID')
+                for event in captured:
+                    if peer and event['host']=='controller' and event['kind']=='log' and f'is controlling peer {peer}' in event['line']:
+                        triggered_at=event['observedSeconds']
+                        print('CAPTURE STARTED: UniSpace handoff observed',flush=True)
+                        break
+            elapsed=time.monotonic()-started
+            report['phase']='RECORDING' if triggered_at is not None else 'ARMED'
+            report['elapsedSeconds']=round(elapsed,1)
+            report['activeRecordingSeconds']=round(elapsed-triggered_at,1) if triggered_at is not None else 0
             (args.output/'progress.json').write_text(json.dumps(report,indent=2)+'\n')
-            if time.monotonic()-started>args.duration+15: raise TimeoutError('Live recorders did not finish')
+            finished=elapsed-triggered_at>=args.duration if triggered_at is not None else elapsed>=args.arm_timeout
+            if finished and not stopping:
+                for process in processes:
+                    if process.poll() is None:
+                        process.stdin.write('stop\n');process.stdin.flush()
+                stopping=True
+            if elapsed>recorder_limit+10: raise TimeoutError('Live recorders did not finish')
             time.sleep(1)
         for thread in threads:thread.join(timeout=5)
     finally:
