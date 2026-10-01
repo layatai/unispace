@@ -133,6 +133,21 @@ targets:
     settings:
       base:
         GENERATE_INFOPLIST_FILE: true
+  UniSpaceAppTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - Tests/AppTests
+      - path: Sources/App
+        excludes:
+          - UniSpaceApp.swift
+    dependencies:
+      - target: UniSpaceDomain
+      - target: UniSpaceApplication
+      - target: UniSpaceInfrastructure
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: true
   UniSpaceUITests:
     type: bundle.ui-testing
     platform: macOS
@@ -151,6 +166,7 @@ schemes:
         UniSpaceApplicationTests: [test]
         UniSpaceInfrastructureTests: [test]
         UniSpaceSimulation: [build]
+        UniSpaceAppTests: [test]
         UniSpaceUITests: [test]
     test:
       gatherCoverageData: true
@@ -158,6 +174,7 @@ schemes:
         - UniSpaceDomainTests
         - UniSpaceApplicationTests
         - UniSpaceInfrastructureTests
+        - UniSpaceAppTests
         - UniSpaceUITests
   UniSpaceSimulation:
     build:

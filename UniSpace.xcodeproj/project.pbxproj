@@ -18,7 +18,9 @@
 		0562F260B20737B8FCDFFF9C /* ApplicationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 73D75018570BCFF3ADAA8FFA /* ApplicationTests.swift */; };
 		089837EDE4B866F6DB8CFB69 /* WorkspaceModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D53BFBE80B81BD15ADE9567 /* WorkspaceModels.swift */; };
 		09E5B74F9385797A26BE43BA /* SeamlessWindowInput.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB1A09CC4D1B2F7D126F1442 /* SeamlessWindowInput.swift */; };
+		0B8CA8899A2919813D85B444 /* WorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 184432B7A6AD87798C281699 /* WorkspaceView.swift */; };
 		0C466C3AB00B8FAC0248732E /* FileTransferCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 71BEC5E7C00EDCDE82FDA3C7 /* FileTransferCoordinator.swift */; };
+		0D80347FA24318FDBC9EC86D /* UniSpaceInfrastructure.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = A92FBB5C74B263098DBE15F3 /* UniSpaceInfrastructure.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		0F4A48BA1E5ED7EF257988EE /* ClipboardProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = A35CD7D5BF4D7C94C7427086 /* ClipboardProtocol.swift */; };
 		0FD70E2DF57D3C4771CADD97 /* UniSpaceInfrastructure.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = A92FBB5C74B263098DBE15F3 /* UniSpaceInfrastructure.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		113BF8CD86F1512EACABE4CF /* TwoProcessSimulationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E124D2AC0DF1143B1DFE882 /* TwoProcessSimulationTests.swift */; };
@@ -31,6 +33,7 @@
 		17DDC5C20C28D89A2FBE0B95 /* RealtimeInputReceiver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0731731EF8A338699B9075C7 /* RealtimeInputReceiver.swift */; };
 		18FE967A9F32A884A7AB69CC /* ControlRoutingPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = A22156FBFA8C341F3E0E3494 /* ControlRoutingPolicy.swift */; };
 		1CF86561870DB5B6B5215E3B /* CGEventInputInjector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FB1C3CA1F6EAACE025F81C8 /* CGEventInputInjector.swift */; };
+		1E5D7DE173BD3BFB85C3855D /* ClipboardViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B08ECF73A3310CB81B011268 /* ClipboardViewModel.swift */; };
 		22C3836F82F335609B866861 /* UniSpaceUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5BB0E1195B12A9CCB81CDE1 /* UniSpaceUITests.swift */; };
 		22C43ADAB634554371FF0519 /* FileTransferCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2CB43EB0672129457FEECEC /* FileTransferCoordinatorTests.swift */; };
 		248856F9D8F49575B93537B7 /* SeamlessWindowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A08F40E269654673542DE2F0 /* SeamlessWindowTests.swift */; };
@@ -40,6 +43,7 @@
 		2B6B799EA34029E41CA235E0 /* SeamlessWindowCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = 76D41CEF438FEFC2BA9CE978 /* SeamlessWindowCapture.swift */; };
 		2C2486CE924777E5FD3B738A /* DomainModelsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F49A9EC3759503CB24FD0B72 /* DomainModelsTests.swift */; };
 		2C72B276F01CB06589C3AE83 /* UniSpaceInfrastructure.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A92FBB5C74B263098DBE15F3 /* UniSpaceInfrastructure.framework */; };
+		2D8A58FC4EEE78380FBDFB6D /* DevicesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1884A9135A3257510B0A8F0 /* DevicesView.swift */; };
 		2E13956FDCD9AF1E81CF6D10 /* ClipboardProtocolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A42489EAE57770BAFD49642F /* ClipboardProtocolTests.swift */; };
 		2EAD4C5FF590B3878B977ACA /* StreamingPersistentFileSourceProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 964C8D571349C707C1CDA91C /* StreamingPersistentFileSourceProvider.swift */; };
 		3012214B9514F5E889FA111E /* UniSpaceApplication.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = CD69866EFD7AE9229BB70567 /* UniSpaceApplication.framework */; };
@@ -48,16 +52,19 @@
 		3572D06C3B227654B07E788E /* InputPipelineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEB8F1CADC2034E5BCEB1D9D /* InputPipelineTests.swift */; };
 		365AC41D407C6034376F50A5 /* FileTransferContracts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F7715DBADB331DC400DEB3E /* FileTransferContracts.swift */; };
 		3685E4EB870AE8B0A1C532FF /* ConnectionPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 05F047B5B71179922FCBE2DD /* ConnectionPolicy.swift */; };
+		368A02580EEEA145EEE3871A /* DisplaysView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5E239C50434E115697BAFB7 /* DisplaysView.swift */; };
 		36EE17C16655E261C5F422DB /* InputQueueSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1FA2CD0AECC8046D5DBCE81 /* InputQueueSnapshot.swift */; };
 		36F9CE3AB5AA78A34CA3F61F /* RealtimePointerCaptureSender.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1F4DB4B156BDAF8BC427A70 /* RealtimePointerCaptureSender.swift */; };
 		38EE95B2C15CE7EC2C8A2FB3 /* QoSFileTransferTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9A7C3F7869A4784BF51181A /* QoSFileTransferTransport.swift */; };
 		3A3A388DE7A4473F3CAD2FD1 /* UniSpaceInfrastructure.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A92FBB5C74B263098DBE15F3 /* UniSpaceInfrastructure.framework */; };
 		3A880F050C6A00143E1A1765 /* ConnectionRetrySchedule.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4DC7CDECCF5F3E49CB27E553 /* ConnectionRetrySchedule.swift */; };
 		3BD92A406A4851CD54C8BD66 /* WorkspaceLifecycle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2CF070D689C1AA7C27334F7E /* WorkspaceLifecycle.swift */; };
+		3C137E52C8A38D15A08F076A /* SeamlessWindowViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 94B269E19BAB68A2BD698AB3 /* SeamlessWindowViewModel.swift */; };
 		3D2F9446A49594963007BAA5 /* UniSpaceApplication.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = CD69866EFD7AE9229BB70567 /* UniSpaceApplication.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		3F4C67DAF2DF1B77CB366D67 /* FileTransferProtocolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF32C8B699ECA9115BCE438B /* FileTransferProtocolTests.swift */; };
 		40A062D997ADC412969A4DF1 /* CoordinatorStateCoverageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF70CBE8D8890E0B9C31122B /* CoordinatorStateCoverageTests.swift */; };
 		41885736115B4CE83994D88F /* SystemLoginItemController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B6E8B1FA2B7DDB5F10F7EDE /* SystemLoginItemController.swift */; };
+		449FD7A18C98C30188F8F888 /* FileTransferViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A74BB5506240707D92668BC /* FileTransferViewModel.swift */; };
 		472578005136DD01F9572CCA /* ConnectionRecoveryPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7AAA75CF0B5E940401B90DB /* ConnectionRecoveryPolicyTests.swift */; };
 		47A3402AFE500FBF2D42188A /* ConnectionPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 52503476DF8C30922A762829 /* ConnectionPolicyTests.swift */; };
 		4854AC4D14047AAF36821B33 /* SandboxTransferStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9C5F32518159BD61F4A0006 /* SandboxTransferStore.swift */; };
@@ -66,12 +73,15 @@
 		4BF0B343A2396225C9AB48AB /* ProtocolCoverageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5768D1126879FE096B44FAB /* ProtocolCoverageTests.swift */; };
 		4DC13641B50A30B700B4441F /* SeamlessWindowViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 94B269E19BAB68A2BD698AB3 /* SeamlessWindowViewModel.swift */; };
 		4F782D857B0027B6E31F13D2 /* SeamlessWindowConnectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 81EBE0A4A69830EAB49DE7CF /* SeamlessWindowConnectionTests.swift */; };
+		5072BBBE018CC68573E778BF /* ClipboardFeatureBaselineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 433D591FE5C6EA589EA494E5 /* ClipboardFeatureBaselineTests.swift */; };
 		52FBED6818BA3CABD2037A7F /* ClipboardCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D28B7447A19E823D3F993A1 /* ClipboardCoordinator.swift */; };
 		5497A8C8B7253CC28499418B /* WorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 184432B7A6AD87798C281699 /* WorkspaceView.swift */; };
 		57EE3A4DC4E1CAA006423E32 /* NetworkFileTransferTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E6AD408755764E44722C89B /* NetworkFileTransferTransport.swift */; };
 		580C9A6720FF82483450B52B /* UniSpaceApplication.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = CD69866EFD7AE9229BB70567 /* UniSpaceApplication.framework */; };
 		59A98523E54491459EB8B530 /* UniSpaceDomain.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = D0CF733F292C646448A74827 /* UniSpaceDomain.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		5F7DB43A7C476AA36C40CF45 /* SetupFlowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63C1907F88FD14FAAC86A99A /* SetupFlowView.swift */; };
 		614AF274F556634B2EDA0446 /* SimulationModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27D38A2E09139472BAB9BD80 /* SimulationModels.swift */; };
+		61A462A57AB5FBAF5951FDBF /* SettingsRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7F83A6EAED5A346AA0A2F73 /* SettingsRootView.swift */; };
 		630D9260AED7669F82DBAF80 /* UniSpaceApplication.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = CD69866EFD7AE9229BB70567 /* UniSpaceApplication.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		63F9954BAE0212DB110EDDFE /* FinderFileContinuityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A031EE96F2A7B2DA05629C9 /* FinderFileContinuityTests.swift */; };
 		64D7A647CC98A3FEAF3F7535 /* SetupFlowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63C1907F88FD14FAAC86A99A /* SetupFlowView.swift */; };
@@ -79,6 +89,7 @@
 		6828E409A4CA13BBD0BC091B /* SystemFilePasteboard.swift in Sources */ = {isa = PBXBuildFile; fileRef = CBC7A578F4741CCED06FA093 /* SystemFilePasteboard.swift */; };
 		6A2A14311CFCCF18BBA3103F /* PersistentSystemFileSourceProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17DE8D292ABDD97AE65260F4 /* PersistentSystemFileSourceProvider.swift */; };
 		6B79E31F3F32675B4F869816 /* ControlProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = FAD25BEF07E35D0FEC867A03 /* ControlProtocol.swift */; };
+		6C951044C8B21E730BD5314A /* TransferCenterView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 448153996FA9A3A4DC5A90F0 /* TransferCenterView.swift */; };
 		6E33270E4DFB9DBCEDFB91AF /* UniSpaceDomain.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D0CF733F292C646448A74827 /* UniSpaceDomain.framework */; };
 		74AC30A72CECB8779FE0869C /* TransferQoSInfrastructureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 141EC1525C2113FE7AD7B5AD /* TransferQoSInfrastructureTests.swift */; };
 		776E04431ED4774F531FC12E /* FileTransferComposition.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAEC587D8B279C9E6BB97FB8 /* FileTransferComposition.swift */; };
@@ -89,6 +100,7 @@
 		886D77A812D77B7AD388069E /* NetworkPeerTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 602F8819EF4D4A147D279865 /* NetworkPeerTransport.swift */; };
 		89DA58817351D4BF2574908F /* SimulationAdapters.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62058B91AC6DF51CB04363DB /* SimulationAdapters.swift */; };
 		8E3850CC638FBADFE66DFE00 /* SystemTailnetAddressProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E450FB99AE7F4C9BB087CB4 /* SystemTailnetAddressProvider.swift */; };
+		8E3D1A6984A7375CA3F45EB8 /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC7DB685B1A02A9DD593C503 /* AppModel.swift */; };
 		8E6BA003D246813AC1906B0B /* FrameCodec.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1425648D0C5F8712AC268 /* FrameCodec.swift */; };
 		8E8D0D149CC8932E23A6D7DC /* FileWorkspaceStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6BD24036F75164EC8ED3CE84 /* FileWorkspaceStore.swift */; };
 		94F94E0629103ADDC5F8F32D /* AuthenticatedPointerTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3CB4B943AD906BC099B164E8 /* AuthenticatedPointerTransport.swift */; };
@@ -96,10 +108,13 @@
 		9B0F95C15B4BECBD8BBED6DE /* TransferCenterView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 448153996FA9A3A4DC5A90F0 /* TransferCenterView.swift */; };
 		9C4AE39AE934CEDF88992640 /* UniSpaceApplication.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = CD69866EFD7AE9229BB70567 /* UniSpaceApplication.framework */; };
 		A3D52A32EFB3044F88769084 /* UniSpaceDomain.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D0CF733F292C646448A74827 /* UniSpaceDomain.framework */; };
+		A5825A5AAE248A87AC23AA72 /* DesignSystem.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0532F3407215F29850C4C079 /* DesignSystem.swift */; };
+		A7A176ECCB0F7EC69CEE1BB1 /* ContinuityContextSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEE21E7D2C9D729B2FA16FC3 /* ContinuityContextSnapshot.swift */; };
 		A7CC7FCBD0D99C860D6EADCB /* FileTransferDestinationResolverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C44ED25FAE5662CD7BA713E /* FileTransferDestinationResolverTests.swift */; };
 		A8ED0D748DC7DE1DAE25AEE2 /* UniSpaceDomain.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D0CF733F292C646448A74827 /* UniSpaceDomain.framework */; };
 		A90B7085E683AE39234AEF0F /* CGEventInputCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4AC57E967E60EA86351A838 /* CGEventInputCapture.swift */; };
 		A950D891DECD7A66E03B3CB3 /* SecureChannelCodable.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C331D8FA11D4F29D3B727E0 /* SecureChannelCodable.swift */; };
+		AA063DDE8F41B0DA34DB0D7D /* UniSpaceDomain.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = D0CF733F292C646448A74827 /* UniSpaceDomain.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		AB83E3E9B1C1EAB906541694 /* UniSpaceDomain.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D0CF733F292C646448A74827 /* UniSpaceDomain.framework */; };
 		AC007143369DCAF64CBBA867 /* SystemPermissionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9BC99509AFF12E2820267B0 /* SystemPermissionService.swift */; };
 		AC77E41C713E1222C1E0A3C3 /* DiagnosticLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F8816EC1DF1013B5FE8B52A /* DiagnosticLog.swift */; };
@@ -111,6 +126,7 @@
 		B5D02F54E1C4E6A95FCF65CA /* ContinuityContextSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEE21E7D2C9D729B2FA16FC3 /* ContinuityContextSnapshot.swift */; };
 		B74BCDF79DEC23C2D3CF24E6 /* ControlResilienceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF28332623556C22500F3C96 /* ControlResilienceTests.swift */; };
 		B797E5EB0DB57488F70D88B0 /* PersistentFileSourceProviderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9714DC0D2D51439743192501 /* PersistentFileSourceProviderTests.swift */; };
+		BB0F0488137560857A6934DD /* AppModel+Continuity.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD4E7B2B948E0A2DD50FE7C2 /* AppModel+Continuity.swift */; };
 		BB4A272847FDCD4D64F1F554 /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC7DB685B1A02A9DD593C503 /* AppModel.swift */; };
 		BB523A42FF9175B3778EBA47 /* UniSpaceSimulationMain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5768E62FE58993F35076DFA6 /* UniSpaceSimulationMain.swift */; };
 		BC04C884F04BC52D4BF3B9CB /* SimulationNode.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0AEF73B525A88842DE7C9086 /* SimulationNode.swift */; };
@@ -120,12 +136,15 @@
 		C37C9B32207B502AF2957684 /* UniSpaceDomain.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D0CF733F292C646448A74827 /* UniSpaceDomain.framework */; };
 		C3FE6236D3044AB4482A4914 /* UniSpaceApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 904734B26F5ED02D2FFA4505 /* UniSpaceApp.swift */; };
 		C5418C7EFBB6431816C0EA27 /* FilePasteboardFailureReportingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 370EF07C68A5E942E13CC936 /* FilePasteboardFailureReportingTests.swift */; };
+		C546344E79C6515870D27B07 /* UniSpaceApplication.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = CD69866EFD7AE9229BB70567 /* UniSpaceApplication.framework */; };
 		C79F084DA0355C3CE898BCAA /* UniSpaceInfrastructure.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = A92FBB5C74B263098DBE15F3 /* UniSpaceInfrastructure.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		C87E7AABB9E094847FC67001 /* UniSpaceDomain.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = D0CF733F292C646448A74827 /* UniSpaceDomain.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		CA142C606E1C6C9D9472778C /* PairingCrypto.swift in Sources */ = {isa = PBXBuildFile; fileRef = C699F9E8100751E72C66CD36 /* PairingCrypto.swift */; };
 		CC24AF606D59D87DDAA6E1AD /* ControllerStateMachine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 55C72D45E1BA1AC01DA60260 /* ControllerStateMachine.swift */; };
 		CDFD02CFC768992F779CE5FB /* ClipboardApplicationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3756BDF87509997810654A1 /* ClipboardApplicationTests.swift */; };
 		CEA146ECA0410A489A48C28B /* DisplaysView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5E239C50434E115697BAFB7 /* DisplaysView.swift */; };
+		CF47B81155DBE0ED4458B67F /* FileTransferComposition.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAEC587D8B279C9E6BB97FB8 /* FileTransferComposition.swift */; };
+		CF753FA2BB7EB0FE40A588A6 /* UniSpaceInfrastructure.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A92FBB5C74B263098DBE15F3 /* UniSpaceInfrastructure.framework */; };
 		D0DF7E954936FBBA125139E0 /* FileTransferUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 908F95DFCA8BBA9EDB02324C /* FileTransferUITests.swift */; };
 		D26425BBE8F10BE685F1F55B /* ContinuityDestinationResolverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D5FD5232DF4539B67F27ABF /* ContinuityDestinationResolverTests.swift */; };
 		D5635524C7AA9BBB1F2B6859 /* ClipboardViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B08ECF73A3310CB81B011268 /* ClipboardViewModel.swift */; };
@@ -139,17 +158,21 @@
 		E25E13D691ED0B7A6BFBE196 /* SystemFileSourceProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A9A0F31519F8DAC02DA201F /* SystemFileSourceProvider.swift */; };
 		E2B5B14F80F0AAFA8D17CE58 /* FileTransferDestinationResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99336AF6F5B53F63D7F3024F /* FileTransferDestinationResolver.swift */; };
 		E41FB56FC55B098152423FCC /* UniSpaceDomain.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = D0CF733F292C646448A74827 /* UniSpaceDomain.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		E8FEE9EA1363D94E2CD62964 /* ContinuityWorkspaceConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 38E342977FC8695FF8EE7EF6 /* ContinuityWorkspaceConfiguration.swift */; };
 		EBC0EAF2023AA7925C3B1B7E /* SystemClipboardService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 699D327BAE79CB2ADCC575B6 /* SystemClipboardService.swift */; };
 		ED9CA3D74CCE2E9164599E73 /* UniSpaceApplication.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = CD69866EFD7AE9229BB70567 /* UniSpaceApplication.framework */; };
 		EFDB14782383A1DB4A92AB17 /* UniSpaceInfrastructure.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A92FBB5C74B263098DBE15F3 /* UniSpaceInfrastructure.framework */; };
 		F3ABF8281F85D3FDD778C52A /* FileTransferViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A74BB5506240707D92668BC /* FileTransferViewModel.swift */; };
+		F3C6A36FBBDD6BE2CB2FCF22 /* ContinuityView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 78EF074FC7F6C76A69345A71 /* ContinuityView.swift */; };
 		F5E892169EC72582DEFE7504 /* WindowPresentationState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90C9469A035EE4BF2726C200 /* WindowPresentationState.swift */; };
 		F74B32ADBD01F401851A3406 /* ControlSessionCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 895B8982AB6DAE8ACF98E4F0 /* ControlSessionCoordinator.swift */; };
+		F7BE5DFC447B179641EA8745 /* UniSpaceApplication.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = CD69866EFD7AE9229BB70567 /* UniSpaceApplication.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		F81D74590B1FD973A6B952EA /* NativeInputSmokeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C19AA84D1BFD635720BB70B7 /* NativeInputSmokeTests.swift */; };
 		F903B1C9240B0D33456CB138 /* NetworkClipboardTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32B913D6ED478D7DC6D20CCE /* NetworkClipboardTransport.swift */; };
 		F927C0089DC72AEE62AA8608 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 161694A87BE723803EFBD6DC /* Assets.xcassets */; };
 		F92B301966AE215DCBC5CF6B /* ClipboardInfrastructureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C35B87B58745836A08E4AEA7 /* ClipboardInfrastructureTests.swift */; };
 		FA7737690CF6168BB2FDEAA8 /* ClipboardContracts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D8DF2D8E73D3C8DCBC0ACEF /* ClipboardContracts.swift */; };
+		FC9B7C9F3329248317F1CC22 /* UniSpaceDomain.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D0CF733F292C646448A74827 /* UniSpaceDomain.framework */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -202,6 +225,13 @@
 			remoteGlobalIDString = 1553C035D72A1A2B1C2CB0D5;
 			remoteInfo = UniSpaceApplication;
 		};
+		770DF9B8F22358452C5C3647 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 2EC26464FE2AA63EC753A04A /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 1553C035D72A1A2B1C2CB0D5;
+			remoteInfo = UniSpaceApplication;
+		};
 		846A141D3A208596588C5184 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 2EC26464FE2AA63EC753A04A /* Project object */;
@@ -215,6 +245,13 @@
 			proxyType = 1;
 			remoteGlobalIDString = 1553C035D72A1A2B1C2CB0D5;
 			remoteInfo = UniSpaceApplication;
+		};
+		971E67EC20A9FB069F5CCA53 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 2EC26464FE2AA63EC753A04A /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 90C6A6EF933D85536B71BFED;
+			remoteInfo = UniSpaceDomain;
 		};
 		9774E0C82464A34BAD4B2D42 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -236,6 +273,13 @@
 			proxyType = 1;
 			remoteGlobalIDString = 90C6A6EF933D85536B71BFED;
 			remoteInfo = UniSpaceDomain;
+		};
+		B52E7DC481CA467D44BA4B17 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 2EC26464FE2AA63EC753A04A /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 98F94F97CA63B7C9A4AB027B;
+			remoteInfo = UniSpaceInfrastructure;
 		};
 		BA15D62735E2E57EB1F48D96 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -275,6 +319,19 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
+		1BD6D870C4E50B317962A686 /* Embed Frameworks */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 10;
+			files = (
+				AA063DDE8F41B0DA34DB0D7D /* UniSpaceDomain.framework in Embed Frameworks */,
+				F7BE5DFC447B179641EA8745 /* UniSpaceApplication.framework in Embed Frameworks */,
+				0D80347FA24318FDBC9EC86D /* UniSpaceInfrastructure.framework in Embed Frameworks */,
+			);
+			name = "Embed Frameworks";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		4C7BCFA09C487B08A37214AB /* Embed Frameworks */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
@@ -359,6 +416,7 @@
 		370EF07C68A5E942E13CC936 /* FilePasteboardFailureReportingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilePasteboardFailureReportingTests.swift; sourceTree = "<group>"; };
 		38E342977FC8695FF8EE7EF6 /* ContinuityWorkspaceConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContinuityWorkspaceConfiguration.swift; sourceTree = "<group>"; };
 		3CB4B943AD906BC099B164E8 /* AuthenticatedPointerTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthenticatedPointerTransport.swift; sourceTree = "<group>"; };
+		433D591FE5C6EA589EA494E5 /* ClipboardFeatureBaselineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipboardFeatureBaselineTests.swift; sourceTree = "<group>"; };
 		448153996FA9A3A4DC5A90F0 /* TransferCenterView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransferCenterView.swift; sourceTree = "<group>"; };
 		469284CBAF267B56A4B56BBA /* WorkspaceReplicaMergerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceReplicaMergerTests.swift; sourceTree = "<group>"; };
 		478444AE3F889D2F9D43B479 /* PortableInputMapper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PortableInputMapper.swift; sourceTree = "<group>"; };
@@ -443,6 +501,7 @@
 		CC7DB685B1A02A9DD593C503 /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
 		CD69866EFD7AE9229BB70567 /* UniSpaceApplication.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = UniSpaceApplication.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		D0CF733F292C646448A74827 /* UniSpaceDomain.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = UniSpaceDomain.framework; sourceTree = BUILT_PRODUCTS_DIR; };
+		DB05DA13BCA065FC826A2B98 /* UniSpaceAppTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = UniSpaceAppTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		DEB8F1CADC2034E5BCEB1D9D /* InputPipelineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InputPipelineTests.swift; sourceTree = "<group>"; };
 		E3756BDF87509997810654A1 /* ClipboardApplicationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipboardApplicationTests.swift; sourceTree = "<group>"; };
 		E5BB0E1195B12A9CCB81CDE1 /* UniSpaceUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UniSpaceUITests.swift; sourceTree = "<group>"; };
@@ -466,6 +525,16 @@
 				A8ED0D748DC7DE1DAE25AEE2 /* UniSpaceDomain.framework in Frameworks */,
 				580C9A6720FF82483450B52B /* UniSpaceApplication.framework in Frameworks */,
 				EFDB14782383A1DB4A92AB17 /* UniSpaceInfrastructure.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		3AA7C384A5C4D417226156CF /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				FC9B7C9F3329248317F1CC22 /* UniSpaceDomain.framework in Frameworks */,
+				C546344E79C6515870D27B07 /* UniSpaceApplication.framework in Frameworks */,
+				CF753FA2BB7EB0FE40A588A6 /* UniSpaceInfrastructure.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -601,6 +670,7 @@
 			isa = PBXGroup;
 			children = (
 				0451E8EB974A68BD815B1356 /* ApplicationTests */,
+				63792B485BFA98602D1863C2 /* AppTests */,
 				428F0C992DFD31720ED4C98F /* DomainTests */,
 				9A371D04D8AE4C32DA671CAB /* InfrastructureTests */,
 			);
@@ -627,6 +697,14 @@
 				05A832230695791A7DC5065D /* StateMachineCoverageTests.swift */,
 			);
 			path = DomainTests;
+			sourceTree = "<group>";
+		};
+		63792B485BFA98602D1863C2 /* AppTests */ = {
+			isa = PBXGroup;
+			children = (
+				433D591FE5C6EA589EA494E5 /* ClipboardFeatureBaselineTests.swift */,
+			);
+			path = AppTests;
 			sourceTree = "<group>";
 		};
 		6D62009679D4B52724A1B389 /* Tools */ = {
@@ -771,6 +849,7 @@
 				918BD24F1FF035FE50FDBF36 /* UniSpace.app */,
 				CD69866EFD7AE9229BB70567 /* UniSpaceApplication.framework */,
 				A66CF80D95080FEE80B09369 /* UniSpaceApplicationTests.xctest */,
+				DB05DA13BCA065FC826A2B98 /* UniSpaceAppTests.xctest */,
 				D0CF733F292C646448A74827 /* UniSpaceDomain.framework */,
 				AD45CA2E1EFEB55F7EAA255E /* UniSpaceDomainTests.xctest */,
 				A92FBB5C74B263098DBE15F3 /* UniSpaceInfrastructure.framework */,
@@ -911,6 +990,28 @@
 			productReference = A66CF80D95080FEE80B09369 /* UniSpaceApplicationTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
+		7688B4C3E33D623CC3F88C8F /* UniSpaceAppTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 8ABF468E1897A057068457A9 /* Build configuration list for PBXNativeTarget "UniSpaceAppTests" */;
+			buildPhases = (
+				CFA9CA06D2101D4AE10FCF0A /* Sources */,
+				3AA7C384A5C4D417226156CF /* Frameworks */,
+				1BD6D870C4E50B317962A686 /* Embed Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				BF1A33DA690CA18991ED11E8 /* PBXTargetDependency */,
+				BEAD72F73AFAC9481AA5564A /* PBXTargetDependency */,
+				25917A691E3842FD6D17DCFB /* PBXTargetDependency */,
+			);
+			name = UniSpaceAppTests;
+			packageProductDependencies = (
+			);
+			productName = UniSpaceAppTests;
+			productReference = DB05DA13BCA065FC826A2B98 /* UniSpaceAppTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 		90C6A6EF933D85536B71BFED /* UniSpaceDomain */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 037141EFF55431D47FD46F9D /* Build configuration list for PBXNativeTarget "UniSpaceDomain" */;
@@ -999,6 +1100,10 @@
 						DevelopmentTeam = Y69F3DRK44;
 						ProvisioningStyle = Automatic;
 					};
+					7688B4C3E33D623CC3F88C8F = {
+						DevelopmentTeam = Y69F3DRK44;
+						ProvisioningStyle = Automatic;
+					};
 					90C6A6EF933D85536B71BFED = {
 						DevelopmentTeam = Y69F3DRK44;
 						ProvisioningStyle = Automatic;
@@ -1036,6 +1141,7 @@
 				4404EE2F0EF89BE0132AA1DC /* UniSpaceDomainTests */,
 				6BAE33DC4609458DCD50753E /* UniSpaceApplicationTests */,
 				039350D04D5DC5574F78FB7F /* UniSpaceInfrastructureTests */,
+				7688B4C3E33D623CC3F88C8F /* UniSpaceAppTests */,
 				969D7FDA0C4BE31A20EA278E /* UniSpaceUITests */,
 			);
 		};
@@ -1234,6 +1340,30 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		CFA9CA06D2101D4AE10FCF0A /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				BB0F0488137560857A6934DD /* AppModel+Continuity.swift in Sources */,
+				8E3D1A6984A7375CA3F45EB8 /* AppModel.swift in Sources */,
+				5072BBBE018CC68573E778BF /* ClipboardFeatureBaselineTests.swift in Sources */,
+				1E5D7DE173BD3BFB85C3855D /* ClipboardViewModel.swift in Sources */,
+				A7A176ECCB0F7EC69CEE1BB1 /* ContinuityContextSnapshot.swift in Sources */,
+				F3C6A36FBBDD6BE2CB2FCF22 /* ContinuityView.swift in Sources */,
+				E8FEE9EA1363D94E2CD62964 /* ContinuityWorkspaceConfiguration.swift in Sources */,
+				A5825A5AAE248A87AC23AA72 /* DesignSystem.swift in Sources */,
+				2D8A58FC4EEE78380FBDFB6D /* DevicesView.swift in Sources */,
+				368A02580EEEA145EEE3871A /* DisplaysView.swift in Sources */,
+				CF47B81155DBE0ED4458B67F /* FileTransferComposition.swift in Sources */,
+				449FD7A18C98C30188F8F888 /* FileTransferViewModel.swift in Sources */,
+				3C137E52C8A38D15A08F076A /* SeamlessWindowViewModel.swift in Sources */,
+				61A462A57AB5FBAF5951FDBF /* SettingsRootView.swift in Sources */,
+				5F7DB43A7C476AA36C40CF45 /* SetupFlowView.swift in Sources */,
+				6C951044C8B21E730BD5314A /* TransferCenterView.swift in Sources */,
+				0B8CA8899A2919813D85B444 /* WorkspaceView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -1246,6 +1376,11 @@
 			isa = PBXTargetDependency;
 			target = 98F94F97CA63B7C9A4AB027B /* UniSpaceInfrastructure */;
 			targetProxy = 5A64D1FBE8C52A9606308169 /* PBXContainerItemProxy */;
+		};
+		25917A691E3842FD6D17DCFB /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 98F94F97CA63B7C9A4AB027B /* UniSpaceInfrastructure */;
+			targetProxy = B52E7DC481CA467D44BA4B17 /* PBXContainerItemProxy */;
 		};
 		33AE7D80BBE53A50E33691AA /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
@@ -1306,6 +1441,16 @@
 			isa = PBXTargetDependency;
 			target = 1553C035D72A1A2B1C2CB0D5 /* UniSpaceApplication */;
 			targetProxy = AE64139141A66CDD5FE78D93 /* PBXContainerItemProxy */;
+		};
+		BEAD72F73AFAC9481AA5564A /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 1553C035D72A1A2B1C2CB0D5 /* UniSpaceApplication */;
+			targetProxy = 770DF9B8F22358452C5C3647 /* PBXContainerItemProxy */;
+		};
+		BF1A33DA690CA18991ED11E8 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 90C6A6EF933D85536B71BFED /* UniSpaceDomain */;
+			targetProxy = 971E67EC20A9FB069F5CCA53 /* PBXContainerItemProxy */;
 		};
 		EDFEBFA93535A91CCC3C75D1 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
@@ -1630,6 +1775,21 @@
 			};
 			name = Release;
 		};
+		78D84336FC716B5D080D20FC /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				COMBINE_HIDPI_IMAGES = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				SDKROOT = macosx;
+			};
+			name = Release;
+		};
 		85FA0BAA3EF93339A8F5B3FE /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -1686,6 +1846,21 @@
 				SDKROOT = macosx;
 				SKIP_INSTALL = YES;
 				VERSIONING_SYSTEM = "apple-generic";
+			};
+			name = Debug;
+		};
+		CB078D2C2CC2F4666AB71817 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				COMBINE_HIDPI_IMAGES = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				SDKROOT = macosx;
 			};
 			name = Debug;
 		};
@@ -1813,6 +1988,15 @@
 			buildConfigurations = (
 				445532C5B976914468B7CB0C /* Debug */,
 				45CE6689E011A67812A178B7 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		8ABF468E1897A057068457A9 /* Build configuration list for PBXNativeTarget "UniSpaceAppTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				CB078D2C2CC2F4666AB71817 /* Debug */,
+				78D84336FC716B5D080D20FC /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;

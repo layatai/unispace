@@ -46,6 +46,11 @@ jobs:
             -resultBundlePath .build/test-results/FinderFileContinuity.xcresult \
             CODE_SIGNING_ALLOWED=NO
 
+      - name: Verify live acceptance evidence rules
+        run: |
+          python3 -m unittest discover -s Tools/FeatureBaseline -v
+          python3 -m unittest discover -s Tools/LiveControlObserver -v
+
       - name: Upload result bundle
         if: always()
         uses: actions/upload-artifact@v4
