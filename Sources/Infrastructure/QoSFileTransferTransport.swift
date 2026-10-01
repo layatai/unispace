@@ -323,7 +323,7 @@ private actor FileTransferSendScheduler {
     private struct Waiter {
         let key: FlowKey
         let generation: UInt64
-        let continuation: CheckedContinuation<Void, Never>
+        let continuation: AsyncStream<Void>.Continuation
     }
 
     private let configuration: FileTransferQoSConfiguration
@@ -598,28 +598,22 @@ private actor FileTransferSendScheduler {
     }
 
     private func waitForCredit(key: FlowKey, generation expectedGeneration: UInt64) async throws {
-        let id = UUID()
-        await withTaskCancellationHandler {
-            await withCheckedContinuation { continuation in
-                guard expectedGeneration == generation else {
-                    continuation.resume()
-                    return
-                }
-                waiters[id] = Waiter(
-                    key: key,
-                    generation: expectedGeneration,
-                    continuation: continuation
-                )
-            }
-        } onCancel: {
-            Task { await self.cancelWaiter(id) }
-        }
         try Task.checkCancellation()
         guard expectedGeneration == generation else { throw CancellationError() }
-    }
-
-    private func cancelWaiter(_ id: UUID) {
-        waiters.removeValue(forKey: id)?.continuation.resume()
+        let id = UUID()
+        let signal = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        // Register synchronously on this actor. AsyncStream handles cancellation
+        // without an actor-capturing continuation callback nested inside a task
+        // cancellation handler (which trapped in optimized shipped builds).
+        waiters[id] = Waiter(key: key, generation: expectedGeneration, continuation: signal.continuation)
+        defer { waiters.removeValue(forKey: id) }
+        for await _ in signal.stream {}
+        try Task.checkCancellation()
+        guard expectedGeneration == generation,
+              !disconnectedPeers.contains(key.peer),
+              !cancelledTransfers.contains(TransferKey(peer: key.peer, transferID: key.transferID)) else {
+            throw CancellationError()
+        }
     }
 
     private func removeFlows(for transfer: TransferKey) {
@@ -634,18 +628,18 @@ private actor FileTransferSendScheduler {
 
     private func resumeWaiters(for key: FlowKey) {
         let ids = waiters.compactMap { id, waiter in waiter.key == key ? id : nil }
-        for id in ids { waiters.removeValue(forKey: id)?.continuation.resume() }
+        for id in ids { waiters.removeValue(forKey: id)?.continuation.finish() }
     }
 
     private func resumeWaiters(for peer: DeviceID) {
         let ids = waiters.compactMap { id, waiter in waiter.key.peer == peer ? id : nil }
-        for id in ids { waiters.removeValue(forKey: id)?.continuation.resume() }
+        for id in ids { waiters.removeValue(forKey: id)?.continuation.finish() }
     }
 
     private func resumeAllWaiters() {
         let values = waiters.values.map(\.continuation)
         waiters.removeAll(keepingCapacity: true)
-        values.forEach { $0.resume() }
+        values.forEach { $0.finish() }
     }
 }
 

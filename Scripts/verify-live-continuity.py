@@ -36,7 +36,7 @@ class Endpoints:
             raise ValueError("SSH peer must be a host or user@host")
         self.ssh = ["ssh", *SSH_OPTIONS, peer]
         self.output = output
-        self.remote = ".unispace-feature-baseline/" + output.name
+        self.remote = ".unispace-feature-baseline/" + uuid.uuid4().hex
         self.helper = output / "PasteboardProbe"
         subprocess.run(["swiftc", "-O", str(ROOT / "Tools/FeatureBaseline/PasteboardProbe.swift"),
                         "-o", str(self.helper)], check=True, timeout=60)
@@ -100,7 +100,8 @@ def clipboard_checks(endpoints, prefix, timeout):
                 if safe:
                     endpoints.remove_snapshot(host)
                 results.append(dict(feature=f"clipboard-restoration-{host}",
-                                    status="PASS" if safe else "FAIL", **restoration))
+                                    status="PASS" if safe else "FAIL", **restoration,
+                                    **({} if safe else {"snapshot": endpoints.snapshot_path(host)})))
             except (subprocess.SubprocessError, OSError, ValueError) as error:
                 results.append(dict(feature=f"clipboard-restoration-{host}", status="INCONCLUSIVE",
                                     error=type(error).__name__, snapshot=endpoints.snapshot_path(host)))

@@ -7,3 +7,4 @@ cd "$(dirname "$0")/.."
 python3 -m unittest discover -s Tools/FeatureBaseline -v
 python3 -m unittest discover -s Tools/LiveControlObserver -v
 ./Scripts/test.sh --unit
+./Scripts/test-release-transfer.sh

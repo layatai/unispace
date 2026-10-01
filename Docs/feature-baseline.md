@@ -3,7 +3,13 @@
 Run `bash Scripts/test-feature-baseline.sh` before shipping. It runs the full
 domain, application, infrastructure, and app-layer suite, existing strict
 coverage gates, the 500-sample two-process simulation, and the acceptance-probe
-tests. The app-layer target compiles the app's real view models without the app
+tests. It also builds optimized frameworks with `ENABLE_TESTABILITY=NO` and runs
+`Scripts/test-release-transfer.sh`. That probe verifies which binaries were loaded
+and exercises delayed ACKs, task/transfer cancellation, disconnect, reset, and a
+mixed file batch through the real coordinators, sources, stores, and QoS scheduler.
+The release script runs it against the actual archive before notarization.
+
+The app-layer target compiles the app's real view models without the app
 entry point; tests use isolated preferences, trust, and clipboard adapters.
 It does not launch another UniSpace or touch the user's general pasteboard.
 
@@ -22,7 +28,7 @@ An observed failure remains `FAIL` even when other evidence is missing.
 | Keyboard, held modifiers, buttons, drag, scroll | ApplicationTests, InputPipelineTests, SimulatedE2ETests | Type disposable text; drag and scroll; release held inputs after disconnect/emergency stop |
 | Clipboard text and URLs | ClipboardProtocolTests, ClipboardApplicationTests, ClipboardInfrastructureTests | Unique text and URL in both directions; exact representations and UniSpace origin on receiver |
 | Clipboard lifecycle | ClipboardFeatureBaselineTests | Copy after peer/workspace update, key rotation, reconnect, sharing off/on |
-| Explicit file transfer | FileTransferCoordinatorTests, FileTransferInfrastructureTests, FileTransferPortableInteropTests | Empty, Unicode-name, and binary batch through app; receiver lengths and SHA-256 match |
+| Explicit file transfer | FileTransferCoordinatorTests, FileTransferInfrastructureTests, FileTransferPortableInteropTests, ReleaseTransferProbe | Empty, Unicode-name, and binary batch through app; receiver lengths and SHA-256 match |
 | Finder file continuity | FinderFileContinuityCoordinatorTests, FinderFileContinuityTests | Receiver-local file URLs with UniSpace origin; paste in Finder; no echo or text-path fallback |
 | Interrupted file transfer | FileTransferCoordinatorTests, TransferQoSInfrastructureTests, PersistentFileSourceProviderTests | Interrupt during larger transfer; resume/retry; exact final bytes; cancellation reaches terminal state |
 | Control while copying/transferring | TransferQoSInfrastructureTests, TwoProcessSimulationTests | Keep real mouse session active while clipboard and bulk transfer run; same control acceptance thresholds |
@@ -101,3 +107,24 @@ peer while coordinator restart cleared the route; it must reapply that route eve
 when the UI selection does not change. Unchanged context must not restart the
 transport; sharing disabled must never dial; leaving a workspace clears the route.
 Passing these tests does not change the recorded build-43 live failures.
+
+## Build 44 follow-up
+
+Build 44 was signed, notarized, installed on both Macs, and verified by matching
+the main executable and all three framework hashes. The same live clipboard
+probe passed all four directions/representations, with restoration on both hosts.
+
+The mixed-file batch exposed a second regression: taimb2's UniSpace aborted
+while waiting for a receiver acknowledgement. The symbolicated crash points to
+`FileTransferSendScheduler.waitForCredit` in `QoSFileTransferTransport.swift`,
+inside nested cancellation-handler/checked-continuation closures. The runtime
+reported an incorrect actor executor assumption.
+
+Debug tests and even Release XCTest with testability enabled passed. A standalone
+probe loading the exact archived frameworks reproduced the abort only when it
+used the real `FileTransferCoordinator` path with delayed acknowledgements.
+The scheduler now registers an `AsyncStream` wake-up signal synchronously on its
+actor and consumes it asynchronously, preserving cancellation without a nested
+actor-capturing continuation callback. Wake-up also rechecks transfer cancellation
+and peer disconnect before permitting entry completion. The production-framework
+probe is a required release gate; build 44's mixed-file live result remains FAIL.

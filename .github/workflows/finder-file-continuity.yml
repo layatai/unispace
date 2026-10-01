@@ -51,6 +51,9 @@ jobs:
           python3 -m unittest discover -s Tools/FeatureBaseline -v
           python3 -m unittest discover -s Tools/LiveControlObserver -v
 
+      - name: Exercise optimized production transfer frameworks
+        run: ./Scripts/test-release-transfer.sh
+
       - name: Upload result bundle
         if: always()
         uses: actions/upload-artifact@v4
