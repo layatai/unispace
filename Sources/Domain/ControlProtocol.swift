@@ -226,6 +226,48 @@ public struct WorkspacePresenceSnapshot: Codable, Equatable, Sendable {
     }
 }
 
+/// Receiver application progress, distinct from a local socket write completion.
+public struct InputDeliveryProgress: Codable, Equatable, Sendable {
+    public let sessionID: SessionID
+    public let sequence: UInt64
+
+    public init(sessionID: SessionID, sequence: UInt64) {
+        self.sessionID = sessionID
+        self.sequence = sequence
+    }
+}
+
+/// Closes a datagram generation before the associated ordered input event.
+public struct PointerCheckpoint: Codable, Equatable, Sendable {
+    public let sessionID: SessionID
+    public let generation: UInt64
+    public let reliableSequence: UInt64
+    public let cumulativeDeltaX: Double
+    public let cumulativeDeltaY: Double
+
+    public init(sessionID: SessionID, generation: UInt64, reliableSequence: UInt64,
+                cumulativeDeltaX: Double, cumulativeDeltaY: Double) {
+        self.sessionID = sessionID
+        self.generation = generation
+        self.reliableSequence = reliableSequence
+        self.cumulativeDeltaX = cumulativeDeltaX
+        self.cumulativeDeltaY = cumulativeDeltaY
+    }
+}
+
+/// Sent only on a newly authenticated connection. A fresh session rejects old input.
+public struct ControlSessionResume: Codable, Equatable, Sendable {
+    public let previousSessionID: SessionID
+    public let sessionID: SessionID
+    public let epoch: ControllerEpoch
+
+    public init(previousSessionID: SessionID, sessionID: SessionID, epoch: ControllerEpoch) {
+        self.previousSessionID = previousSessionID
+        self.sessionID = sessionID
+        self.epoch = epoch
+    }
+}
+
 public enum ControlMessage: Codable, Equatable, Sendable {
     case hello(DeviceDescriptor)
     case workspace(WorkspaceSnapshot)
@@ -235,6 +277,10 @@ public enum ControlMessage: Codable, Equatable, Sendable {
     case deactivate(SessionID)
     case heartbeat(sessionID: SessionID, timestampNanos: UInt64)
     case realtimePointerProgress(RealtimePointerProgress)
+    case inputProgress(InputDeliveryProgress)
+    case pointerCheckpoint(PointerCheckpoint)
+    case resume(ControlSessionResume)
+    case resumeResult(previousSessionID: SessionID, sessionID: SessionID, accepted: Bool)
     case boundaryCrossed(sessionID: SessionID, displayID: DisplayID, edge: DisplayEdge, normalizedPosition: Double)
     case releaseAll(SessionID)
     case rotateWorkspaceKey(Data)

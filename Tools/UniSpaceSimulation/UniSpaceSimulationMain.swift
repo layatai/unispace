@@ -37,6 +37,14 @@ enum UniSpaceSimulationMain {
                         .map { URL(fileURLWithPath: $0, isDirectory: true) }
                 )
                 try orchestrator.runShell()
+            case "check-process-failure":
+                let child = SimulationProcessClient(name: "expected-failure",
+                    executableURL: URL(fileURLWithPath: "/usr/bin/false"),
+                    configurationURL: URL(fileURLWithPath: "/dev/null"))
+                try child.start()
+                defer { child.shutdown() }
+                try child.waitForReady(timeout: 2)
+                throw SimulationFailure("Expected the child to fail")
             case "--help", "-h", "help":
                 print(usage)
             default:

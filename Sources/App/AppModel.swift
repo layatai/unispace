@@ -182,6 +182,7 @@ final class AppModel: ObservableObject {
                 .udpPointerV2,
                 .activationAcknowledgementV1,
                 .realtimePointerProgressV1,
+                .controlResilienceV1,
                 .workspacePresenceV1,
                 .fileTransferV1,
                 .clipboardTextV1,
@@ -651,6 +652,13 @@ final class AppModel: ObservableObject {
                 diagnostic: { [diagnosticLog] message in diagnosticLog.record(message) }
             )
             self.coordinator = coordinator
+            await coordinator.startIndependentEventHandling()
+            transport.setSessionEventHandler { [weak coordinator] event in
+                coordinator?.enqueueIndependentEvent(event)
+            }
+            transport.setRealtimeInputHandler { [weak coordinator] source, frame in
+                coordinator?.handleIncomingRealtime(frame, from: source)
+            }
             applyPeerConnectionPolicy()
             startCaptureIfPossible()
             // Cancellation terminates these shared AsyncStreams, so their
@@ -899,6 +907,7 @@ final class AppModel: ObservableObject {
             break
         case let .connected(deviceID):
             connectedDevices.insert(deviceID)
+            await coordinator?.peerReconnected(deviceID)
             if let workspace {
                 try? await transport.send(ControlEnvelope(message: .workspace(workspace)), to: deviceID)
             }
@@ -930,6 +939,15 @@ final class AppModel: ObservableObject {
             )
             let previousState = await coordinator?.currentState()
             await coordinator?.peerDisconnected(deviceID)
+            let recovering = await coordinator?.currentState()
+            if case .recoveringController? = recovering {
+                statusMessage = "Reconnecting remote control…"
+                break
+            }
+            if case .recoveringReceiver? = recovering {
+                statusMessage = "Waiting for controller to reconnect…"
+                break
+            }
             if case let .receiving(_, source, _)? = previousState, source == deviceID {
                 controlTransferGuard.reset()
             } else if case let .controlling(_, target, _)? = previousState, target == deviceID {
@@ -999,7 +1017,8 @@ final class AppModel: ObservableObject {
                 activation,
                 from: source,
                 targetDisplay: display,
-                isInputInjectionAuthorized: postEventsPermission == .granted
+                isInputInjectionAuthorized: postEventsPermission == .granted,
+                sourceCapabilities: capabilities(of: source)
             ) == true
             if capabilities(of: source).contains(.activationAcknowledgementV1) {
                 try? await transport.send(
@@ -1087,6 +1106,8 @@ final class AppModel: ObservableObject {
             }
         case let .realtimePointerProgress(progress):
             _ = await coordinator?.receiveRealtimePointerProgress(progress, from: source)
+        case .inputProgress, .pointerCheckpoint, .resume, .resumeResult:
+            coordinator?.enqueueIndependentEvent(.control(source, ControlEnvelope(message: message)))
         case let .rotateWorkspaceKey(newKey):
             guard let workspace else { return }
             do {

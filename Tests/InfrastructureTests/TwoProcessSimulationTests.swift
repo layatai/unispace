@@ -8,6 +8,13 @@ final class TwoProcessSimulationTests: XCTestCase {
         XCTAssertTrue(String(decoding: result.stdout, as: UTF8.self).contains("run-two"))
     }
 
+    func testExitedSimulationChildReportsFailureWithoutDeadlocking() throws {
+        let result = try runSimulator(arguments: ["check-process-failure"], timeout: 5)
+        XCTAssertEqual(result.status, 1, result.stderr)
+        XCTAssertTrue(result.stderr.contains("expected-failure did not become ready"), result.stderr)
+        XCTAssertFalse(result.stderr.contains("exceeded"), result.stderr)
+    }
+
     private func runSimulator(arguments: [String], timeout: TimeInterval) throws -> ProcessResult {
         let process = Process()
         process.executableURL = try simulatorURL()

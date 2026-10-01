@@ -45,79 +45,171 @@ Relevant source: [coordinator](../Sources/Application/ControlSessionCoordinator.
    Only peers that negotiated pointer progress enter that lane's recovery mode.
    Failed input with stale heartbeat still returns local control.
 
-These changes keep existing wire formats. Confirmed control disconnection still
-releases input immediately; authenticated session resume is not implemented by
-this patch.
+The initial bug fixes retain existing wire formats. The roadmap implementation
+below adds messages only for peers advertising `control-resilience-v1`. Legacy
+peers retain immediate input release on control disconnection.
 
-## Prioritized next steps
+## Implemented resilience protocol
 
-### 1. Independent input progress and measurable latency
+### Independent progress and diagnostics
 
-Progress currently comes back through `AppModel.handleControl` and the reliable
-heartbeat path. Add a negotiated acknowledgment path handled outside UI work,
-with rate-limited feedback and reliable heartbeat backup. Track captured,
-queued, sent, accepted, and injected stages independently. Report queue age,
-acknowledgment age, lane switches, RTT, and reconnect duration. Sender and
-receiver monotonic timestamps must not be subtracted across machines without
-clock synchronization or an explicit offset model.
+Modern peers send coalesced application progress independently of the heartbeat,
+at most once per 16 ms reporting cycle. On macOS, session messages and realtime
+injection bypass `AppModel` and its Main Actor work. Acknowledgment writes run
+separately from input consumption; a blocked write cannot block that consumer.
+Reliable heartbeat responses remain a backup for pointer progress.
 
-Keep separate deadlines for peer liveness and outstanding movement. Adapt a
-movement deadline to measured RTT/jitter and acknowledgment cadence, with
-bounds verified under loss. A live heartbeat alone must not indefinitely hide
-an input path that never advances. Reliable-send completion is also not proof
-of receiver injection; negotiated input progress should cover both lanes.
+`inputProgress` identifies the highest processed reliable sequence in the active
+session. Realtime progress identifies generation and sequence. Both are emitted
+after the receiver's input-processing call. This proves application processing,
+not that the operating system displayed a physical cursor movement.
 
-### 2. Explicit session resume after a short interruption
+The sender tracks unacknowledged reliable input separately from peer heartbeats.
+Five seconds without application progress releases control even when socket
+writes and heartbeats keep succeeding. The pointer deadline adapts to smoothed
+RTT and jitter, bounded between 750 ms and 3 seconds. Idle time without outstanding
+motion does not consume this deadline. A heartbeat checkpoints an unacknowledged
+final movement after the pointer becomes idle.
 
-Introduce a capability-gated `recovering` state and resume request/result. Bind
-requests to the authenticated peer, controller epoch, session, and a fresh
-transport generation. The receiver must acknowledge ownership before input
-resumes. Preserve the remote target and last position while recovering; clear
-uncertain pressed keys/buttons and reconcile state before accepting new input.
-Never replay an outage's queued clicks or key presses.
+`inputQueueSnapshot()` exposes accepted, locally sent, and coalesced frame counts,
+current and peak queue depth, and oldest queued age. Measurements use the local
+monotonic clock. The simulation includes these counters beside wire and simulated
+injection latency; timestamps are never subtracted across independent machines.
 
-Use a bounded recovery interval determined by fault-injection testing. Emergency
-stop must release the local cursor immediately. Receiver restart, rejected
-resume, changed controller, or expired grace must safely terminate ownership.
-Late disconnect callbacks from an old connection must not terminate its
-replacement. Older peers retain current fail-open behavior.
+### Bounded authenticated session recovery
 
-### 3. Explicit ordering across motion and reliable events
+A negotiated session enters `recovering` for up to two seconds after control
+transport loss. The controller retains suppression and the target while its
+transport reconnects. The receiver releases uncertain pressed keys/buttons and
+retains cursor position. Outage input and buffered activation input are discarded.
+Emergency stop remains active, including modifiers held before the disconnect.
 
-Datagrams can arrive after a reliable button transition. Add an input-state
-revision or motion fence to negotiated messages so the receiver can reject
-pre-transition motion. Include a cumulative motion checkpoint when switching
-lanes; resetting a generation alone does not establish what displacement was
-already applied. Test loss of the final datagram before an idle pause, delayed
-old-generation packets, and fallback during drag without double application.
+After authentication, the controller sends `resume` with the previous session ID,
+a fresh session ID, and controller epoch. The receiver accepts only a matching
+peer, epoch, and retained session within the recovery interval. An identical
+accepted request is idempotent. On `resumeResult`, the controller resets sequences
+and sends its current modifier snapshot before normal input. Neither endpoint
+replays outage clicks or key presses, and neither warps the cursor back to the
+entry edge. Old-session packets cannot mutate the resumed session.
 
-### 4. Benchmark batching and transport options
+Expired or rejected recovery releases local control. Receiver restart and changed
+ownership cannot resume an unavailable session. Transport callbacks from replaced
+connections are ignored. Macifier retries the connection promptly while its
+recovery interval is active; ordinary reconnect backoff remains in effect afterward.
 
-Compare 1, 4, 8, and the current 16 ms fallback batching budgets on the actual
-Mac-to-Mac and portable-peer routes, including Tailscale. The healthy synchronous
-UDP fast path already bypasses the 16 ms coordinator batching interval.
-Measure p50/p95/p99 latency, packet rate, CPU, and queue growth during file and
-clipboard traffic. Add a total ordered-queue bound with explicit recovery on
-overflow; do not silently discard key/button transitions.
+### Ordering between datagrams and reliable input
 
-Evaluate QUIC streams plus DATAGRAM only after the routed QUIC failures recorded
-in [the previous investigation](performance-regression-remediation.md) have been
-reproduced or ruled out with current endpoint builds. Keep a compatible fallback.
+Before switching from realtime motion to a reliable input event, the sender emits
+`pointerCheckpoint` in the same ordered send worker. It contains the closing
+generation, cumulative displacement, and the following reliable sequence. The
+receiver applies only the displacement not already received, closes that generation,
+and blocks newer datagrams until the associated reliable input has been processed.
 
-## Validation
+The sender waits for application acknowledgment of pending reliable input before
+promoting a probed realtime lane. Duplicate checkpoints cannot apply displacement
+twice; old generations remain rejected. This handles delayed packets around clicks,
+drag boundaries, fallback, and loss of the final datagram before an idle pause.
 
-- Three new regression tests first failed against the original implementation:
-  idle resumption, capture blocked by reliable send, and reliable-only heartbeat
-  protection. They pass with the fix.
-- Six new regression tests in total cover these failures, stalled-lane expiry,
-  displacement-preserving coalescing, button ordering, late cancelled-send
-  failure, and successful sends after failure. Existing tests were not relaxed.
-- `Scripts/test.sh --unit`: 271 tests executed, zero failures; one signed native
-  input smoke test intentionally skipped by unit mode. All coverage gates pass.
-- The included Release two-process simulation passes all 500-sample conditions
-  (idle, clipboard load, file load), including recovery and post-recovery control.
-  Simulated visible p95 is 9.65 / 9.74 / 9.28 ms respectively.
-- These are local automated results, not physical cursor measurements or proof
-  of a deployed fix. The updated app still needs installation and verification
-  on the affected controller/receiver pair, including idle/resume, packet loss,
-  blocked UDP, short network interruption, restart, and emergency stop.
+The reliable queue permits at most 256 waiting frames. Adjacent unsent motion is
+coalesced without crossing checkpoints or key/button boundaries. Overflow explicitly
+terminates the session and releases input instead of silently dropping transitions.
+
+### Macifier UDP recovery
+
+Macifier keeps one outstanding receive while retrying a missing UDP hello every
+500 ms of silence. Malformed or unauthenticated datagrams cannot stop the loop or
+advance replay state. A new authenticated peer nonce resets the encrypted packet
+sequence; duplicate hellos preserve replay protection, and retired nonces cannot
+roll the channel back. The Mac listener answers an authenticated duplicate hello
+when its initial reply was lost, without resetting sequence state or creating a
+symmetric hello-response loop. Socket failures restart only the pointer lane. The reliable
+connection and receiver ownership remain governed by their own recovery policy.
+
+## Wire compatibility
+
+The native envelope remains version 1 and the portable envelope remains version 2.
+New messages require the capability on both participating applications. They are:
+
+| Type | Payload |
+| --- | --- |
+| `inputProgress` | `sessionID`, `sequence` |
+| `pointerCheckpoint` | `checkpoint`: `sessionID`, `generation`, `reliableSequence`, `cumulativeDeltaX`, `cumulativeDeltaY` |
+| `resume` | `resume`: `previousSessionID`, `sessionID`, `epoch` |
+| `resumeResult` | `previousSessionID`, `sessionID`, `accepted` |
+
+UUIDs retain the existing `{ "rawValue": "UUID" }` encoding. Shared
+[portable vectors](../Documentation/Protocol/control-resilience-v1-vectors.json)
+are round-tripped by Swift and Macifier's C# tests. Binary input layouts and old
+capability behavior are unchanged. Linux peers that do not advertise the new
+capability continue using their existing protocol.
+
+## Benchmarking and validation
+
+Run the existing gates:
+
+```sh
+Scripts/test.sh --unit
+```
+
+Compare fallback batching without changing production defaults:
+
+```sh
+python3 Scripts/benchmark-control-batching.py --samples 500
+```
+
+The benchmark builds Release once, forces reliable pointer delivery, and compares
+1, 4, 8, and 16 ms under idle, clipboard, and file load. It records p50/p95/p99,
+maximum latency/stall, child CPU seconds, frame counts, and queue diagnostics in
+`.build/control-batching.json`. It preserves every existing latency gate and exits
+nonzero if any condition fails. This is a local simulation, not a Tailscale or
+physical cursor benchmark. The normal synchronous UDP fast path bypasses the
+fallback batching interval.
+
+Regression coverage includes reconnect expiry, wrong peer/epoch/session, duplicate
+resume, discarded outage input, emergency stop, stale deactivation, cumulative
+checkpoint recovery, reliable/datagram ordering, bounded queues, application
+progress despite a healthy socket, and identical portable wire fixtures. Macifier
+also runs UDP tests against real loopback sockets and its receiver tests with a
+monotonic fake clock and input injector. Its original UDP implementation fails
+three of the new regression tests; the repaired implementation passes them.
+
+The final unit gate ran 287 tests with zero failures; unit mode intentionally
+skipped the separate signed native-input smoke test. Application coverage was
+95.46% against the unchanged 95% minimum. The normal 500-sample, two-process
+simulation passed idle, clipboard, and file-load conditions. Macifier passed 22
+portable protocol/recovery tests and 70 input tests; its Windows integration
+target cross-compiled, with existing warnings. Native Windows execution remains
+pending a Windows host.
+
+The benchmark harness also has a regression test for a child that exits before
+readiness. Failure reporting must not reacquire the same condition lock; the
+benchmark subprocess group now has a finite deadline and scoped cleanup.
+
+The initial batching run recorded a 1 ms file-load spike above the unchanged 50 ms
+maximum while 4/8/16 ms passed. That run overlapped other local validation, so it
+is not evidence to select a production interval. Keep the 16 ms default and retain
+all benchmark failures in the report.
+
+The subsequent sequential run passed all four configurations with 500 samples per
+condition. These local results do not replace routed-device measurements.
+
+| Batching | Highest condition p95 | Highest latency | Child CPU |
+| --- | --- | --- | --- |
+| 1 ms | 0.81 ms | 12.58 ms | 5.77 s |
+| 4 ms | 1.03 ms | 6.94 ms | 5.11 s |
+| 8 ms | 1.26 ms | 11.95 ms | 6.67 s |
+| 16 ms | 9.85 ms | 21.38 ms | 6.27 s |
+
+## Remaining environment validation
+
+Install both updated apps and verify on the affected Windows/Mac and Mac/Mac
+routes: idle/resume, blocked UDP, short interruption, restart, drag, held modifiers,
+and emergency stop. Native Windows injection and routed Tailscale measurements
+require the actual Windows host; cross-compilation and local protocol tests do not
+substitute for those checks.
+
+QUIC DATAGRAM migration remains conditional on those routed measurements and
+platform support. The earlier routed QUIC failures in
+[the previous investigation](performance-regression-remediation.md) make a wholesale
+transport replacement premature. The application-level recovery and ordering
+changes above work with the current authenticated transports.

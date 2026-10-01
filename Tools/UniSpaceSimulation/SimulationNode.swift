@@ -62,7 +62,9 @@ actor SimulationNodeRuntime {
             workspaceID: WorkspaceID(rawValue: configuration.workspaceID),
             capture: SimulationInputCapture(),
             injector: injector,
-            transport: transport
+            transport: transport,
+            pointerBatchIntervalNanos: UInt64(ProcessInfo.processInfo.environment["UNISPACE_POINTER_BATCH_MS"] ?? "16").map { $0 * 1_000_000 }
+                ?? ControlSessionCoordinator.pointerFlushIntervalNanos
         )
 
         let clipboardTransport = NetworkClipboardTransport(
@@ -141,6 +143,17 @@ actor SimulationNodeRuntime {
         }
         let coordinator = self.coordinator
         let metrics = self.metrics
+        await coordinator.startIndependentEventHandling()
+        transport.setSessionEventHandler { event in
+            if case let .input(_, frame) = event {
+                metrics.recordWire(timestampNanos: frame.timestampNanos, isPointer: Self.isPointer(frame.event))
+            }
+            coordinator.enqueueIndependentEvent(event)
+        }
+        transport.setRealtimeInputHandler { source, frame in
+            metrics.recordWire(timestampNanos: frame.timestampNanos, isPointer: true)
+            coordinator.handleIncomingRealtime(frame, from: source)
+        }
         realtimeInputTask = Task.detached(
             priority: realtimeInputTaskPriority
         ) { [transport, coordinator, metrics] in
@@ -186,6 +199,9 @@ actor SimulationNodeRuntime {
 
     private func execute(_ command: SimulationCommand) async throws -> [String: String] {
         switch command.name {
+        case "deliveryMetrics":
+            let snapshot = await coordinator.inputQueueSnapshot()
+            return ["queue": String(data: try SimulationJSON.encoder.encode(snapshot), encoding: .utf8)!]
         case "status":
             let state = await coordinator.currentState()
             return [
@@ -325,6 +341,7 @@ actor SimulationNodeRuntime {
         case let .connected(deviceID):
             guard deviceID == peerID else { return }
             controlConnected = true
+            await coordinator.peerReconnected(deviceID)
             emitter.send(.event("controlConnected", values: ["peer": deviceID.description]))
         case let .disconnected(deviceID):
             guard deviceID == peerID else { return }
@@ -348,6 +365,9 @@ actor SimulationNodeRuntime {
 
     private func handleControl(_ message: ControlMessage, from source: DeviceID) async {
         switch message {
+        case .inputProgress, .pointerCheckpoint, .resume, .resumeResult:
+            await coordinator.startIndependentEventHandling()
+            coordinator.enqueueIndependentEvent(.control(source, ControlEnvelope(message: message)))
         case let .controllerClaim(epoch):
             await coordinator.observeControllerClaim(epoch)
             emitter.send(.event("controllerClaim", values: [
@@ -359,7 +379,8 @@ actor SimulationNodeRuntime {
             let accepted = await coordinator.receiveActivation(
                 activation,
                 from: source,
-                targetDisplay: display
+                targetDisplay: display,
+                sourceCapabilities: (try? peerDevice().capabilities) ?? []
             )
             emitter.send(.event("activationReceived", values: [
                 "accepted": String(accepted),
@@ -382,8 +403,8 @@ actor SimulationNodeRuntime {
                 from: source,
                 accepted: accepted
             )
-        case .deactivate, .releaseAll:
-            await coordinator.deactivateCurrentSession()
+        case let .deactivate(sessionID), let .releaseAll(sessionID):
+            _ = await coordinator.receiveDeactivation(sessionID: sessionID, from: source)
         case let .heartbeat(sessionID, timestampNanos):
             if await coordinator.receiveHeartbeat(sessionID: sessionID, from: source) {
                 if let progress = await coordinator.realtimePointerProgress(
@@ -479,15 +500,13 @@ actor SimulationNodeRuntime {
                 isMain: true
             )],
             peerAddresses: [try PeerAddress("127.0.0.1")],
-            capabilities: [
-                .publicTrackpadGestures,
-                .udpPointerV2,
-                .activationAcknowledgementV1,
-                .realtimePointerProgressV1,
-                .fileTransferV1,
-                .clipboardTextV1,
-                .clipboardURLV1,
-            ],
+            capabilities: Set([
+                .publicTrackpadGestures, .activationAcknowledgementV1, .controlResilienceV1,
+                .fileTransferV1, .clipboardTextV1, .clipboardURLV1,
+            ] as [DeviceCapability]).union(
+                ProcessInfo.processInfo.environment["UNISPACE_RELIABLE_POINTER_ONLY"] == "1"
+                    ? [] : [.udpPointerV2, .realtimePointerProgressV1]
+            ),
             platform: .macOS
         )
     }

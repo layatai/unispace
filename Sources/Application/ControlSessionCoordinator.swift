@@ -41,6 +41,8 @@ public actor ControlSessionCoordinator {
         case activating(epoch: ControllerEpoch, target: DeviceID, session: SessionID)
         case controlling(epoch: ControllerEpoch, target: DeviceID, session: SessionID)
         case receiving(epoch: ControllerEpoch, source: DeviceID, session: SessionID)
+        case recoveringController(epoch: ControllerEpoch, target: DeviceID, session: SessionID)
+        case recoveringReceiver(epoch: ControllerEpoch, source: DeviceID, session: SessionID)
     }
 
     public enum ActivationError: LocalizedError, Equatable, Sendable {
@@ -80,6 +82,24 @@ public actor ControlSessionCoordinator {
     private nonisolated let realtimeInputReceiver: RealtimeInputReceiver
     private nonisolated let realtimePointerCaptureSender: RealtimePointerCaptureSender
     private let activationTimeout: Duration
+    private let pointerBatchIntervalNanos: UInt64
+    private nonisolated let progressReporter: InputProgressReporter
+    private let independentEvents: AsyncStream<PeerEvent>
+    private nonisolated let independentContinuation: AsyncStream<PeerEvent>.Continuation
+    private var independentEventTask: Task<Void, Never>?
+    private var receiverCapabilities: Set<DeviceCapability> = []
+    private var recoveryTask: Task<Void, Never>?
+    private var pendingResume: ControlSessionResume?
+    private var lastAcceptedResume: ControlSessionResume?
+    private var reliableBarrierSequence: UInt64?
+    private var pendingPointerCheckpoint: PointerCheckpoint?
+    private var smoothedJitterNanos: UInt64?
+    private var pendingLaneProgress: (DeviceID, RealtimePointerProgress)?
+    private var lastInputAcknowledgedSequence: UInt64?
+    private var inputOutstandingSinceNanos: UInt64?
+    private var lastReceivedInputSequence: UInt64?
+    public static let sessionRecoveryTimeout: Duration = .seconds(2)
+    public static let inputProgressTimeoutNanos: UInt64 = 5_000_000_000
     private let sessionStream: AsyncStream<ControlSessionSnapshot>
     private let sessionContinuation: AsyncStream<ControlSessionSnapshot>.Continuation
     private var election: ControllerStateMachine
@@ -121,6 +141,7 @@ public actor ControlSessionCoordinator {
         transport: PeerTransport,
         clock: MonotonicClock = SystemMonotonicClock(),
         activationTimeout: Duration = .seconds(2),
+        pointerBatchIntervalNanos: UInt64 = ControlSessionCoordinator.pointerFlushIntervalNanos,
         election: ControllerStateMachine = .init(),
         diagnostic: @escaping @Sendable (String) -> Void = { _ in }
     ) {
@@ -144,6 +165,11 @@ public actor ControlSessionCoordinator {
             clock: clock
         )
         self.activationTimeout = activationTimeout
+        self.pointerBatchIntervalNanos = pointerBatchIntervalNanos
+        progressReporter = InputProgressReporter(transport: transport, clock: clock)
+        let events = AsyncStream<PeerEvent>.makeStream()
+        independentEvents = events.stream
+        independentContinuation = events.continuation
         self.election = election
         let pair = AsyncStream<ControlSessionSnapshot>.makeStream(bufferingPolicy: .bufferingNewest(1))
         sessionStream = pair.stream
@@ -154,6 +180,7 @@ public actor ControlSessionCoordinator {
     deinit { sessionContinuation.finish() }
 
     public func currentState() -> State { state }
+    public func inputQueueSnapshot() async -> InputQueueSnapshot { await inputSender.snapshot() }
     public func sessionSnapshots() -> AsyncStream<ControlSessionSnapshot> { sessionStream }
 
     @discardableResult
@@ -292,7 +319,8 @@ public actor ControlSessionCoordinator {
         _ activation: InputActivation,
         from source: DeviceID,
         targetDisplay: DisplayDescriptor?,
-        isInputInjectionAuthorized: Bool = true
+        isInputInjectionAuthorized: Bool = true,
+        sourceCapabilities: Set<DeviceCapability> = []
     ) async -> Bool {
         let epoch = activation.epoch
         guard election.currentEpoch == epoch,
@@ -307,6 +335,8 @@ public actor ControlSessionCoordinator {
             enteringFrom: activation.entryEdge,
             normalizedPosition: activation.normalizedPosition
         )
+        receiverCapabilities = sourceCapabilities
+        progressReporter.start()
         realtimeInputReceiver.begin(
             epoch: epoch,
             source: source,
@@ -320,6 +350,15 @@ public actor ControlSessionCoordinator {
     }
 
     public func handleCaptured(_ event: InputEvent) async -> CapturedInputDisposition {
+        if Self.isEmergencyStop(event, flags: currentFlags) {
+            await endCurrentSession(notifyPeer: true, reason: "emergency stop")
+            return .emergencyStop
+        }
+        if case .recoveringController = state {
+            // Outage input is never replayed into a resumed session.
+            if case let .flags(rawValue) = event { currentFlags = rawValue }
+            return .forwarded
+        }
         guard case .controlling = state else { return .ignored }
         if case .gesture = event {
             let capabilities = activeControlRoute?.targetCapabilities ?? []
@@ -411,10 +450,13 @@ public actor ControlSessionCoordinator {
             sessionID: sessionID,
             outcome: .accepted
         )
-        smoothedRoundTripNanos = Self.smoothed(
-            previous: smoothedRoundTripNanos,
-            sample: now - sentAtNanos
-        )
+        let sample = now - sentAtNanos
+        let previous = smoothedRoundTripNanos ?? sample
+        smoothedJitterNanos = Self.smoothed(previous: smoothedJitterNanos,
+                                           sample: sample >= previous ? sample - previous : previous - sample)
+        smoothedRoundTripNanos = Self.smoothed(previous: smoothedRoundTripNanos, sample: sample)
+        realtimePointerCaptureSender.updateProgressTimeout(roundTripNanos: smoothedRoundTripNanos ?? sample,
+                                                          jitterNanos: smoothedJitterNanos ?? 0)
         lastHeartbeatEchoNanos = now
         publishSessionSnapshotIfChanged()
         diagnostic("t=\(now) heartbeat echo for session \(sessionID); latency=\(Int((smoothedRoundTripNanos ?? 0) / 1_000_000))ms")
@@ -433,7 +475,27 @@ public actor ControlSessionCoordinator {
             event: event
         )
         sequence &+= 1
-        await inputSender.enqueue(frame, to: target)
+        var checkpoint: PointerCheckpoint?
+        if supportsResilience {
+            checkpoint = pendingPointerCheckpoint ?? realtimePointerCaptureSender.takeCheckpoint(reliableSequence: frame.sequence)
+            pendingPointerCheckpoint = nil
+            if let checkpoint {
+                realtimeGeneration = checkpoint.generation &+ 1
+                realtimeSequence = 0
+                cumulativePointerX = 0
+                cumulativePointerY = 0
+                lastRealtimeSentSequence = nil
+                lastRealtimeProbeNanos = nil
+                realtimeDeliveryMode = .probing
+                reliableBarrierSequence = frame.sequence
+            }
+            if inputOutstandingSinceNanos == nil { inputOutstandingSinceNanos = clock.nowNanoseconds() }
+        }
+        let accepted = await inputSender.enqueue(frame, to: target, checkpoint: checkpoint)
+        if !accepted {
+            diagnostic("Reliable input queue exceeded its bound; releasing session \(sessionID)")
+            await endCurrentSession(notifyPeer: true, reason: "input queue overflow")
+        }
     }
 
     public func handleIncoming(_ frame: InputFrame, from source: DeviceID) async {
@@ -442,15 +504,26 @@ public actor ControlSessionCoordinator {
               epoch == frame.epoch,
               expectedSource == source,
               sessionID == frame.sessionID else { return }
+        guard frame.workspaceID == workspaceID,
+              lastReceivedInputSequence.map({ frame.sequence > $0 }) ?? true else { return }
+        lastReceivedInputSequence = frame.sequence
         remoteInputState.apply(frame.event)
         injector.inject(frame.event)
+        realtimeInputReceiver.completeReliableInput(sequence: frame.sequence)
+        lastHeartbeatNanos = clock.nowNanoseconds()
+        if receiverCapabilities.contains(.controlResilienceV1) {
+            progressReporter.record(.init(sessionID: frame.sessionID, sequence: frame.sequence), from: source)
+        }
     }
 
     public nonisolated func handleIncomingRealtime(
         _ frame: RealtimePointerFrame,
         from source: DeviceID
     ) {
-        realtimeInputReceiver.receive(frame, from: source)
+        if let progress = realtimeInputReceiver.receive(frame, from: source) {
+            // The receiver only enables direct progress for negotiated sessions.
+            independentContinuation.yield(.control(source, ControlEnvelope(message: .realtimePointerProgress(progress))))
+        }
     }
 
     public nonisolated func sendCapturedPointerImmediately(_ event: InputEvent) -> Bool {
@@ -491,6 +564,10 @@ public actor ControlSessionCoordinator {
             diagnostic("Realtime progress rejected for session \(progress.sessionID); generation=\(progress.generation), sequence=\(progress.sequence), expectedGeneration=\(realtimeGeneration)")
             return false
         }
+        if supportsResilience, inputOutstandingSinceNanos != nil {
+            pendingLaneProgress = (source, progress)
+            return true
+        }
         let acknowledgedAtNanos = clock.nowNanoseconds()
         realtimeDeliveryMode = .healthy
         diagnostic("Realtime progress established for session \(progress.sessionID); generation=\(progress.generation), sequence=\(progress.sequence)")
@@ -508,8 +585,90 @@ public actor ControlSessionCoordinator {
         return true
     }
 
+    public func startIndependentEventHandling() {
+        guard independentEventTask == nil else { return }
+        let events = independentEvents
+        independentEventTask = Task(priority: realtimeInputTaskPriority) { [weak self] in
+            for await event in events {
+                guard !Task.isCancelled, let self else { return }
+                await self.handleIndependentEvent(event)
+            }
+        }
+    }
+
+    public nonisolated func enqueueIndependentEvent(_ event: PeerEvent) {
+        independentContinuation.yield(event)
+    }
+
+    private var supportsResilience: Bool {
+        activeControlRoute?.targetCapabilities.contains(.controlResilienceV1) == true
+    }
+
+    private func handleIndependentEvent(_ event: PeerEvent) async {
+        switch event {
+        case let .input(source, frame):
+            await handleIncoming(frame, from: source)
+        case let .control(source, envelope):
+            switch envelope.message {
+            case let .heartbeat(sessionID, timestamp):
+                if receiveHeartbeat(sessionID: sessionID, from: source) {
+                    if let progress = realtimePointerProgress(sessionID: sessionID, from: source) {
+                        progressReporter.record(progress, from: source)
+                    }
+                    progressReporter.recordHeartbeat(envelope, from: source)
+                } else {
+                    _ = receiveHeartbeatEcho(sessionID: sessionID, from: source, sentAtNanos: timestamp)
+                }
+            case let .realtimePointerProgress(progress):
+                if case let .receiving(_, peer, sessionID) = state, peer == source,
+                   sessionID == progress.sessionID, receiverCapabilities.contains(.controlResilienceV1) {
+                    progressReporter.record(progress, from: source)
+                } else {
+                    _ = receiveRealtimePointerProgress(progress, from: source)
+                }
+            case let .inputProgress(progress):
+                receiveInputProgress(progress, from: source)
+            case let .pointerCheckpoint(checkpoint):
+                if receiverCapabilities.contains(.controlResilienceV1),
+                   case let .receiving(_, peer, sessionID) = state,
+                   peer == source, sessionID == checkpoint.sessionID {
+                    _ = realtimeInputReceiver.applyCheckpoint(checkpoint, from: source)
+                }
+            case let .resume(request):
+                await receiveResume(request, from: source)
+            case let .resumeResult(previous, sessionID, accepted):
+                await receiveResumeResult(previous: previous, sessionID: sessionID, accepted: accepted, from: source)
+            default:
+                break
+            }
+        default:
+            break
+        }
+    }
+
+    public func receiveInputProgress(_ progress: InputDeliveryProgress, from source: DeviceID) {
+        guard supportsResilience, case let .controlling(_, peer, sessionID) = state,
+              peer == source, sessionID == progress.sessionID, progress.sequence < sequence,
+              lastInputAcknowledgedSequence.map({ progress.sequence > $0 }) ?? true else { return }
+        lastInputAcknowledgedSequence = progress.sequence
+        inputOutstandingSinceNanos = progress.sequence &+ 1 == sequence ? nil : clock.nowNanoseconds()
+        if let barrier = reliableBarrierSequence, progress.sequence >= barrier {
+            reliableBarrierSequence = nil
+        }
+        if inputOutstandingSinceNanos == nil, let (peer, progress) = pendingLaneProgress {
+            pendingLaneProgress = nil
+            _ = receiveRealtimePointerProgress(progress, from: peer)
+        }
+        diagnostic("Input injected through sequence \(progress.sequence) for session \(sessionID)")
+    }
+
     public func peerDisconnected(_ deviceID: DeviceID) async {
         switch state {
+        case let .controlling(epoch, target, sessionID) where target == deviceID && supportsResilience:
+            await beginRecovery(.recoveringController(epoch: epoch, target: target, session: sessionID))
+            transport.reconnect(to: target)
+        case let .receiving(epoch, source, sessionID) where source == deviceID && receiverCapabilities.contains(.controlResilienceV1):
+            await beginRecovery(.recoveringReceiver(epoch: epoch, source: source, session: sessionID))
         case let .activating(_, target, _) where target == deviceID,
              let .controlling(_, target, _) where target == deviceID:
             await endCurrentSession(notifyPeer: false, reason: "controlling peer disconnected")
@@ -520,16 +679,121 @@ public actor ControlSessionCoordinator {
         }
     }
 
+    private func beginRecovery(_ recoveringState: State) async {
+        setState(recoveringState)
+        diagnostic("Session recovering; state=\(recoveringState)")
+        activationInputTask?.cancel()
+        activationInputTask = nil
+        pointerFlushTask?.cancel()
+        pointerFlushTask = nil
+        pendingPointerEvent = nil
+        pendingScrollEvent = nil
+        heartbeatTask?.cancel()
+        watchdogTask?.cancel()
+        reliablePointerTask?.cancel()
+        reliablePointerTask = nil
+        realtimePointerCaptureSender.disable()
+        realtimeInputReceiver.reset()
+        progressReporter.reset()
+        transport.setRealtimePeer(nil, role: .listener)
+        for event in remoteInputState.releaseEvents() { injector.inject(event) }
+        injector.releaseAll()
+        pressedButtons.removeAll()
+        recoveryTask?.cancel()
+        recoveryTask = Task { [weak self, clock] in
+            do { try await clock.sleep(for: Self.sessionRecoveryTimeout) }
+            catch { return }
+            guard !Task.isCancelled, let self else { return }
+            await self.expireRecovery(recoveringState)
+        }
+        await inputSender.cancelPending()
+    }
+
+    private func expireRecovery(_ expected: State) async {
+        guard state == expected else { return }
+        await endCurrentSession(notifyPeer: true, reason: "session recovery expired")
+    }
+
+    public func peerReconnected(_ peer: DeviceID) async {
+        guard case let .recoveringController(epoch, target, previous) = state, target == peer else { return }
+        let request = pendingResume ?? ControlSessionResume(previousSessionID: previous, sessionID: SessionID(), epoch: epoch)
+        pendingResume = request
+        try? await transport.send(ControlEnvelope(message: .resume(request)), to: target)
+    }
+
+    public func receiveResume(_ request: ControlSessionResume, from source: DeviceID) async {
+        var accepted = false
+        if receiverCapabilities.contains(.controlResilienceV1), election.currentEpoch == request.epoch,
+           request.epoch.controllerID == source, request.sessionID != request.previousSessionID {
+            switch state {
+            case let .recoveringReceiver(epoch, peer, previous), let .receiving(epoch, peer, previous):
+                guard epoch == request.epoch, peer == source else { break }
+                if previous == request.sessionID && lastAcceptedResume == request {
+                    accepted = true
+                    break
+                }
+                guard previous == request.previousSessionID else { break }
+                recoveryTask?.cancel()
+                recoveryTask = nil
+                for event in remoteInputState.releaseEvents() { injector.inject(event) }
+                injector.releaseAll()
+                lastReceivedInputSequence = nil
+                realtimeInputReceiver.begin(epoch: epoch, source: source, sessionID: request.sessionID)
+                lastHeartbeatNanos = clock.nowNanoseconds()
+                lastAcceptedResume = request
+                setState(.receiving(epoch: epoch, source: source, session: request.sessionID))
+                transport.setRealtimePeer(source, role: .listener)
+                startWatchdog(source: source, sessionID: request.sessionID)
+                accepted = true
+            default:
+                break
+            }
+        }
+        try? await transport.send(ControlEnvelope(message: .resumeResult(
+            previousSessionID: request.previousSessionID, sessionID: request.sessionID, accepted: accepted
+        )), to: source)
+    }
+
+    public func receiveResumeResult(previous: SessionID, sessionID: SessionID, accepted: Bool, from source: DeviceID) async {
+        guard let request = pendingResume, request.previousSessionID == previous, request.sessionID == sessionID,
+              case let .recoveringController(epoch, target, oldSession) = state,
+              target == source, oldSession == previous else { return }
+        guard accepted else {
+            await endCurrentSession(notifyPeer: true, reason: "session resume rejected")
+            return
+        }
+        recoveryTask?.cancel()
+        recoveryTask = nil
+        pendingResume = nil
+        sequence = 0
+        lastInputAcknowledgedSequence = nil
+        pendingLaneProgress = nil
+        inputOutstandingSinceNanos = nil
+        reliableBarrierSequence = nil
+        lastHeartbeatEchoNanos = nil
+        resetRealtimeSender(incrementGeneration: true)
+        resetRealtimeDelivery()
+        realtimeDeliveryMode = activeControlRoute?.targetCapabilities.contains(.realtimePointerProgressV1) == true
+            ? .probing : .reliableOnly
+        setState(.controlling(epoch: epoch, target: target, session: sessionID))
+        transport.setRealtimePeer(target, role: .dialer)
+        await sendInput(.flags(rawValue: currentFlags))
+        startHeartbeat(target: target, sessionID: sessionID)
+        diagnostic("Session resumed; previous=\(previous), session=\(sessionID)")
+    }
+
     @discardableResult
     public func receiveDeactivation(sessionID: SessionID, from source: DeviceID) async -> Bool {
         switch state {
         case let .activating(_, target, activeSessionID),
-             let .controlling(_, target, activeSessionID):
+             let .controlling(_, target, activeSessionID),
+             let .recoveringController(_, target, activeSessionID):
             guard target == source, activeSessionID == sessionID else {
                 diagnostic("Ignoring stale deactivation for session \(sessionID) from \(source)")
                 return false
             }
-        case let .receiving(_, controller, activeSessionID):
+        case let .receiving(_, controller, activeSessionID),
+             let .recoveringReceiver(_, controller, activeSessionID):
             guard controller == source, activeSessionID == sessionID else {
                 diagnostic("Ignoring stale deactivation for session \(sessionID) from \(source)")
                 return false
@@ -556,12 +820,29 @@ public actor ControlSessionCoordinator {
     }
 
     public func stop() async {
+        independentEventTask?.cancel()
+        independentContinuation.finish()
+        progressReporter.stop()
         await endCurrentSession(notifyPeer: true, reason: "coordinator stopped")
         capture.stop()
     }
 
     private func endCurrentSession(notifyPeer: Bool, reason: String) async {
         let previous = state
+        let resumeToCancel = pendingResume
+        recoveryTask?.cancel()
+        recoveryTask = nil
+        pendingResume = nil
+        lastAcceptedResume = nil
+        receiverCapabilities = []
+        reliableBarrierSequence = nil
+        pendingPointerCheckpoint = nil
+        smoothedJitterNanos = nil
+        lastInputAcknowledgedSequence = nil
+        pendingLaneProgress = nil
+        inputOutstandingSinceNanos = nil
+        lastReceivedInputSequence = nil
+        progressReporter.reset()
         diagnostic("Ending session; reason=\(reason), state=\(previous), notifyPeer=\(notifyPeer)")
         cancelPendingActivation()
         setState(.idle)
@@ -600,12 +881,17 @@ public actor ControlSessionCoordinator {
 
         switch previous {
         case let .activating(_, target, sessionID),
-             let .controlling(_, target, sessionID):
+             let .controlling(_, target, sessionID),
+             let .recoveringController(_, target, sessionID):
             if notifyPeer {
+                if let resumeToCancel {
+                    try? await transport.send(ControlEnvelope(message: .deactivate(resumeToCancel.sessionID)), to: target)
+                }
                 try? await transport.send(ControlEnvelope(message: .releaseAll(sessionID)), to: target)
                 try? await transport.send(ControlEnvelope(message: .deactivate(sessionID)), to: target)
             }
-        case let .receiving(_, source, sessionID):
+        case let .receiving(_, source, sessionID),
+             let .recoveringReceiver(_, source, sessionID):
             if notifyPeer {
                 try? await transport.send(ControlEnvelope(message: .deactivate(sessionID)), to: source)
             }
@@ -633,6 +919,8 @@ public actor ControlSessionCoordinator {
             snapshot = .init(phase: .controlling, peerID: target, latencyMilliseconds: latency)
         case let .receiving(_, source, _):
             snapshot = .init(phase: .receiving, peerID: source)
+        case let .recoveringController(_, peer, _), let .recoveringReceiver(_, peer, _):
+            snapshot = .init(phase: .recovering, peerID: peer)
         }
         guard snapshot != lastSessionSnapshot else { return }
         lastSessionSnapshot = snapshot
@@ -706,11 +994,11 @@ public actor ControlSessionCoordinator {
         let now = clock.nowNanoseconds()
         guard let lastMotionFlushNanos,
               now >= lastMotionFlushNanos,
-              now - lastMotionFlushNanos < Self.pointerFlushIntervalNanos else {
+              now - lastMotionFlushNanos < pointerBatchIntervalNanos else {
             await flushPendingMotion()
             return
         }
-        schedulePointerFlush(after: Self.pointerFlushIntervalNanos - (now - lastMotionFlushNanos))
+        schedulePointerFlush(after: pointerBatchIntervalNanos - (now - lastMotionFlushNanos))
     }
 
     private func schedulePointerFlush(after delayNanoseconds: UInt64) {
@@ -747,6 +1035,10 @@ public actor ControlSessionCoordinator {
     private func sendPointer(_ event: InputEvent) async {
         guard case let .pointerMove(deltaX, deltaY, absoluteX, absoluteY) = event,
               case let .controlling(epoch, target, sessionID) = state else { return }
+        if reliableBarrierSequence != nil {
+            await sendReliablePointer(event)
+            return
+        }
         switch realtimeDeliveryMode {
         case .reliableOnly:
             await sendReliablePointer(event)
@@ -903,6 +1195,9 @@ public actor ControlSessionCoordinator {
 
     private func enterRealtimeFallback(target: DeviceID) {
         guard realtimeDeliveryMode != .fallback else { return }
+        if supportsResilience {
+            pendingPointerCheckpoint = realtimePointerCaptureSender.takeCheckpoint(reliableSequence: sequence)
+        }
         realtimePointerCaptureSender.disable()
         resetRealtimeSender(incrementGeneration: true)
         lastRealtimeSentSequence = nil
@@ -949,6 +1244,16 @@ public actor ControlSessionCoordinator {
     private func sendHeartbeat(target: DeviceID, sessionID: SessionID) async {
         guard case let .controlling(_, expectedTarget, expectedSession) = state,
               target == expectedTarget, sessionID == expectedSession else { return }
+        if supportsResilience, realtimePointerCaptureSender.hasExpiredOutstandingMotion() {
+            // Flush the final cumulative movement even when capture has gone idle.
+            await sendInput(.flags(rawValue: currentFlags))
+        }
+        if supportsResilience, let outstanding = inputOutstandingSinceNanos,
+           clock.nowNanoseconds() >= outstanding,
+           clock.nowNanoseconds() - outstanding > Self.inputProgressTimeoutNanos {
+            await endCurrentSession(notifyPeer: true, reason: "receiver input progress expired")
+            return
+        }
         do {
             try await transport.send(
                 ControlEnvelope(message: .heartbeat(sessionID: sessionID, timestampNanos: clock.nowNanoseconds())),
@@ -998,8 +1303,11 @@ actor OrderedInputSender {
     private struct PendingFrame: Sendable {
         let frame: InputFrame
         let target: DeviceID
+        let checkpoint: PointerCheckpoint?
+        let enqueuedAtNanos: UInt64
     }
 
+    static let maximumPendingFrames = 256
     private let transport: PeerTransport
     private let clock: MonotonicClock
     private var pending: [PendingFrame] = []
@@ -1008,19 +1316,33 @@ actor OrderedInputSender {
     private var worker: Task<Void, Never>?
     private var drainWaiters: [CheckedContinuation<Void, Never>] = []
     private var failedGeneration: UInt64?
+    private var acceptedFrames: UInt64 = 0
+    private var sentFrames: UInt64 = 0
+    private var coalescedFrames: UInt64 = 0
+    private var maximumPendingDepth = 0
+
+    func snapshot() -> InputQueueSnapshot {
+        let now = clock.nowNanoseconds()
+        let oldest = nextIndex < pending.count ? pending[nextIndex].enqueuedAtNanos : now
+        return InputQueueSnapshot(acceptedFrames: acceptedFrames, sentFrames: sentFrames,
+            coalescedFrames: coalescedFrames, pendingFrames: pending.count - nextIndex,
+            maximumPendingFrames: maximumPendingDepth,
+            oldestPendingAgeNanoseconds: now >= oldest ? now - oldest : 0)
+    }
 
     init(transport: PeerTransport, clock: MonotonicClock) {
         self.transport = transport
         self.clock = clock
     }
 
-    func enqueue(_ frame: InputFrame, to target: DeviceID) {
+    @discardableResult
+    func enqueue(_ frame: InputFrame, to target: DeviceID, checkpoint: PointerCheckpoint? = nil) -> Bool {
         if worker == nil, failedGeneration == generation {
             // A completed failed batch must not poison later successful sends.
             generation &+= 1
         }
-        if pending.count > nextIndex,
-           let previous = pending.last,
+        if checkpoint == nil, pending.count > nextIndex,
+           let previous = pending.last, previous.checkpoint == nil,
            previous.target == target,
            previous.frame.workspaceID == frame.workspaceID,
            previous.frame.sessionID == frame.sessionID,
@@ -1036,15 +1358,24 @@ actor OrderedInputSender {
                 event: .pointerMove(deltaX: previousX + deltaX, deltaY: previousY + deltaY,
                                     absoluteX: absoluteX, absoluteY: absoluteY)
             )
-            pending[pending.count - 1] = PendingFrame(frame: merged, target: target)
+            pending[pending.count - 1] = PendingFrame(frame: merged, target: target, checkpoint: nil, enqueuedAtNanos: previous.enqueuedAtNanos)
+            coalescedFrames &+= 1
         } else {
-            pending.append(PendingFrame(frame: frame, target: target))
+            guard pending.count - nextIndex < Self.maximumPendingFrames else {
+                cancelPending()
+                failedGeneration = generation
+                return false
+            }
+            pending.append(PendingFrame(frame: frame, target: target, checkpoint: checkpoint, enqueuedAtNanos: clock.nowNanoseconds()))
         }
-        guard worker == nil else { return }
+        acceptedFrames &+= 1
+        maximumPendingDepth = max(maximumPendingDepth, pending.count - nextIndex)
+        guard worker == nil else { return true }
         let activeGeneration = generation
         worker = Task { [weak self] in
             await self?.sendPendingFrames(generation: activeGeneration)
         }
+        return true
     }
 
     func cancelPending() {
@@ -1094,6 +1425,10 @@ actor OrderedInputSender {
             let item = pending[nextIndex]
             nextIndex += 1
             do {
+                if let checkpoint = item.checkpoint {
+                    try await transport.send(ControlEnvelope(message: .pointerCheckpoint(checkpoint)), to: item.target)
+                    guard !Task.isCancelled, generation == activeGeneration else { return }
+                }
                 try await transport.send(item.frame, to: item.target)
             } catch {
                 guard !Task.isCancelled, generation == activeGeneration else { return }
@@ -1105,6 +1440,7 @@ actor OrderedInputSender {
                 return
             }
             guard !Task.isCancelled, generation == activeGeneration else { return }
+            sentFrames &+= 1
 
             if nextIndex >= 64, nextIndex * 2 >= pending.count {
                 pending.removeFirst(nextIndex)

@@ -10,6 +10,8 @@ public final class RealtimeInputReceiver: @unchecked Sendable {
         var sequence: UInt64?
         var cumulativePointerX: Double = 0
         var cumulativePointerY: Double = 0
+        var minimumGeneration: UInt64 = 0
+        var pendingReliableSequence: UInt64?
     }
 
     private let workspaceID: WorkspaceID
@@ -32,15 +34,17 @@ public final class RealtimeInputReceiver: @unchecked Sendable {
         lock.withLock { session = nil }
     }
 
-    public func receive(_ frame: RealtimePointerFrame, from source: DeviceID) {
-        let event = lock.withLock { () -> InputEvent? in
+    @discardableResult
+    public func receive(_ frame: RealtimePointerFrame, from source: DeviceID) -> RealtimePointerProgress? {
+        lock.withLock {
             guard frame.workspaceID == workspaceID,
                   frame.controllerID == source,
                   var active = session,
                   active.epoch == frame.epoch,
                   active.source == source,
-                  active.sessionID == frame.sessionID else { return nil }
-
+                  active.sessionID == frame.sessionID,
+                  active.pendingReliableSequence == nil,
+                  frame.generation >= active.minimumGeneration else { return nil }
             if let generation = active.generation, frame.generation < generation { return nil }
             if active.generation != frame.generation {
                 active.generation = frame.generation
@@ -51,18 +55,52 @@ public final class RealtimeInputReceiver: @unchecked Sendable {
             guard active.sequence.map({ frame.sequence > $0 }) ?? true else { return nil }
             let deltaX = frame.cumulativeDeltaX - active.cumulativePointerX
             let deltaY = frame.cumulativeDeltaY - active.cumulativePointerY
+            guard deltaX.isFinite, deltaY.isFinite else { return nil }
             active.sequence = frame.sequence
             active.cumulativePointerX = frame.cumulativeDeltaX
             active.cumulativePointerY = frame.cumulativeDeltaY
+            // Serialize injection with checkpoints, so a decoded old datagram
+            // cannot be applied after a reliable button transition.
+            injector.inject(.pointerMove(deltaX: deltaX, deltaY: deltaY,
+                                         absoluteX: frame.absoluteX, absoluteY: frame.absoluteY))
             session = active
-            return .pointerMove(
-                deltaX: deltaX,
-                deltaY: deltaY,
-                absoluteX: frame.absoluteX,
-                absoluteY: frame.absoluteY
-            )
+            return .init(sessionID: active.sessionID, generation: frame.generation, sequence: frame.sequence)
         }
-        if let event { injector.inject(event) }
+    }
+
+    @discardableResult
+    public func applyCheckpoint(_ checkpoint: PointerCheckpoint, from source: DeviceID) -> Bool {
+        lock.withLock {
+            guard var active = session, active.source == source,
+                  active.sessionID == checkpoint.sessionID,
+                  checkpoint.generation >= active.minimumGeneration,
+                  checkpoint.generation >= (active.generation ?? 0),
+                  checkpoint.generation < UInt64.max,
+                  checkpoint.cumulativeDeltaX.isFinite, checkpoint.cumulativeDeltaY.isFinite else { return false }
+            let sameGeneration = active.generation == checkpoint.generation
+            let deltaX = checkpoint.cumulativeDeltaX - (sameGeneration ? active.cumulativePointerX : 0)
+            let deltaY = checkpoint.cumulativeDeltaY - (sameGeneration ? active.cumulativePointerY : 0)
+            guard deltaX.isFinite, deltaY.isFinite else { return false }
+            if deltaX != 0 || deltaY != 0 {
+                injector.inject(.pointerMove(deltaX: deltaX, deltaY: deltaY, absoluteX: 0, absoluteY: 0))
+            }
+            active.minimumGeneration = checkpoint.generation + 1
+            active.pendingReliableSequence = checkpoint.reliableSequence
+            active.generation = nil
+            active.sequence = nil
+            active.cumulativePointerX = 0
+            active.cumulativePointerY = 0
+            session = active
+            return true
+        }
+    }
+
+    public func completeReliableInput(sequence: UInt64) {
+        lock.withLock {
+            if let pending = session?.pendingReliableSequence, sequence >= pending {
+                session?.pendingReliableSequence = nil
+            }
+        }
     }
 
     public func progress(sessionID: SessionID, source: DeviceID) -> RealtimePointerProgress? {
