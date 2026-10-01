@@ -375,12 +375,12 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func stopControlling() {
+    func stopControlling(reason: String = "manual stop") {
         controlTransferGuard.beginStop()
         finishPendingActivationInput()
         capture.setSuppressionEnabled(false)
         Task {
-            await coordinator?.deactivateCurrentSession(reason: "manual stop")
+            await coordinator?.deactivateCurrentSession(reason: reason)
             controlTransferGuard.completeStop()
             statusMessage = isLocalController ? "Controller ready" : "Receiver ready"
         }

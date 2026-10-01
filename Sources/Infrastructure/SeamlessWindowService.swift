@@ -14,6 +14,8 @@ public final class SeamlessWindowService {
     private var pendingCatalogRequest: DeviceID?
     public var onChange: (() -> Void)?
     public var isPresenting: Bool { state.phase != .idle || captureTask != nil }
+    /// Cleanup keeps capture operations busy, but does not own desktop input.
+    public var requiresExclusiveInput: Bool { state.phase != .idle }
     private let capture: any SeamlessCaptureSource
     private var state = WindowPresentationState()
     private var input: (any SeamlessInputTarget)?

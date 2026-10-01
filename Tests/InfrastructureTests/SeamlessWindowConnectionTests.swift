@@ -80,6 +80,35 @@ final class SeamlessWindowConnectionTests: XCTestCase {
         XCTAssertNil(WindowApplicationIcon.iconImage(Data(count: 4_097)))
     }
 
+    func testCatalogConnectionCleanupNeverClaimsExclusiveDesktopInput() async throws {
+        let source = DeviceID(), viewer = DeviceID()
+        let workspace = WorkspaceSnapshot(id: WorkspaceID(), name: "Catalog cleanup", localDeviceID: source,
+            devices: [DeviceDescriptor(id: source, name: "Source", peerAddresses: [try PeerAddress("127.0.0.1")], platform: .macOS),
+                      DeviceDescriptor(id: viewer, name: "Viewer", platform: .macOS)])
+        let capture = WindowCaptureFixture()
+        let server = SeamlessWindowService(controlPort: .any, videoPort: .any, enableBonjour: false, capture: capture)
+        defer { server.stop() }
+        let key = Data(repeating: 9, count: 32)
+        try server.start(workspace: workspace, local: source, key: key)
+        try await eventually { server.listeningPorts.count == 2 && !server.isPresenting }
+        let client = SeamlessWindowService(controlPort: .any, videoPort: .any, enableBonjour: false,
+            directControlPort: server.listeningPorts[0], directVideoPort: server.listeningPorts[1])
+        defer { client.stop() }
+        try client.start(workspace: workspace, local: viewer, key: key)
+        try await eventually { !client.isPresenting }
+        var exclusiveTransitions = 0
+        server.onChange = { if server.requiresExclusiveInput { exclusiveTransitions += 1 } }
+        client.onChange = { if client.requiresExclusiveInput { exclusiveTransitions += 1 } }
+        let catalog = try await client.fetchCatalog(from: source)
+        XCTAssertEqual(catalog, [capture.descriptor])
+        client.returnHome()
+        try await eventually { server.status.hasPrefix("Connection ended") }
+        XCTAssertEqual(exclusiveTransitions, 0,
+            "Catalog cleanup must never tell the app to stop independent desktop control")
+        server.onChange = nil
+        client.onChange = nil
+    }
+
     func testRemoteCatalogRequestIsSentAfterAuthentication() async throws {
         let source = DeviceID(), viewer = DeviceID()
         let workspace = WorkspaceSnapshot(id: WorkspaceID(), name: "Catalog fixture", localDeviceID: source,
@@ -461,6 +490,7 @@ final class SeamlessWindowConnectionTests: XCTestCase {
         try service.start(workspace: workspace, local: source.id, key: receiver.key)
         try await eventually { !service.isPresenting }
         try service.present(capture.descriptor, on: destination.id)
+        XCTAssertTrue(service.requiresExclusiveInput, "An actual presentation must still request exclusive input")
         // Accepted, so beginCapture() is running and parked inside start().
         try await eventually { capture.starts == 1 }
         service.returnHome()

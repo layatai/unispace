@@ -18,6 +18,7 @@ final class SeamlessWindowViewModel: ObservableObject {
     private let service = SeamlessWindowService()
     private var subscription: AnyCancellable?
     private var catalogRefreshTask: Task<Void, Never>?
+    private var requiresExclusiveInput = false
     private var configuration: ContinuityWorkspaceConfiguration?
     private weak var appModel: AppModel?
     private static let enabledPreferenceKey = "SeamlessWindowSharingEnabled"
@@ -28,12 +29,15 @@ final class SeamlessWindowViewModel: ObservableObject {
         enabled = UserDefaults.standard.bool(forKey: Self.enabledPreferenceKey)
         service.onChange = { [weak self] in
             guard let self else { return }
-            let wasBusy = self.busy
+            let wasExclusive = self.requiresExclusiveInput
+            self.requiresExclusiveInput = self.service.requiresExclusiveInput
             self.status = self.service.status
             self.busy = self.service.isPresenting
             // An incoming window auto-accepts; stop being remotely controlled
             // so local and remote input don't fight over the same window.
-            if self.busy && !wasBusy { self.appModel?.stopControlling() }
+            if self.requiresExclusiveInput && !wasExclusive {
+                self.appModel?.stopControlling(reason: "seamless presentation started")
+            }
             let catalog = self.service.remoteCatalog
             if let catalog { self.remoteCatalogs[catalog.peer] = catalog.windows }
         }
@@ -99,7 +103,7 @@ final class SeamlessWindowViewModel: ObservableObject {
 
     /// Also used for the menu bar's quick-move list, which skips the picker entirely.
     func moveWindow(_ window: SeamlessWindowDescriptor, to peer: DeviceID) {
-        appModel?.stopControlling()
+        appModel?.stopControlling(reason: "seamless window requested")
         do { try service.present(window, on: peer) }
         catch { status = "This window could not be shared (\(error)). Keep it visible, check permissions, and enable sharing on the other Mac." }
     }
@@ -127,7 +131,7 @@ final class SeamlessWindowViewModel: ObservableObject {
     /// Also used for the menu bar's quick-pull list.
     func pullWindow(_ window: SeamlessWindowDescriptor, from peer: DeviceID) {
         guard enabled, !busy, !loadingRemoteWindows else { return }
-        appModel?.stopControlling()
+        appModel?.stopControlling(reason: "seamless pull requested")
         loadingRemoteWindows = true
         Task {
             defer { loadingRemoteWindows = false }
