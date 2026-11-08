@@ -25,7 +25,7 @@ public actor ClipboardStreamCoordinator {
     private var destination: DeviceID?
     private var remote: [DeviceID: ClipboardStreamSelection] = [:]
     private var pending: [UUID: Pending] = [:]
-    private var advertised: (peer: DeviceID, selection: ClipboardStreamSelection)?
+    private var advertised: [DeviceID: ClipboardStreamSelection] = [:]
     private var epoch = UUID()
 
     public init(transport: any FileTransferTransport, source: ClipboardStreamSource, adapter: any ClipboardVirtualFileAdapter) {
@@ -36,26 +36,28 @@ public actor ClipboardStreamCoordinator {
         self.localDevice = localDevice; self.workspace = workspace
     }
     public func stop() async {
-        workspace = nil; localDevice = nil; destination = nil; advertised = nil
+        workspace = nil; localDevice = nil; destination = nil; advertised.removeAll()
         connected.removeAll(); remote.removeAll(); epoch = UUID()
         let requests = pending.values; pending.removeAll()
         for request in requests { request.timeout.cancel(); request.continuation.finish(throwing: ClipboardStreamFailure.cancelled) }
         await adapter.stop(); await source.stop()
     }
     public func setDestination(_ peer: DeviceID?) async {
-        if let old = advertised, old.peer != peer {
-            advertised = nil
-            try? await send(.withdraw(.init(old.selection.id)), to: old.peer)
+        if let old = destination, old != peer, let selection = advertised.removeValue(forKey: old) {
+            try? await send(.withdraw(.init(selection.id)), to: old)
         }
         destination = peer
-        await source.setDestination(peer)
+        await syncServedPeers()
         await advertiseIfPossible()
     }
     public func connection(_ peer: DeviceID, active: Bool) async {
-        if active { connected.insert(peer); await source.setDestination(destination); await advertiseIfPossible(); return }
+        if active { connected.insert(peer); await syncServedPeers(); await advertiseIfPossible(); return }
         connected.remove(peer)
         if let selection = remote.removeValue(forKey: peer) { await adapter.withdraw(selection.id, from: peer) }
-        if advertised?.peer == peer { advertised = nil }
+        if let selection = advertised.removeValue(forKey: peer) {
+            try? await send(.withdraw(.init(selection.id)), to: peer)
+        }
+        await syncServedPeers()
         let matching = pending.filter { $0.value.peer == peer }
         for (id, request) in matching {
             pending.removeValue(forKey: id); request.timeout.cancel()
@@ -64,8 +66,12 @@ public actor ClipboardStreamCoordinator {
         await source.disconnect(peer)
     }
     public func copied(_ urls: [URL]) async throws {
-        if let old = advertised { advertised = nil; try? await send(.withdraw(.init(old.selection.id)), to: old.peer) }
-        _ = try await source.replace(urls: urls, destination: destination)
+        for (peer, selection) in advertised {
+            try? await send(.withdraw(.init(selection.id)), to: peer)
+        }
+        advertised.removeAll()
+        _ = try await source.replace(urls: urls, destination: nil)
+        await syncServedPeers()
         await advertiseIfPossible()
     }
     public func selection(from peer: DeviceID) -> ClipboardStreamSelection? { remote[peer] }
@@ -73,11 +79,20 @@ public actor ClipboardStreamCoordinator {
         workspace?.devices.first(where: { $0.id == peer })?.capabilities.contains(.fileClipboardStreamV2) == true
     }
     private func advertiseIfPossible() async {
-        guard let peer = destination, connected.contains(peer), compatible(peer),
-              let selection = await source.current(), advertised?.selection.id != selection.id || advertised?.peer != peer else { return }
-        advertised = (peer, selection)
-        do { try await send(.announce(selection), to: peer) }
-        catch { if advertised?.selection.id == selection.id { advertised = nil } }
+        guard destination != nil, let selection = await source.current() else { return }
+        for peer in connected where compatible(peer) {
+            guard advertised[peer]?.id != selection.id else { continue }
+            do {
+                try await send(.announce(selection), to: peer)
+                advertised[peer] = selection
+            } catch { /* Retry on the next trigger; served peers are not opened by announce failures. */ }
+        }
+        await syncServedPeers()
+    }
+    private func syncServedPeers() async {
+        var peers = Set(advertised.keys)
+        if let destination { peers.insert(destination) }
+        await source.setServedPeers(peers)
     }
     public func receive(_ message: ClipboardStreamMessage, from peer: DeviceID) async {
         guard workspace != nil, connected.contains(peer), compatible(peer) else { return }
@@ -153,7 +168,7 @@ public actor ClipboardStreamCoordinator {
             while offset < file.size {
                 try Task.checkCancellation()
                 let count = Int(min(UInt64(lease.maximumReadBytes), file.size - offset))
-                let bytes = try await read(lease: lease, offset: offset, length: count, peer: peer)
+                let bytes = try await readWithRetry(lease: lease, offset: offset, length: count, peer: peer)
                 guard !bytes.isEmpty else { throw ClipboardStreamFailure.changed }
                 try output.write(contentsOf: bytes); hasher.update(data: bytes)
                 offset += UInt64(bytes.count)
@@ -168,6 +183,19 @@ public actor ClipboardStreamCoordinator {
         }
     }
     public func close(lease: ClipboardStreamLease, peer: DeviceID) async { try? await send(.close(.init(lease.leaseID)), to: peer) }
+    // Retry only transport-level loss: lease-bound failures must surface unchanged.
+    private func readWithRetry(lease: ClipboardStreamLease, offset: UInt64, length: Int, peer: DeviceID) async throws -> Data {
+        var attempt = 0
+        while true {
+            do {
+                return try await read(lease: lease, offset: offset, length: length, peer: peer)
+            } catch let failure as ClipboardStreamFailure
+            where attempt < 2 && (failure == .ioFailure || failure == .unavailable) {
+                attempt += 1
+                try? await Task.sleep(for: .milliseconds(250))
+            }
+        }
+    }
     private func exchange(_ message: ClipboardStreamMessage, requestID: UUID, peer: DeviceID) async throws -> ClipboardStreamMessage {
         guard connected.contains(peer), compatible(peer), pending.count < 32 else { throw ClipboardStreamFailure.unavailable }
         let pair = AsyncThrowingStream<ClipboardStreamMessage, Error>.makeStream(bufferingPolicy: .bufferingNewest(1))

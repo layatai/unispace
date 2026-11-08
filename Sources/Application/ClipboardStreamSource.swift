@@ -36,7 +36,8 @@ public actor ClipboardStreamSource {
     private let clock: any MonotonicClock
     private let limits: ClipboardStreamLimits
     private var selection: ClipboardStreamSelection?
-    private var destination: DeviceID?
+    /// Coordinator-driven: only announced (or explicitly designated) peers may open leases.
+    private var servedPeers: Set<DeviceID> = []
     private var leases: [UUID: Lease] = [:]
     private var pendingOpens: [OpenKey: PendingOpen] = [:]
     private var expiryTask: Task<Void, Never>?
@@ -51,9 +52,9 @@ public actor ClipboardStreamSource {
         let expectedGeneration = generation
         let previous = selection
         selection = nil
-        self.destination = destination
         if let previous { await source.releaseSelection(previous.id) }
         guard !urls.isEmpty else { return nil }
+        servedPeers = destination.map { [$0] } ?? []
         let described = try await source.describe(urls: urls, epoch: epoch, generation: expectedGeneration)
         try described.validate(limits: limits)
         guard generation == expectedGeneration else {
@@ -64,10 +65,11 @@ public actor ClipboardStreamSource {
         return described
     }
     public func current() -> ClipboardStreamSelection? { selection }
-    public func setDestination(_ peer: DeviceID?) { destination = peer }
+    public func setDestination(_ peer: DeviceID?) { servedPeers = peer.map { [$0] } ?? [] }
+    public func setServedPeers(_ peers: Set<DeviceID>) { servedPeers = peers }
     public func open(_ request: ClipboardStreamOpen, peer: DeviceID) async throws -> ClipboardStreamLease {
         await expire()
-        guard destination == peer, let selection, selection.id == request.selectionID,
+        guard servedPeers.contains(peer), let selection, selection.id == request.selectionID,
               let file = selection.files.first(where: { $0.id == request.fileID }) else { throw ClipboardStreamFailure.unavailable }
         guard file.version == request.version else { throw ClipboardStreamFailure.changed }
         let key = OpenKey(peer: peer, requestID: request.requestID)
@@ -89,7 +91,7 @@ public actor ClipboardStreamSource {
     private func createLease(_ request: ClipboardStreamOpen, selection: ClipboardStreamSelection,
                              file: ClipboardStreamFile, peer: DeviceID) async throws -> ClipboardStreamLease {
         let reader = try await source.open(selectionID: selection.id, file: file)
-        guard !Task.isCancelled, self.selection?.id == selection.id, destination == peer else {
+        guard !Task.isCancelled, self.selection?.id == selection.id, servedPeers.contains(peer) else {
             await reader.close()
             throw ClipboardStreamFailure.cancelled
         }
@@ -135,7 +137,7 @@ public actor ClipboardStreamSource {
         }
         let matching = leases.values.filter { $0.peer == peer }
         for lease in matching { leases.removeValue(forKey: lease.value.leaseID) }
-        if destination == peer { destination = nil }
+        servedPeers.remove(peer)
         for lease in matching { await lease.reader.close() }
     }
     public func stop() async {
@@ -144,7 +146,7 @@ public actor ClipboardStreamSource {
         pendingOpens.removeAll()
         generation &+= 1
         epoch = UUID()
-        let previous = selection; selection = nil; destination = nil
+        let previous = selection; selection = nil; servedPeers.removeAll()
         let active = Array(leases.values); leases.removeAll()
         for lease in active { await lease.reader.close() }
         if let previous { await source.releaseSelection(previous.id) }
