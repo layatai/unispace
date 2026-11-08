@@ -1,0 +1,122 @@
+{
+  "name": "clipboard-stream-v2",
+  "comment": "Shared cross-implementation golden vectors for the lazy file clipboard stream (unispace ClipboardStreamCodec.swift <-> macifier ClipboardStreamWireCodec.cs). JSON metadata messages are pinned semantically: same fields, camelCase keys, and a decode->re-encode->decode round trip must be lossless. Raw byte equality is intentionally NOT asserted for metadata because Swift sorts keys and C# uses declaration order. The binary range message (kind 6) is pinned byte-exact for the full frame.",
+  "frameHeader": [0, 2],
+  "kinds": {
+    "announce": 1,
+    "withdraw": 2,
+    "open": 3,
+    "opened": 4,
+    "read": 5,
+    "range": 6,
+    "finish": 7,
+    "finished": 8,
+    "close": 9,
+    "error": 10
+  },
+  "vectors": [
+    {
+      "name": "announce-selection",
+      "kind": 1,
+      "payloadJSON": {
+        "epoch": "e0000001-1111-2222-3333-444455556666",
+        "id": "e0000002-1111-2222-3333-444455556666",
+        "generation": 7,
+        "files": [
+          {
+            "id": "e0000003-1111-2222-3333-444455556666",
+            "name": "notes.txt",
+            "size": 11,
+            "version": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "contentType": "public.plain-text"
+          },
+          {
+            "id": "e0000004-1111-2222-3333-444455556666",
+            "name": ".Graphics.png",
+            "size": 0,
+            "version": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "contentType": "public.data"
+          }
+        ]
+      }
+    },
+    {
+      "name": "withdraw-selection",
+      "kind": 2,
+      "payloadJSON": {
+        "id": "e0000002-1111-2222-3333-444455556666"
+      }
+    },
+    {
+      "name": "open-file",
+      "kind": 3,
+      "payloadJSON": {
+        "requestID": "e0000005-1111-2222-3333-444455556666",
+        "selectionID": "e0000002-1111-2222-3333-444455556666",
+        "fileID": "e0000003-1111-2222-3333-444455556666",
+        "version": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      }
+    },
+    {
+      "name": "opened-lease-huge-file",
+      "kind": 4,
+      "payloadJSON": {
+        "requestID": "e0000005-1111-2222-3333-444455556666",
+        "selectionID": "e0000002-1111-2222-3333-444455556666",
+        "fileID": "e0000003-1111-2222-3333-444455556666",
+        "leaseID": "e0000006-1111-2222-3333-444455556666",
+        "size": 4294967315,
+        "maximumReadBytes": 262144
+      }
+    },
+    {
+      "name": "read-past-4gib",
+      "kind": 5,
+      "payloadJSON": {
+        "requestID": "e0000005-1111-2222-3333-444455556666",
+        "leaseID": "e0000006-1111-2222-3333-444455556666",
+        "fileID": "e0000003-1111-2222-3333-444455556666",
+        "offset": 4294967315,
+        "length": 4096
+      }
+    },
+    {
+      "name": "range-with-data-byte-exact",
+      "kind": 6,
+      "frameHex": "000206e0000005111122223333444455556666e0000006111122223333444455556666e000000311112222333344445555666600000001000000130000000500040506fe"
+    },
+    {
+      "name": "finish-digest",
+      "kind": 7,
+      "payloadJSON": {
+        "requestID": "e0000005-1111-2222-3333-444455556666",
+        "leaseID": "e0000006-1111-2222-3333-444455556666",
+        "digest": "A5BYxvLAy0ksUzsKTRTvd8wPeKvMztUofYShogEc+4E="
+      }
+    },
+    {
+      "name": "finished-digest",
+      "kind": 8,
+      "payloadJSON": {
+        "requestID": "e0000005-1111-2222-3333-444455556666",
+        "leaseID": "e0000006-1111-2222-3333-444455556666",
+        "digest": "A5BYxvLAy0ksUzsKTRTvd8wPeKvMztUofYShogEc+4E="
+      }
+    },
+    {
+      "name": "close-lease",
+      "kind": 9,
+      "payloadJSON": {
+        "id": "e0000006-1111-2222-3333-444455556666"
+      }
+    },
+    {
+      "name": "error-source-changed",
+      "kind": 10,
+      "payloadJSON": {
+        "requestID": "e0000005-1111-2222-3333-444455556666",
+        "failure": "changed"
+      }
+    }
+  ]
+}
