@@ -16,6 +16,7 @@ final class FileTransferViewModel: ObservableObject {
 
     private let trustStore: KeychainTrustStore
     private let coordinator: FileTransferCoordinator
+    private let nativeClipboardAdapter: FileProviderClipboardAdapter?
     private let qosTransport: QoSFileTransferTransport?
     private let checkpointStore: CheckpointingTransferStore?
     private let streamingSource: StreamingPersistentFileSourceProvider?
@@ -36,6 +37,7 @@ final class FileTransferViewModel: ObservableObject {
         self.trustStore = trustStore
         if let coordinator {
             self.coordinator = coordinator
+            nativeClipboardAdapter = nil
             qosTransport = nil
             checkpointStore = nil
             streamingSource = nil
@@ -49,12 +51,26 @@ final class FileTransferViewModel: ObservableObject {
             self.qosTransport = qosTransport
             self.checkpointStore = checkpointStore
             self.streamingSource = streamingSource
+            let nativeClipboard = FileProviderClipboardAdapter()
+            nativeClipboardAdapter = nativeClipboard
+            let clipboardSource = ClipboardStreamSource(source: LocalClipboardSelectionSource(), clock: SystemMonotonicClock())
+            let clipboardStreams = ClipboardStreamCoordinator(transport: qosTransport, source: clipboardSource, adapter: nativeClipboard)
+            nativeClipboard.onDownload = { [weak clipboardStreams] file, destination, progress in
+                guard let clipboardStreams else { throw ClipboardStreamFailure.cancelled }
+                try await clipboardStreams.download(fileID: file.fileID, selectionID: file.selectionID,
+                    peer: DeviceID(rawValue: file.peerID), to: destination, progress: progress)
+            }
             self.coordinator = FileTransferCoordinator(
                 transport: qosTransport,
                 store: checkpointStore,
                 sourceProvider: streamingSource,
-                pasteboard: pasteboard
+                pasteboard: pasteboard,
+                clipboardStreams: clipboardStreams
             )
+        }
+
+        nativeClipboardAdapter?.availabilityChanged = { [weak self] message in
+            self?.lastError = message
         }
 
         if ProcessInfo.processInfo.arguments.contains("--ui-testing-transfers") {
@@ -313,7 +329,7 @@ final class FileTransferViewModel: ObservableObject {
                 workspace: workspace,
                 localDevice: localDevice,
                 key: key,
-                capabilities: [.fileTransferV1]
+                capabilities: [.fileTransferV1, .fileClipboardStreamV2]
             )
             if configuration != configuredWorkspace {
                 try await coordinator.start(

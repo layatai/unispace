@@ -25,6 +25,7 @@
 		0FD70E2DF57D3C4771CADD97 /* UniSpaceInfrastructure.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = A92FBB5C74B263098DBE15F3 /* UniSpaceInfrastructure.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		113BF8CD86F1512EACABE4CF /* TwoProcessSimulationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E124D2AC0DF1143B1DFE882 /* TwoProcessSimulationTests.swift */; };
 		11C75A2AAACF14ABBBCB6DE8 /* ClipboardSyncEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAC323F46C734473E86D5564 /* ClipboardSyncEngine.swift */; };
+		12E3194015B58E97DA7F570A /* ClipboardStreamCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 380771ED9868DD227AD28128 /* ClipboardStreamCoordinator.swift */; };
 		14EE723F76CE6F2DA8D07CEA /* FileTransferPortableInteropTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 35A90BE2C791C3DCDC9D0E4B /* FileTransferPortableInteropTests.swift */; };
 		15D4602F0E394967AE9B8448 /* UserDefaultsControllerIdentityStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B529336DB430FF43F7D43646 /* UserDefaultsControllerIdentityStore.swift */; };
 		1715553FA76B59428C5E1AAA /* SimulatedE2ETests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 256563740902D273A25CC9B0 /* SimulatedE2ETests.swift */; };
@@ -34,6 +35,7 @@
 		18FE967A9F32A884A7AB69CC /* ControlRoutingPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = A22156FBFA8C341F3E0E3494 /* ControlRoutingPolicy.swift */; };
 		1CF86561870DB5B6B5215E3B /* CGEventInputInjector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FB1C3CA1F6EAACE025F81C8 /* CGEventInputInjector.swift */; };
 		1E5D7DE173BD3BFB85C3855D /* ClipboardViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B08ECF73A3310CB81B011268 /* ClipboardViewModel.swift */; };
+		226EF79ED0B50E3504DC4EDD /* UniSpaceClipboardProviderShared.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = DF2D1996626052C12F220B62 /* UniSpaceClipboardProviderShared.framework */; };
 		22C3836F82F335609B866861 /* UniSpaceUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5BB0E1195B12A9CCB81CDE1 /* UniSpaceUITests.swift */; };
 		22C43ADAB634554371FF0519 /* FileTransferCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2CB43EB0672129457FEECEC /* FileTransferCoordinatorTests.swift */; };
 		248856F9D8F49575B93537B7 /* SeamlessWindowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A08F40E269654673542DE2F0 /* SeamlessWindowTests.swift */; };
@@ -68,6 +70,7 @@
 		472578005136DD01F9572CCA /* ConnectionRecoveryPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7AAA75CF0B5E940401B90DB /* ConnectionRecoveryPolicyTests.swift */; };
 		47A3402AFE500FBF2D42188A /* ConnectionPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 52503476DF8C30922A762829 /* ConnectionPolicyTests.swift */; };
 		4854AC4D14047AAF36821B33 /* SandboxTransferStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9C5F32518159BD61F4A0006 /* SandboxTransferStore.swift */; };
+		48EF2FD4E21B237C0A0CA1DB /* ClipboardStreamTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 35494408D8AE45C073E2B2D6 /* ClipboardStreamTests.swift */; };
 		4B054835C3F4DDFCA217DEC6 /* SeamlessWindowService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1BE923FB4020D06D807BE12 /* SeamlessWindowService.swift */; };
 		4B9377363BC8B881C0979AEC /* CheckpointingTransferStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = BAE6F2A5F3EBA813F7D0C9A5 /* CheckpointingTransferStore.swift */; };
 		4BF0B343A2396225C9AB48AB /* ProtocolCoverageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5768D1126879FE096B44FAB /* ProtocolCoverageTests.swift */; };
@@ -76,12 +79,15 @@
 		5072BBBE018CC68573E778BF /* ClipboardFeatureBaselineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 433D591FE5C6EA589EA494E5 /* ClipboardFeatureBaselineTests.swift */; };
 		52FBED6818BA3CABD2037A7F /* ClipboardCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D28B7447A19E823D3F993A1 /* ClipboardCoordinator.swift */; };
 		5497A8C8B7253CC28499418B /* WorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 184432B7A6AD87798C281699 /* WorkspaceView.swift */; };
+		56FFBB1A38FD1F1F99F99D44 /* ClipboardStreamCodec.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0438FC6F9C7F8B08645047BA /* ClipboardStreamCodec.swift */; };
 		57EE3A4DC4E1CAA006423E32 /* NetworkFileTransferTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E6AD408755764E44722C89B /* NetworkFileTransferTransport.swift */; };
 		580C9A6720FF82483450B52B /* UniSpaceApplication.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = CD69866EFD7AE9229BB70567 /* UniSpaceApplication.framework */; };
 		59A98523E54491459EB8B530 /* UniSpaceDomain.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = D0CF733F292C646448A74827 /* UniSpaceDomain.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		5F7DB43A7C476AA36C40CF45 /* SetupFlowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63C1907F88FD14FAAC86A99A /* SetupFlowView.swift */; };
 		614AF274F556634B2EDA0446 /* SimulationModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27D38A2E09139472BAB9BD80 /* SimulationModels.swift */; };
 		61A462A57AB5FBAF5951FDBF /* SettingsRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7F83A6EAED5A346AA0A2F73 /* SettingsRootView.swift */; };
+		61FCC01F57B69BCE6F728037 /* ClipboardFileProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8C5FBB7F0B33F3B66EC6C5DC /* ClipboardFileProvider.swift */; };
+		62AFAE0A022941A1E7F6158C /* UniSpaceFileProvider.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 96A382412D4E0DFF9FA8D693 /* UniSpaceFileProvider.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		630D9260AED7669F82DBAF80 /* UniSpaceApplication.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = CD69866EFD7AE9229BB70567 /* UniSpaceApplication.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		63F9954BAE0212DB110EDDFE /* FinderFileContinuityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A031EE96F2A7B2DA05629C9 /* FinderFileContinuityTests.swift */; };
 		64D7A647CC98A3FEAF3F7535 /* SetupFlowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63C1907F88FD14FAAC86A99A /* SetupFlowView.swift */; };
@@ -94,15 +100,18 @@
 		74AC30A72CECB8779FE0869C /* TransferQoSInfrastructureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 141EC1525C2113FE7AD7B5AD /* TransferQoSInfrastructureTests.swift */; };
 		776E04431ED4774F531FC12E /* FileTransferComposition.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAEC587D8B279C9E6BB97FB8 /* FileTransferComposition.swift */; };
 		78B81DC2D0676E5595C7897B /* DesignSystem.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0532F3407215F29850C4C079 /* DesignSystem.swift */; };
+		7944915921BDC284B8284A58 /* UniSpaceClipboardProviderShared.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = DF2D1996626052C12F220B62 /* UniSpaceClipboardProviderShared.framework */; };
 		7AC9BE31D5C8E171DA184B8F /* PortableInputMapper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 478444AE3F889D2F9D43B479 /* PortableInputMapper.swift */; };
 		7D6F942C298020FC44034ED0 /* AppModel+Continuity.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD4E7B2B948E0A2DD50FE7C2 /* AppModel+Continuity.swift */; };
 		845CBB702B986D7C4DE1CE02 /* QUICRealtimeTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = C621DBB9B2414C73EAF7AC52 /* QUICRealtimeTransport.swift */; };
+		863205B186A5D8C6289DA795 /* UniSpaceClipboardProviderShared.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = DF2D1996626052C12F220B62 /* UniSpaceClipboardProviderShared.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		886D77A812D77B7AD388069E /* NetworkPeerTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 602F8819EF4D4A147D279865 /* NetworkPeerTransport.swift */; };
 		89DA58817351D4BF2574908F /* SimulationAdapters.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62058B91AC6DF51CB04363DB /* SimulationAdapters.swift */; };
 		8E3850CC638FBADFE66DFE00 /* SystemTailnetAddressProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E450FB99AE7F4C9BB087CB4 /* SystemTailnetAddressProvider.swift */; };
 		8E3D1A6984A7375CA3F45EB8 /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC7DB685B1A02A9DD593C503 /* AppModel.swift */; };
 		8E6BA003D246813AC1906B0B /* FrameCodec.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A1425648D0C5F8712AC268 /* FrameCodec.swift */; };
 		8E8D0D149CC8932E23A6D7DC /* FileWorkspaceStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6BD24036F75164EC8ED3CE84 /* FileWorkspaceStore.swift */; };
+		94B4B1EA4DF9EDE96AD7F301 /* ClipboardStreamSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = 649EE7DF1EDA27EF4CEF873D /* ClipboardStreamSource.swift */; };
 		94F94E0629103ADDC5F8F32D /* AuthenticatedPointerTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3CB4B943AD906BC099B164E8 /* AuthenticatedPointerTransport.swift */; };
 		9AF61C5B35E5F987D428155A /* ContinuityDestinationResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACED02FBB2EE977618DDECC0 /* ContinuityDestinationResolver.swift */; };
 		9B0F95C15B4BECBD8BBED6DE /* TransferCenterView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 448153996FA9A3A4DC5A90F0 /* TransferCenterView.swift */; };
@@ -118,8 +127,10 @@
 		AB83E3E9B1C1EAB906541694 /* UniSpaceDomain.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D0CF733F292C646448A74827 /* UniSpaceDomain.framework */; };
 		AC007143369DCAF64CBBA867 /* SystemPermissionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9BC99509AFF12E2820267B0 /* SystemPermissionService.swift */; };
 		AC77E41C713E1222C1E0A3C3 /* DiagnosticLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F8816EC1DF1013B5FE8B52A /* DiagnosticLog.swift */; };
+		AD907D1C5C7046175D429F79 /* FileProviderClipboardAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1CED9293D2E079B1CEA69F91 /* FileProviderClipboardAdapter.swift */; };
 		AF8E1B8A43F4A0FF8C4CBDB6 /* SeamlessWindowProxy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2AFC6A90264C9CB57CA0405D /* SeamlessWindowProxy.swift */; };
 		AFDC60F8666AE6E6C9B7DBE9 /* SettingsRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7F83A6EAED5A346AA0A2F73 /* SettingsRootView.swift */; };
+		B2C0FEA01988B7C72CBAED7D /* UniSpaceClipboardProviderShared.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = DF2D1996626052C12F220B62 /* UniSpaceClipboardProviderShared.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		B32FE24449F28948AA7AF7CE /* UniSpaceDomain.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D0CF733F292C646448A74827 /* UniSpaceDomain.framework */; };
 		B35E9D0EFFE55D974ED02498 /* FileTransferInfrastructureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A76232103B3515AEFE9323D /* FileTransferInfrastructureTests.swift */; };
 		B41063357019F965414B17AF /* Identifiers.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAE63ADE4DBD602BB708A723 /* Identifiers.swift */; };
@@ -147,10 +158,14 @@
 		CF753FA2BB7EB0FE40A588A6 /* UniSpaceInfrastructure.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A92FBB5C74B263098DBE15F3 /* UniSpaceInfrastructure.framework */; };
 		D0DF7E954936FBBA125139E0 /* FileTransferUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 908F95DFCA8BBA9EDB02324C /* FileTransferUITests.swift */; };
 		D26425BBE8F10BE685F1F55B /* ContinuityDestinationResolverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D5FD5232DF4539B67F27ABF /* ContinuityDestinationResolverTests.swift */; };
+		D3C77E24F4DD968A02E435CD /* UniSpaceClipboardProviderShared.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = DF2D1996626052C12F220B62 /* UniSpaceClipboardProviderShared.framework */; };
 		D5635524C7AA9BBB1F2B6859 /* ClipboardViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B08ECF73A3310CB81B011268 /* ClipboardViewModel.swift */; };
+		D6C46B4AB5494B18857AC011 /* ClipboardProviderModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 877E1AAFA181E1EBA8DD6AB4 /* ClipboardProviderModels.swift */; };
 		D700CC1082F44B9DF9B808C0 /* QUICIdentityProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE82F53A1249F27E6522D98E /* QUICIdentityProvider.swift */; };
 		D9549FED17A509843470BC7D /* SimulationOrchestrator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1929DAE384C26724BCAB42A8 /* SimulationOrchestrator.swift */; };
+		D9B253F4D1840BF85A88C831 /* LocalClipboardSelectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCB4537F83BB23A36A6C9512 /* LocalClipboardSelectionTests.swift */; };
 		DA5A6944BE80554D588E6E01 /* FileTransferProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70EA192112322E9C72645B20 /* FileTransferProtocol.swift */; };
+		DBBD3BCE66E5CD5F6CCFE894 /* LocalClipboardSelectionSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = FBD337E01B0AFDA09CE71CA8 /* LocalClipboardSelectionSource.swift */; };
 		DC36F9B28CBDBE776F422330 /* SystemDisplayCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0BEEFF85ADC6073F10990C58 /* SystemDisplayCatalog.swift */; };
 		DCAA07DC37059F14C56900DB /* SeamlessWindowProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 629B522E709B2BB43705FFC2 /* SeamlessWindowProtocol.swift */; };
 		DED47A3ABE3B26E0ED9BB1A1 /* PairingNetworkService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3705E48046B8D56DACF3CF21 /* PairingNetworkService.swift */; };
@@ -171,6 +186,7 @@
 		F903B1C9240B0D33456CB138 /* NetworkClipboardTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32B913D6ED478D7DC6D20CCE /* NetworkClipboardTransport.swift */; };
 		F927C0089DC72AEE62AA8608 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 161694A87BE723803EFBD6DC /* Assets.xcassets */; };
 		F92B301966AE215DCBC5CF6B /* ClipboardInfrastructureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C35B87B58745836A08E4AEA7 /* ClipboardInfrastructureTests.swift */; };
+		FA4F7BE96C01DDA07896655F /* ClipboardStreamProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 396EF7130426EC0FFDFA4394 /* ClipboardStreamProtocol.swift */; };
 		FA7737690CF6168BB2FDEAA8 /* ClipboardContracts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D8DF2D8E73D3C8DCBC0ACEF /* ClipboardContracts.swift */; };
 		FC9B7C9F3329248317F1CC22 /* UniSpaceDomain.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D0CF733F292C646448A74827 /* UniSpaceDomain.framework */; };
 /* End PBXBuildFile section */
@@ -183,6 +199,13 @@
 			remoteGlobalIDString = 19B467C699F71C22D5905471;
 			remoteInfo = UniSpaceSimulation;
 		};
+		0D49D44482B501601DDCB71E /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 2EC26464FE2AA63EC753A04A /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = CE262D1438A15ADFB0651FDB;
+			remoteInfo = UniSpaceClipboardProviderShared;
+		};
 		311E3F07959B4F37275A16EB /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 2EC26464FE2AA63EC753A04A /* Project object */;
@@ -190,12 +213,26 @@
 			remoteGlobalIDString = 98F94F97CA63B7C9A4AB027B;
 			remoteInfo = UniSpaceInfrastructure;
 		};
+		3274FE84BB716DFDC2AAFD2D /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 2EC26464FE2AA63EC753A04A /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = CE262D1438A15ADFB0651FDB;
+			remoteInfo = UniSpaceClipboardProviderShared;
+		};
 		39C1FB1D3C111373144E6460 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 2EC26464FE2AA63EC753A04A /* Project object */;
 			proxyType = 1;
 			remoteGlobalIDString = 90C6A6EF933D85536B71BFED;
 			remoteInfo = UniSpaceDomain;
+		};
+		493E8452533940BCF37C857F /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 2EC26464FE2AA63EC753A04A /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 30487C412BD9CD7E580B8A5F;
+			remoteInfo = UniSpaceFileProvider;
 		};
 		5A64D1FBE8C52A9606308169 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -259,6 +296,13 @@
 			proxyType = 1;
 			remoteGlobalIDString = 98F94F97CA63B7C9A4AB027B;
 			remoteInfo = UniSpaceInfrastructure;
+		};
+		A2F09ED6608C812BDE3DD8B4 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 2EC26464FE2AA63EC753A04A /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = CE262D1438A15ADFB0651FDB;
+			remoteInfo = UniSpaceClipboardProviderShared;
 		};
 		AE64139141A66CDD5FE78D93 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -341,6 +385,7 @@
 				E41FB56FC55B098152423FCC /* UniSpaceDomain.framework in Embed Frameworks */,
 				3D2F9446A49594963007BAA5 /* UniSpaceApplication.framework in Embed Frameworks */,
 				C79F084DA0355C3CE898BCAA /* UniSpaceInfrastructure.framework in Embed Frameworks */,
+				B2C0FEA01988B7C72CBAED7D /* UniSpaceClipboardProviderShared.framework in Embed Frameworks */,
 			);
 			name = "Embed Frameworks";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -368,6 +413,28 @@
 			name = "Embed Frameworks";
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		B6FC91A529FDBE85E5156D0B /* Embed Frameworks */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 10;
+			files = (
+				863205B186A5D8C6289DA795 /* UniSpaceClipboardProviderShared.framework in Embed Frameworks */,
+			);
+			name = "Embed Frameworks";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		D650F18792E6528031C66A9E /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				62AFAE0A022941A1E7F6158C /* UniSpaceFileProvider.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		EFA2C089E3680974C560888E /* Embed Frameworks */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
@@ -385,6 +452,7 @@
 
 /* Begin PBXFileReference section */
 		01A1425648D0C5F8712AC268 /* FrameCodec.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameCodec.swift; sourceTree = "<group>"; };
+		0438FC6F9C7F8B08645047BA /* ClipboardStreamCodec.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipboardStreamCodec.swift; sourceTree = "<group>"; };
 		0532F3407215F29850C4C079 /* DesignSystem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesignSystem.swift; sourceTree = "<group>"; };
 		05A832230695791A7DC5065D /* StateMachineCoverageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StateMachineCoverageTests.swift; sourceTree = "<group>"; };
 		05F047B5B71179922FCBE2DD /* ConnectionPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionPolicy.swift; sourceTree = "<group>"; };
@@ -401,6 +469,7 @@
 		17DE8D292ABDD97AE65260F4 /* PersistentSystemFileSourceProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistentSystemFileSourceProvider.swift; sourceTree = "<group>"; };
 		184432B7A6AD87798C281699 /* WorkspaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceView.swift; sourceTree = "<group>"; };
 		1929DAE384C26724BCAB42A8 /* SimulationOrchestrator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimulationOrchestrator.swift; sourceTree = "<group>"; };
+		1CED9293D2E079B1CEA69F91 /* FileProviderClipboardAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileProviderClipboardAdapter.swift; sourceTree = "<group>"; };
 		1E124D2AC0DF1143B1DFE882 /* TwoProcessSimulationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TwoProcessSimulationTests.swift; sourceTree = "<group>"; };
 		1EFF200775381B9BA7CE0515 /* InfrastructureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InfrastructureTests.swift; sourceTree = "<group>"; };
 		256563740902D273A25CC9B0 /* SimulatedE2ETests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimulatedE2ETests.swift; sourceTree = "<group>"; };
@@ -411,10 +480,13 @@
 		2CDEEC5C207ECEE78AE75A7C /* InputProgressReporter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InputProgressReporter.swift; sourceTree = "<group>"; };
 		2CF070D689C1AA7C27334F7E /* WorkspaceLifecycle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceLifecycle.swift; sourceTree = "<group>"; };
 		32B913D6ED478D7DC6D20CCE /* NetworkClipboardTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NetworkClipboardTransport.swift; sourceTree = "<group>"; };
+		35494408D8AE45C073E2B2D6 /* ClipboardStreamTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipboardStreamTests.swift; sourceTree = "<group>"; };
 		35A90BE2C791C3DCDC9D0E4B /* FileTransferPortableInteropTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileTransferPortableInteropTests.swift; sourceTree = "<group>"; };
 		3705E48046B8D56DACF3CF21 /* PairingNetworkService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingNetworkService.swift; sourceTree = "<group>"; };
 		370EF07C68A5E942E13CC936 /* FilePasteboardFailureReportingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilePasteboardFailureReportingTests.swift; sourceTree = "<group>"; };
+		380771ED9868DD227AD28128 /* ClipboardStreamCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipboardStreamCoordinator.swift; sourceTree = "<group>"; };
 		38E342977FC8695FF8EE7EF6 /* ContinuityWorkspaceConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContinuityWorkspaceConfiguration.swift; sourceTree = "<group>"; };
+		396EF7130426EC0FFDFA4394 /* ClipboardStreamProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipboardStreamProtocol.swift; sourceTree = "<group>"; };
 		3CB4B943AD906BC099B164E8 /* AuthenticatedPointerTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthenticatedPointerTransport.swift; sourceTree = "<group>"; };
 		433D591FE5C6EA589EA494E5 /* ClipboardFeatureBaselineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipboardFeatureBaselineTests.swift; sourceTree = "<group>"; };
 		448153996FA9A3A4DC5A90F0 /* TransferCenterView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransferCenterView.swift; sourceTree = "<group>"; };
@@ -433,6 +505,7 @@
 		62058B91AC6DF51CB04363DB /* SimulationAdapters.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimulationAdapters.swift; sourceTree = "<group>"; };
 		629B522E709B2BB43705FFC2 /* SeamlessWindowProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SeamlessWindowProtocol.swift; sourceTree = "<group>"; };
 		63C1907F88FD14FAAC86A99A /* SetupFlowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SetupFlowView.swift; sourceTree = "<group>"; };
+		649EE7DF1EDA27EF4CEF873D /* ClipboardStreamSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipboardStreamSource.swift; sourceTree = "<group>"; };
 		6546C790629F2520FF8A74A1 /* KeychainTrustStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainTrustStore.swift; sourceTree = "<group>"; };
 		699D327BAE79CB2ADCC575B6 /* SystemClipboardService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemClipboardService.swift; sourceTree = "<group>"; };
 		6A031EE96F2A7B2DA05629C9 /* FinderFileContinuityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FinderFileContinuityTests.swift; sourceTree = "<group>"; };
@@ -446,8 +519,10 @@
 		78EF074FC7F6C76A69345A71 /* ContinuityView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContinuityView.swift; sourceTree = "<group>"; };
 		7F7715DBADB331DC400DEB3E /* FileTransferContracts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileTransferContracts.swift; sourceTree = "<group>"; };
 		81EBE0A4A69830EAB49DE7CF /* SeamlessWindowConnectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SeamlessWindowConnectionTests.swift; sourceTree = "<group>"; };
+		877E1AAFA181E1EBA8DD6AB4 /* ClipboardProviderModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipboardProviderModels.swift; sourceTree = "<group>"; };
 		895B8982AB6DAE8ACF98E4F0 /* ControlSessionCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlSessionCoordinator.swift; sourceTree = "<group>"; };
 		8A9A0F31519F8DAC02DA201F /* SystemFileSourceProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemFileSourceProvider.swift; sourceTree = "<group>"; };
+		8C5FBB7F0B33F3B66EC6C5DC /* ClipboardFileProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipboardFileProvider.swift; sourceTree = "<group>"; };
 		8C83C4E50915106067B87D2A /* FinderFileContinuityCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FinderFileContinuityCoordinatorTests.swift; sourceTree = "<group>"; };
 		8D28B7447A19E823D3F993A1 /* ClipboardCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipboardCoordinator.swift; sourceTree = "<group>"; };
 		904734B26F5ED02D2FFA4505 /* UniSpaceApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UniSpaceApp.swift; sourceTree = "<group>"; };
@@ -458,6 +533,7 @@
 		94B269E19BAB68A2BD698AB3 /* SeamlessWindowViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SeamlessWindowViewModel.swift; sourceTree = "<group>"; };
 		955E18CB8A8476625C1772C6 /* WorkspaceReplicaMerger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceReplicaMerger.swift; sourceTree = "<group>"; };
 		964C8D571349C707C1CDA91C /* StreamingPersistentFileSourceProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StreamingPersistentFileSourceProvider.swift; sourceTree = "<group>"; };
+		96A382412D4E0DFF9FA8D693 /* UniSpaceFileProvider.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = UniSpaceFileProvider.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		9714DC0D2D51439743192501 /* PersistentFileSourceProviderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistentFileSourceProviderTests.swift; sourceTree = "<group>"; };
 		99336AF6F5B53F63D7F3024F /* FileTransferDestinationResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileTransferDestinationResolver.swift; sourceTree = "<group>"; };
 		9B6E8B1FA2B7DDB5F10F7EDE /* SystemLoginItemController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemLoginItemController.swift; sourceTree = "<group>"; };
@@ -484,6 +560,7 @@
 		B8E5A6E1D4BB67A7DC9361AD /* EdgeRouter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EdgeRouter.swift; sourceTree = "<group>"; };
 		B8F8E166390F8A4DEF9FB54B /* ControlLatencyActivity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlLatencyActivity.swift; sourceTree = "<group>"; };
 		BAE6F2A5F3EBA813F7D0C9A5 /* CheckpointingTransferStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CheckpointingTransferStore.swift; sourceTree = "<group>"; };
+		BCB4537F83BB23A36A6C9512 /* LocalClipboardSelectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalClipboardSelectionTests.swift; sourceTree = "<group>"; };
 		BE82F53A1249F27E6522D98E /* QUICIdentityProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QUICIdentityProvider.swift; sourceTree = "<group>"; };
 		BF70CBE8D8890E0B9C31122B /* CoordinatorStateCoverageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoordinatorStateCoverageTests.swift; sourceTree = "<group>"; };
 		C1884A9135A3257510B0A8F0 /* DevicesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DevicesView.swift; sourceTree = "<group>"; };
@@ -503,6 +580,7 @@
 		D0CF733F292C646448A74827 /* UniSpaceDomain.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = UniSpaceDomain.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		DB05DA13BCA065FC826A2B98 /* UniSpaceAppTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = UniSpaceAppTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		DEB8F1CADC2034E5BCEB1D9D /* InputPipelineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InputPipelineTests.swift; sourceTree = "<group>"; };
+		DF2D1996626052C12F220B62 /* UniSpaceClipboardProviderShared.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = UniSpaceClipboardProviderShared.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		E3756BDF87509997810654A1 /* ClipboardApplicationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipboardApplicationTests.swift; sourceTree = "<group>"; };
 		E5BB0E1195B12A9CCB81CDE1 /* UniSpaceUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UniSpaceUITests.swift; sourceTree = "<group>"; };
 		E9A7C3F7869A4784BF51181A /* QoSFileTransferTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QoSFileTransferTransport.swift; sourceTree = "<group>"; };
@@ -512,6 +590,7 @@
 		F49A9EC3759503CB24FD0B72 /* DomainModelsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DomainModelsTests.swift; sourceTree = "<group>"; };
 		F9C5F32518159BD61F4A0006 /* SandboxTransferStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SandboxTransferStore.swift; sourceTree = "<group>"; };
 		FAD25BEF07E35D0FEC867A03 /* ControlProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlProtocol.swift; sourceTree = "<group>"; };
+		FBD337E01B0AFDA09CE71CA8 /* LocalClipboardSelectionSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalClipboardSelectionSource.swift; sourceTree = "<group>"; };
 		FD4E7B2B948E0A2DD50FE7C2 /* AppModel+Continuity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AppModel+Continuity.swift"; sourceTree = "<group>"; };
 		FDEBD8BFD53ADB2BCC9DFC33 /* UniSpaceInfrastructureTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = UniSpaceInfrastructureTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		FF28332623556C22500F3C96 /* ControlResilienceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlResilienceTests.swift; sourceTree = "<group>"; };
@@ -553,6 +632,15 @@
 				B32FE24449F28948AA7AF7CE /* UniSpaceDomain.framework in Frameworks */,
 				3012214B9514F5E889FA111E /* UniSpaceApplication.framework in Frameworks */,
 				2C72B276F01CB06589C3AE83 /* UniSpaceInfrastructure.framework in Frameworks */,
+				226EF79ED0B50E3504DC4EDD /* UniSpaceClipboardProviderShared.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		7304273DE9D45AC148458FA5 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				D3C77E24F4DD968A02E435CD /* UniSpaceClipboardProviderShared.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -572,6 +660,7 @@
 			files = (
 				BF04F103BA0FD0FF02B87871 /* UniSpaceDomain.framework in Frameworks */,
 				047D4147DE948C6D2BB38711 /* UniSpaceApplication.framework in Frameworks */,
+				7944915921BDC284B8284A58 /* UniSpaceClipboardProviderShared.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -613,6 +702,7 @@
 			children = (
 				73D75018570BCFF3ADAA8FFA /* ApplicationTests.swift */,
 				E3756BDF87509997810654A1 /* ClipboardApplicationTests.swift */,
+				35494408D8AE45C073E2B2D6 /* ClipboardStreamTests.swift */,
 				52503476DF8C30922A762829 /* ConnectionPolicyTests.swift */,
 				0D5FD5232DF4539B67F27ABF /* ContinuityDestinationResolverTests.swift */,
 				FF28332623556C22500F3C96 /* ControlResilienceTests.swift */,
@@ -682,7 +772,9 @@
 			children = (
 				18DF08C71C534829C7B5D6B5 /* App */,
 				B1166FFF1B2E25FCDC947C80 /* Application */,
+				959275145736518157D9CB4E /* ClipboardProviderShared */,
 				939733DC6D91C81251400CBF /* Domain */,
+				99F5AB13A478C6F4A4D2BE08 /* FileProvider */,
 				9E66C956860CBBB2058449B3 /* Infrastructure */,
 			);
 			path = Sources;
@@ -727,6 +819,7 @@
 			isa = PBXGroup;
 			children = (
 				A35CD7D5BF4D7C94C7427086 /* ClipboardProtocol.swift */,
+				396EF7130426EC0FFDFA4394 /* ClipboardStreamProtocol.swift */,
 				55C72D45E1BA1AC01DA60260 /* ControllerStateMachine.swift */,
 				FAD25BEF07E35D0FEC867A03 /* ControlProtocol.swift */,
 				70EA192112322E9C72645B20 /* FileTransferProtocol.swift */,
@@ -735,6 +828,22 @@
 				0D53BFBE80B81BD15ADE9567 /* WorkspaceModels.swift */,
 			);
 			path = Domain;
+			sourceTree = "<group>";
+		};
+		959275145736518157D9CB4E /* ClipboardProviderShared */ = {
+			isa = PBXGroup;
+			children = (
+				877E1AAFA181E1EBA8DD6AB4 /* ClipboardProviderModels.swift */,
+			);
+			path = ClipboardProviderShared;
+			sourceTree = "<group>";
+		};
+		99F5AB13A478C6F4A4D2BE08 /* FileProvider */ = {
+			isa = PBXGroup;
+			children = (
+				8C5FBB7F0B33F3B66EC6C5DC /* ClipboardFileProvider.swift */,
+			);
+			path = FileProvider;
 			sourceTree = "<group>";
 		};
 		9A371D04D8AE4C32DA671CAB /* InfrastructureTests */ = {
@@ -746,6 +855,7 @@
 				6A031EE96F2A7B2DA05629C9 /* FinderFileContinuityTests.swift */,
 				1EFF200775381B9BA7CE0515 /* InfrastructureTests.swift */,
 				DEB8F1CADC2034E5BCEB1D9D /* InputPipelineTests.swift */,
+				BCB4537F83BB23A36A6C9512 /* LocalClipboardSelectionTests.swift */,
 				C19AA84D1BFD635720BB70B7 /* NativeInputSmokeTests.swift */,
 				9714DC0D2D51439743192501 /* PersistentFileSourceProviderTests.swift */,
 				81EBE0A4A69830EAB49DE7CF /* SeamlessWindowConnectionTests.swift */,
@@ -764,8 +874,10 @@
 				BAE6F2A5F3EBA813F7D0C9A5 /* CheckpointingTransferStore.swift */,
 				4DC7CDECCF5F3E49CB27E553 /* ConnectionRetrySchedule.swift */,
 				6F8816EC1DF1013B5FE8B52A /* DiagnosticLog.swift */,
+				1CED9293D2E079B1CEA69F91 /* FileProviderClipboardAdapter.swift */,
 				6BD24036F75164EC8ED3CE84 /* FileWorkspaceStore.swift */,
 				6546C790629F2520FF8A74A1 /* KeychainTrustStore.swift */,
+				FBD337E01B0AFDA09CE71CA8 /* LocalClipboardSelectionSource.swift */,
 				32B913D6ED478D7DC6D20CCE /* NetworkClipboardTransport.swift */,
 				5E6AD408755764E44722C89B /* NetworkFileTransferTransport.swift */,
 				602F8819EF4D4A147D279865 /* NetworkPeerTransport.swift */,
@@ -809,6 +921,9 @@
 				0D8DF2D8E73D3C8DCBC0ACEF /* ClipboardContracts.swift */,
 				8D28B7447A19E823D3F993A1 /* ClipboardCoordinator.swift */,
 				AC72E0E969F746A48E24DD19 /* ClipboardFrameCodec.swift */,
+				0438FC6F9C7F8B08645047BA /* ClipboardStreamCodec.swift */,
+				380771ED9868DD227AD28128 /* ClipboardStreamCoordinator.swift */,
+				649EE7DF1EDA27EF4CEF873D /* ClipboardStreamSource.swift */,
 				CAC323F46C734473E86D5564 /* ClipboardSyncEngine.swift */,
 				05F047B5B71179922FCBE2DD /* ConnectionPolicy.swift */,
 				ACED02FBB2EE977618DDECC0 /* ContinuityDestinationResolver.swift */,
@@ -850,8 +965,10 @@
 				CD69866EFD7AE9229BB70567 /* UniSpaceApplication.framework */,
 				A66CF80D95080FEE80B09369 /* UniSpaceApplicationTests.xctest */,
 				DB05DA13BCA065FC826A2B98 /* UniSpaceAppTests.xctest */,
+				DF2D1996626052C12F220B62 /* UniSpaceClipboardProviderShared.framework */,
 				D0CF733F292C646448A74827 /* UniSpaceDomain.framework */,
 				AD45CA2E1EFEB55F7EAA255E /* UniSpaceDomainTests.xctest */,
+				96A382412D4E0DFF9FA8D693 /* UniSpaceFileProvider.appex */,
 				A92FBB5C74B263098DBE15F3 /* UniSpaceInfrastructure.framework */,
 				FDEBD8BFD53ADB2BCC9DFC33 /* UniSpaceInfrastructureTests.xctest */,
 				58523796757EADD73F6D2756 /* UniSpaceSimulation */,
@@ -926,6 +1043,26 @@
 			productReference = 58523796757EADD73F6D2756 /* UniSpaceSimulation */;
 			productType = "com.apple.product-type.tool";
 		};
+		30487C412BD9CD7E580B8A5F /* UniSpaceFileProvider */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = E351BEE845099507654EDE96 /* Build configuration list for PBXNativeTarget "UniSpaceFileProvider" */;
+			buildPhases = (
+				D67FD5BAFB1059492927ADFD /* Sources */,
+				7304273DE9D45AC148458FA5 /* Frameworks */,
+				B6FC91A529FDBE85E5156D0B /* Embed Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				C7C01FAA4AC7121A9618EC4D /* PBXTargetDependency */,
+			);
+			name = UniSpaceFileProvider;
+			packageProductDependencies = (
+			);
+			productName = UniSpaceFileProvider;
+			productReference = 96A382412D4E0DFF9FA8D693 /* UniSpaceFileProvider.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 		4404EE2F0EF89BE0132AA1DC /* UniSpaceDomainTests */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 303E1EC7FE20ED7CE9A4D050 /* Build configuration list for PBXNativeTarget "UniSpaceDomainTests" */;
@@ -953,6 +1090,7 @@
 				8561C9A6AE7BD403FE02D603 /* Sources */,
 				4F43E27B4DC22F664CAAAB29 /* Resources */,
 				456475C357DD51561857DD30 /* Frameworks */,
+				D650F18792E6528031C66A9E /* Embed Foundation Extensions */,
 				4C7BCFA09C487B08A37214AB /* Embed Frameworks */,
 			);
 			buildRules = (
@@ -961,6 +1099,8 @@
 				EDFEBFA93535A91CCC3C75D1 /* PBXTargetDependency */,
 				A08C30795699B16642B9AA62 /* PBXTargetDependency */,
 				0F23059947364932875B30BA /* PBXTargetDependency */,
+				047E5A5DF8448D6E88935663 /* PBXTargetDependency */,
+				9F2FD6DF589DF30817F1AA4D /* PBXTargetDependency */,
 			);
 			name = UniSpace;
 			packageProductDependencies = (
@@ -1059,12 +1199,30 @@
 			dependencies = (
 				FF48A766078031FDF4646F90 /* PBXTargetDependency */,
 				992AF535AA93EB8A017F5B45 /* PBXTargetDependency */,
+				351B575A78FD52B85CCDE0EF /* PBXTargetDependency */,
 			);
 			name = UniSpaceInfrastructure;
 			packageProductDependencies = (
 			);
 			productName = UniSpaceInfrastructure;
 			productReference = A92FBB5C74B263098DBE15F3 /* UniSpaceInfrastructure.framework */;
+			productType = "com.apple.product-type.framework";
+		};
+		CE262D1438A15ADFB0651FDB /* UniSpaceClipboardProviderShared */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 5708383C9AD598B2F10AF42F /* Build configuration list for PBXNativeTarget "UniSpaceClipboardProviderShared" */;
+			buildPhases = (
+				D7BF7A0B44B56E10FB177213 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = UniSpaceClipboardProviderShared;
+			packageProductDependencies = (
+			);
+			productName = UniSpaceClipboardProviderShared;
+			productReference = DF2D1996626052C12F220B62 /* UniSpaceClipboardProviderShared.framework */;
 			productType = "com.apple.product-type.framework";
 		};
 /* End PBXNativeTarget section */
@@ -1085,6 +1243,10 @@
 						ProvisioningStyle = Automatic;
 					};
 					19B467C699F71C22D5905471 = {
+						DevelopmentTeam = Y69F3DRK44;
+						ProvisioningStyle = Automatic;
+					};
+					30487C412BD9CD7E580B8A5F = {
 						DevelopmentTeam = Y69F3DRK44;
 						ProvisioningStyle = Automatic;
 					};
@@ -1117,6 +1279,10 @@
 						DevelopmentTeam = Y69F3DRK44;
 						ProvisioningStyle = Automatic;
 					};
+					CE262D1438A15ADFB0651FDB = {
+						DevelopmentTeam = Y69F3DRK44;
+						ProvisioningStyle = Automatic;
+					};
 				};
 			};
 			buildConfigurationList = 6587BD4D8934CCB152EBB0E3 /* Build configuration list for PBXProject "UniSpace" */;
@@ -1143,6 +1309,8 @@
 				039350D04D5DC5574F78FB7F /* UniSpaceInfrastructureTests */,
 				7688B4C3E33D623CC3F88C8F /* UniSpaceAppTests */,
 				969D7FDA0C4BE31A20EA278E /* UniSpaceUITests */,
+				CE262D1438A15ADFB0651FDB /* UniSpaceClipboardProviderShared */,
+				30487C412BD9CD7E580B8A5F /* UniSpaceFileProvider */,
 			);
 		};
 /* End PBXProject section */
@@ -1180,6 +1348,7 @@
 				63F9954BAE0212DB110EDDFE /* FinderFileContinuityTests.swift in Sources */,
 				01F8B032D536A77F3C24402A /* InfrastructureTests.swift in Sources */,
 				3572D06C3B227654B07E788E /* InputPipelineTests.swift in Sources */,
+				D9B253F4D1840BF85A88C831 /* LocalClipboardSelectionTests.swift in Sources */,
 				F81D74590B1FD973A6B952EA /* NativeInputSmokeTests.swift in Sources */,
 				B797E5EB0DB57488F70D88B0 /* PersistentFileSourceProviderTests.swift in Sources */,
 				4F782D857B0027B6E31F13D2 /* SeamlessWindowConnectionTests.swift in Sources */,
@@ -1194,6 +1363,7 @@
 			files = (
 				0562F260B20737B8FCDFFF9C /* ApplicationTests.swift in Sources */,
 				CDFD02CFC768992F779CE5FB /* ClipboardApplicationTests.swift in Sources */,
+				48EF2FD4E21B237C0A0CA1DB /* ClipboardStreamTests.swift in Sources */,
 				47A3402AFE500FBF2D42188A /* ConnectionPolicyTests.swift in Sources */,
 				D26425BBE8F10BE685F1F55B /* ContinuityDestinationResolverTests.swift in Sources */,
 				B74BCDF79DEC23C2D3CF24E6 /* ControlResilienceTests.swift in Sources */,
@@ -1215,6 +1385,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				0F4A48BA1E5ED7EF257988EE /* ClipboardProtocol.swift in Sources */,
+				FA4F7BE96C01DDA07896655F /* ClipboardStreamProtocol.swift in Sources */,
 				6B79E31F3F32675B4F869816 /* ControlProtocol.swift in Sources */,
 				CC24AF606D59D87DDAA6E1AD /* ControllerStateMachine.swift in Sources */,
 				DA5A6944BE80554D588E6E01 /* FileTransferProtocol.swift in Sources */,
@@ -1231,6 +1402,9 @@
 				FA7737690CF6168BB2FDEAA8 /* ClipboardContracts.swift in Sources */,
 				52FBED6818BA3CABD2037A7F /* ClipboardCoordinator.swift in Sources */,
 				0062445B03508AAB39A13C1E /* ClipboardFrameCodec.swift in Sources */,
+				56FFBB1A38FD1F1F99F99D44 /* ClipboardStreamCodec.swift in Sources */,
+				12E3194015B58E97DA7F570A /* ClipboardStreamCoordinator.swift in Sources */,
+				94B4B1EA4DF9EDE96AD7F301 /* ClipboardStreamSource.swift in Sources */,
 				11C75A2AAACF14ABBBCB6DE8 /* ClipboardSyncEngine.swift in Sources */,
 				3685E4EB870AE8B0A1C532FF /* ConnectionPolicy.swift in Sources */,
 				9AF61C5B35E5F987D428155A /* ContinuityDestinationResolver.swift in Sources */,
@@ -1310,8 +1484,10 @@
 				4B9377363BC8B881C0979AEC /* CheckpointingTransferStore.swift in Sources */,
 				3A880F050C6A00143E1A1765 /* ConnectionRetrySchedule.swift in Sources */,
 				AC77E41C713E1222C1E0A3C3 /* DiagnosticLog.swift in Sources */,
+				AD907D1C5C7046175D429F79 /* FileProviderClipboardAdapter.swift in Sources */,
 				8E8D0D149CC8932E23A6D7DC /* FileWorkspaceStore.swift in Sources */,
 				350D80ED00B86BF2137208A8 /* KeychainTrustStore.swift in Sources */,
+				DBBD3BCE66E5CD5F6CCFE894 /* LocalClipboardSelectionSource.swift in Sources */,
 				F903B1C9240B0D33456CB138 /* NetworkClipboardTransport.swift in Sources */,
 				57EE3A4DC4E1CAA006423E32 /* NetworkFileTransferTransport.swift in Sources */,
 				886D77A812D77B7AD388069E /* NetworkPeerTransport.swift in Sources */,
@@ -1364,9 +1540,30 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		D67FD5BAFB1059492927ADFD /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				61FCC01F57B69BCE6F728037 /* ClipboardFileProvider.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		D7BF7A0B44B56E10FB177213 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				D6C46B4AB5494B18857AC011 /* ClipboardProviderModels.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
+		047E5A5DF8448D6E88935663 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = CE262D1438A15ADFB0651FDB /* UniSpaceClipboardProviderShared */;
+			targetProxy = A2F09ED6608C812BDE3DD8B4 /* PBXContainerItemProxy */;
+		};
 		0F23059947364932875B30BA /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = 98F94F97CA63B7C9A4AB027B /* UniSpaceInfrastructure */;
@@ -1386,6 +1583,11 @@
 			isa = PBXTargetDependency;
 			target = 90C6A6EF933D85536B71BFED /* UniSpaceDomain */;
 			targetProxy = 846A141D3A208596588C5184 /* PBXContainerItemProxy */;
+		};
+		351B575A78FD52B85CCDE0EF /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = CE262D1438A15ADFB0651FDB /* UniSpaceClipboardProviderShared */;
+			targetProxy = 3274FE84BB716DFDC2AAFD2D /* PBXContainerItemProxy */;
 		};
 		3FD9E853CA73130AB1D842D9 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
@@ -1427,6 +1629,11 @@
 			target = 1553C035D72A1A2B1C2CB0D5 /* UniSpaceApplication */;
 			targetProxy = 8A19A05BF8EA7BD054529529 /* PBXContainerItemProxy */;
 		};
+		9F2FD6DF589DF30817F1AA4D /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 30487C412BD9CD7E580B8A5F /* UniSpaceFileProvider */;
+			targetProxy = 493E8452533940BCF37C857F /* PBXContainerItemProxy */;
+		};
 		A08C30795699B16642B9AA62 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = 1553C035D72A1A2B1C2CB0D5 /* UniSpaceApplication */;
@@ -1451,6 +1658,11 @@
 			isa = PBXTargetDependency;
 			target = 90C6A6EF933D85536B71BFED /* UniSpaceDomain */;
 			targetProxy = 971E67EC20A9FB069F5CCA53 /* PBXContainerItemProxy */;
+		};
+		C7C01FAA4AC7121A9618EC4D /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = CE262D1438A15ADFB0651FDB /* UniSpaceClipboardProviderShared */;
+			targetProxy = 0D49D44482B501601DDCB71E /* PBXContainerItemProxy */;
 		};
 		EDFEBFA93535A91CCC3C75D1 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
@@ -1484,6 +1696,28 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.layatai.unispace;
 				PRODUCT_NAME = UniSpace;
 				SDKROOT = macosx;
+			};
+			name = Debug;
+		};
+		06AC196A382F7762DD689ADB /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "";
+				COMBINE_HIDPI_IMAGES = YES;
+				DEFINES_MODULE = YES;
+				DYLIB_COMPATIBILITY_VERSION = 1;
+				DYLIB_CURRENT_VERSION = 1;
+				DYLIB_INSTALL_NAME_BASE = "@rpath";
+				GENERATE_INFOPLIST_FILE = YES;
+				INSTALL_PATH = "$(LOCAL_LIBRARY_DIR)/Frameworks";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "com.layatai.unispace.clipboard-shared";
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+				VERSIONING_SYSTEM = "apple-generic";
 			};
 			name = Debug;
 		};
@@ -1827,6 +2061,24 @@
 			};
 			name = Debug;
 		};
+		B93DC74AB42B07032D32BAAB /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = Resources/FileProvider.entitlements;
+				COMBINE_HIDPI_IMAGES = YES;
+				INFOPLIST_FILE = "Resources/FileProvider-Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@executable_path/../../../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.layatai.unispace.fileprovider;
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+			};
+			name = Debug;
+		};
 		C29CD7443BA602037D118E23 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -1864,6 +2116,28 @@
 			};
 			name = Debug;
 		};
+		CCBDB1EE54654543F2B2D0D5 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "";
+				COMBINE_HIDPI_IMAGES = YES;
+				DEFINES_MODULE = YES;
+				DYLIB_COMPATIBILITY_VERSION = 1;
+				DYLIB_CURRENT_VERSION = 1;
+				DYLIB_INSTALL_NAME_BASE = "@rpath";
+				GENERATE_INFOPLIST_FILE = YES;
+				INSTALL_PATH = "$(LOCAL_LIBRARY_DIR)/Frameworks";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "com.layatai.unispace.clipboard-shared";
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+				VERSIONING_SYSTEM = "apple-generic";
+			};
+			name = Release;
+		};
 		E119AB5D1D71AFF200A2C3F7 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -1875,6 +2149,24 @@
 				SDKROOT = macosx;
 			};
 			name = Debug;
+		};
+		ED83A0D22BFB6BBB4E2096CB /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = Resources/FileProvider.entitlements;
+				COMBINE_HIDPI_IMAGES = YES;
+				INFOPLIST_FILE = "Resources/FileProvider-Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@executable_path/../../../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.layatai.unispace.fileprovider;
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+			};
+			name = Release;
 		};
 		FD99746A49F860759262B193 /* Release */ = {
 			isa = XCBuildConfiguration;
@@ -1983,6 +2275,15 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;
 		};
+		5708383C9AD598B2F10AF42F /* Build configuration list for PBXNativeTarget "UniSpaceClipboardProviderShared" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				06AC196A382F7762DD689ADB /* Debug */,
+				CCBDB1EE54654543F2B2D0D5 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
 		6587BD4D8934CCB152EBB0E3 /* Build configuration list for PBXProject "UniSpace" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
@@ -2015,6 +2316,15 @@
 			buildConfigurations = (
 				02D4C5AE8CCF87398E50B45D /* Debug */,
 				6D67E8A60897EC6F45747A35 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		E351BEE845099507654EDE96 /* Build configuration list for PBXNativeTarget "UniSpaceFileProvider" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B93DC74AB42B07032D32BAAB /* Debug */,
+				ED83A0D22BFB6BBB4E2096CB /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;

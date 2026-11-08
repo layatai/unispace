@@ -2,7 +2,7 @@ name: UniSpace
 options:
   minimumXcodeGenVersion: 2.46.0
   deploymentTarget:
-    macOS: "14.0"
+    macOS: '14.0'
   createIntermediateGroups: true
 configs:
   Debug: debug
@@ -12,9 +12,9 @@ configFiles:
   Release: Config/Base.xcconfig
 settings:
   base:
-    SWIFT_VERSION: "6.0"
+    SWIFT_VERSION: '6.0'
     SWIFT_STRICT_CONCURRENCY: complete
-    MACOSX_DEPLOYMENT_TARGET: "14.0"
+    MACOSX_DEPLOYMENT_TARGET: '14.0'
     GENERATE_INFOPLIST_FILE: false
 targets:
   UniSpaceDomain:
@@ -31,7 +31,7 @@ targets:
     platform: macOS
     sources: Sources/Application
     dependencies:
-      - target: UniSpaceDomain
+    - target: UniSpaceDomain
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.layatai.unispace.application
@@ -42,8 +42,9 @@ targets:
     platform: macOS
     sources: Sources/Infrastructure
     dependencies:
-      - target: UniSpaceDomain
-      - target: UniSpaceApplication
+    - target: UniSpaceDomain
+    - target: UniSpaceApplication
+    - target: UniSpaceClipboardProviderShared
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.layatai.unispace.infrastructure
@@ -54,21 +55,21 @@ targets:
     platform: macOS
     sources: Tools/UniSpaceSimulation
     dependencies:
-      - target: UniSpaceDomain
-      - target: UniSpaceApplication
-      - target: UniSpaceInfrastructure
+    - target: UniSpaceDomain
+    - target: UniSpaceApplication
+    - target: UniSpaceInfrastructure
     settings:
       base:
         PRODUCT_NAME: UniSpaceSimulation
         PRODUCT_BUNDLE_IDENTIFIER: com.layatai.unispace.simulation
         GENERATE_INFOPLIST_FILE: true
-        LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path"
+        LD_RUNPATH_SEARCH_PATHS: $(inherited) @executable_path
   UniSpace:
     type: application
     platform: macOS
     sources:
-      - Sources/App
-      - Resources/Assets.xcassets
+    - Sources/App
+    - Resources/Assets.xcassets
     info:
       path: Resources/Info.plist
       properties:
@@ -77,15 +78,17 @@ targets:
         LSApplicationCategoryType: public.app-category.utilities
         LSUIElement: false
         NSBonjourServices:
-          - _unispace._tcp
-          - _unispace._udp
-          - _unispace-rt._udp
-          - _unispace-xfer._tcp
-          - _unispace-clip._tcp
-          - _unispace-pair._tcp
-          - _unispace-win._tcp
-          - _unispace-vid._tcp
-        NSLocalNetworkUsageDescription: UniSpace discovers and connects to trusted Macs, Linux PCs, and Windows PCs so you can control them and share clipboard data and files over your private network.
+        - _unispace._tcp
+        - _unispace._udp
+        - _unispace-rt._udp
+        - _unispace-xfer._tcp
+        - _unispace-clip._tcp
+        - _unispace-pair._tcp
+        - _unispace-win._tcp
+        - _unispace-vid._tcp
+        NSLocalNetworkUsageDescription: UniSpace discovers and connects to trusted
+          Macs, Linux PCs, and Windows PCs so you can control them and share clipboard
+          data and files over your private network.
     entitlements:
       path: Resources/UniSpace.entitlements
       properties:
@@ -93,10 +96,16 @@ targets:
         com.apple.security.network.client: true
         com.apple.security.network.server: true
         com.apple.security.files.user-selected.read-write: true
+        com.apple.security.application-groups:
+        - Y69F3DRK44.com.layatai.unispace.clipboard
+        com.apple.application-identifier: Y69F3DRK44.com.layatai.unispace
     dependencies:
-      - target: UniSpaceDomain
-      - target: UniSpaceApplication
-      - target: UniSpaceInfrastructure
+    - target: UniSpaceDomain
+    - target: UniSpaceApplication
+    - target: UniSpaceInfrastructure
+    - target: UniSpaceClipboardProviderShared
+    - target: UniSpaceFileProvider
+      embed: true
     settings:
       base:
         PRODUCT_NAME: UniSpace
@@ -107,7 +116,7 @@ targets:
     platform: macOS
     sources: Tests/DomainTests
     dependencies:
-      - target: UniSpaceDomain
+    - target: UniSpaceDomain
     settings:
       base:
         GENERATE_INFOPLIST_FILE: true
@@ -116,8 +125,8 @@ targets:
     platform: macOS
     sources: Tests/ApplicationTests
     dependencies:
-      - target: UniSpaceDomain
-      - target: UniSpaceApplication
+    - target: UniSpaceDomain
+    - target: UniSpaceApplication
     settings:
       base:
         GENERATE_INFOPLIST_FILE: true
@@ -126,10 +135,10 @@ targets:
     platform: macOS
     sources: Tests/InfrastructureTests
     dependencies:
-      - target: UniSpaceDomain
-      - target: UniSpaceApplication
-      - target: UniSpaceInfrastructure
-      - target: UniSpaceSimulation
+    - target: UniSpaceDomain
+    - target: UniSpaceApplication
+    - target: UniSpaceInfrastructure
+    - target: UniSpaceSimulation
     settings:
       base:
         GENERATE_INFOPLIST_FILE: true
@@ -137,14 +146,14 @@ targets:
     type: bundle.unit-test
     platform: macOS
     sources:
-      - Tests/AppTests
-      - path: Sources/App
-        excludes:
-          - UniSpaceApp.swift
+    - Tests/AppTests
+    - path: Sources/App
+      excludes:
+      - UniSpaceApp.swift
     dependencies:
-      - target: UniSpaceDomain
-      - target: UniSpaceApplication
-      - target: UniSpaceInfrastructure
+    - target: UniSpaceDomain
+    - target: UniSpaceApplication
+    - target: UniSpaceInfrastructure
     settings:
       base:
         GENERATE_INFOPLIST_FILE: true
@@ -153,29 +162,73 @@ targets:
     platform: macOS
     sources: UITests
     dependencies:
-      - target: UniSpace
+    - target: UniSpace
     settings:
       base:
         GENERATE_INFOPLIST_FILE: true
+  UniSpaceClipboardProviderShared:
+    type: framework
+    platform: macOS
+    sources: Sources/ClipboardProviderShared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.layatai.unispace.clipboard-shared
+        GENERATE_INFOPLIST_FILE: true
+        SKIP_INSTALL: true
+  UniSpaceFileProvider:
+    type: app-extension
+    platform: macOS
+    sources: Sources/FileProvider
+    dependencies:
+    - target: UniSpaceClipboardProviderShared
+      embed: true
+    info:
+      path: Resources/FileProvider-Info.plist
+      properties:
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.fileprovider-nonui
+          NSExtensionPrincipalClass: UniSpaceClipboardFileProvider
+          NSExtensionFileProviderDocumentGroup: Y69F3DRK44.com.layatai.unispace.clipboard
+          NSExtensionFileProviderSupportsEnumeration: true
+    entitlements:
+      path: Resources/FileProvider.entitlements
+      properties:
+        com.apple.security.app-sandbox: true
+        com.apple.security.application-groups:
+        - Y69F3DRK44.com.layatai.unispace.clipboard
+        com.apple.application-identifier: Y69F3DRK44.com.layatai.unispace.fileprovider
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.layatai.unispace.fileprovider
+        APPLICATION_EXTENSION_API_ONLY: true
+        SKIP_INSTALL: true
 schemes:
   UniSpace:
     build:
       targets:
         UniSpace: all
-        UniSpaceDomainTests: [test]
-        UniSpaceApplicationTests: [test]
-        UniSpaceInfrastructureTests: [test]
-        UniSpaceSimulation: [build]
-        UniSpaceAppTests: [test]
-        UniSpaceUITests: [test]
+        UniSpaceDomainTests:
+        - test
+        UniSpaceApplicationTests:
+        - test
+        UniSpaceInfrastructureTests:
+        - test
+        UniSpaceSimulation:
+        - build
+        UniSpaceAppTests:
+        - test
+        UniSpaceUITests:
+        - test
     test:
       gatherCoverageData: true
       targets:
-        - UniSpaceDomainTests
-        - UniSpaceApplicationTests
-        - UniSpaceInfrastructureTests
-        - UniSpaceAppTests
-        - UniSpaceUITests
+      - UniSpaceDomainTests
+      - UniSpaceApplicationTests
+      - UniSpaceInfrastructureTests
+      - UniSpaceAppTests
+      - UniSpaceUITests
   UniSpaceSimulation:
     build:
       targets:
