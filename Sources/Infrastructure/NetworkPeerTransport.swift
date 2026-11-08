@@ -1162,6 +1162,11 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
         tcp.keepaliveCount = 3
         let parameters = NWParameters(tls: nil, tcp: tcp)
         parameters.includePeerToPeer = true
+        // Realtime pointer input rides this connection when no UDP/QUIC lane is
+        // available; WMM voice-classing queues it ahead of file/video traffic
+        // (protocol.md §Priority). Local socket option only — no wire impact on
+        // older peers.
+        parameters.serviceClass = .voice
         return parameters
     }
 

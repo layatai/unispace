@@ -36,6 +36,27 @@ final class InfrastructureTests: XCTestCase {
         XCTAssertFalse(contents.contains("hidden message"))
     }
 
+    func testVoiceClassMarkingNeverThrowsAndReachesUDPSocket() throws {
+        // Marking is best-effort: it must swallow failures on any fd, including
+        // the standard streams.
+        for fileDescriptor in [Int32(0), Int32(1), Int32(2)] {
+            TransportTrafficClass.markVoiceClass(fileDescriptor)
+        }
+
+        let fileDescriptor = socket(AF_INET, SOCK_DGRAM, 0)
+        try XCTUnwrap(fileDescriptor >= 0 ? fileDescriptor : nil, "UDP test socket unavailable")
+        defer { close(fileDescriptor) }
+        TransportTrafficClass.markVoiceClass(fileDescriptor)
+
+        var tos: Int32 = 0
+        var length = socklen_t(MemoryLayout<Int32>.size)
+        let result = getsockopt(fileDescriptor, IPPROTO_IP, IP_TOS, &tos, &length)
+        // Restricted environments (sandboxed CI) may deny the option readback;
+        // the marking must still not be able to throw or disconnect.
+        guard result == 0 else { return }
+        XCTAssertEqual(tos, 0xB8)
+    }
+
     func testCursorSuppressionKeepsItsFirstAnchorUntilReleased() {
         let firstAnchor = CGPoint(x: 1512, y: 500)
         var state = CursorSuppressionState()
