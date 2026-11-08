@@ -154,7 +154,7 @@ struct ClipboardStreamTests {
     }
 }
 
-private actor StreamSourceSpy: ClipboardSelectionSource {
+actor StreamSourceSpy: ClipboardSelectionSource {
     let reader = StreamReaderSpy()
     var openCount = 0
     func describe(urls: [URL], epoch: UUID, generation: UInt64) -> ClipboardStreamSelection {
@@ -163,7 +163,7 @@ private actor StreamSourceSpy: ClipboardSelectionSource {
     func open(selectionID: UUID, file: ClipboardStreamFile) -> any ClipboardContentReader { openCount += 1; return reader }
     func releaseSelection(_ selectionID: UUID) {}
 }
-private actor StreamReaderSpy: ClipboardContentReader {
+actor StreamReaderSpy: ClipboardContentReader {
     var readCount = 0
     var digestCount = 0
     var closed = false
@@ -171,7 +171,7 @@ private actor StreamReaderSpy: ClipboardContentReader {
     func digest() -> Data { digestCount += 1; return Data(SHA256.hash(data: Data("abcdef".utf8))) }
     func close() { closed = true }
 }
-private final class StreamTestClock: MonotonicClock, @unchecked Sendable {
+final class StreamTestClock: MonotonicClock, @unchecked Sendable {
     private let lock = NSLock()
     private var now: UInt64 = 0
     func nowNanoseconds() -> UInt64 { lock.withLock { now } }
@@ -316,14 +316,14 @@ private final class StreamPairFixture: Sendable {
     }
     func stop() async { await sender.stop(); await receiver.stop() }
 }
-private actor StreamAdapterSpy: ClipboardVirtualFileAdapter {
+actor StreamAdapterSpy: ClipboardVirtualFileAdapter {
     var published: [ClipboardStreamSelection] = []
     var withdrawn: [UUID] = []
     func publish(_ selection: ClipboardStreamSelection, from peer: DeviceID) { published.append(selection) }
     func withdraw(_ selectionID: UUID, from peer: DeviceID) { withdrawn.append(selectionID) }
     func stop() {}
 }
-private final class StreamLoopbackTransport: FileTransferTransport, @unchecked Sendable {
+final class StreamLoopbackTransport: FileTransferTransport, @unchecked Sendable {
     private let lock = NSLock()
     private weak var destination: ClipboardStreamCoordinator?
     private var corrupt = false
