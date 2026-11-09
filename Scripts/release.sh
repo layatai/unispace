@@ -35,10 +35,15 @@ xcodebuild archive \
   -scheme UniSpace \
   -configuration Release \
   -destination 'generic/platform=macOS' \
+  -derivedDataPath "$release_root/DerivedData" \
   -archivePath "$archive_path" \
   ARCHS='arm64 x86_64' ONLY_ACTIVE_ARCH=NO \
   CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM=Y69F3DRK44 \
   CODE_SIGN_IDENTITY="$identity"
+
+./Scripts/verify-release-transfer.sh \
+  "$release_root/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/UniSpace/IntermediateBuildFilesPath/UninstalledProducts/macosx" \
+  "$app_path/Contents/Frameworks"
 
 codesign --verify --deep --strict --verbose=2 "$app_path"
 work_dir="$(mktemp -d /tmp/unispace-notary.XXXXXX)"

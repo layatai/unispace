@@ -12,11 +12,12 @@ struct WorkspaceView: View {
         case devices
         case continuity
         case transfers
+        case seamless
 
         var id: String { rawValue }
 
         static let workspace: [Self] = [.general, .displays, .devices]
-        static let sharing: [Self] = [.continuity, .transfers]
+        static let sharing: [Self] = [.continuity, .transfers, .seamless]
 
         var title: String {
             switch self {
@@ -25,6 +26,7 @@ struct WorkspaceView: View {
             case .devices: "Devices"
             case .continuity: "Continuity"
             case .transfers: "File Transfers"
+            case .seamless: "Seamless Windows"
             }
         }
 
@@ -35,6 +37,7 @@ struct WorkspaceView: View {
             case .devices: "laptopcomputer"
             case .continuity: "doc.on.clipboard"
             case .transfers: "arrow.left.arrow.right.circle"
+            case .seamless: "macwindow.on.rectangle"
             }
         }
     }
@@ -42,6 +45,7 @@ struct WorkspaceView: View {
     @ObservedObject var model: AppModel
     @ObservedObject var clipboardModel: ClipboardViewModel
     @ObservedObject var transferModel: FileTransferViewModel
+    @ObservedObject var seamlessModel: SeamlessWindowViewModel
     @Binding var selection: Destination
 
     var body: some View {
@@ -79,7 +83,8 @@ struct WorkspaceView: View {
             Label(destination.title, systemImage: destination.systemImage)
                 .accessibilityIdentifier("section-\(destination.rawValue)")
             Spacer(minLength: 0)
-            if destination == .continuity, clipboardModel.sharingEnabled {
+            if (destination == .continuity && clipboardModel.sharingEnabled)
+                || (destination == .seamless && seamlessModel.busy) {
                 Circle()
                     .fill(Color.green)
                     .frame(width: 7, height: 7)
@@ -131,6 +136,8 @@ struct WorkspaceView: View {
             ContinuityView(model: clipboardModel)
         case .transfers:
             TransferCenterView(model: transferModel)
+        case .seamless:
+            SeamlessWindowView(model: seamlessModel, appModel: model)
         }
     }
 
@@ -386,7 +393,7 @@ struct GeneralView: View {
 
 /// One permission row, with an escape hatch to System Settings because the
 /// system prompt only ever appears once per app.
-private struct PermissionRow: View {
+struct PermissionRow: View {
     let title: String
     let detail: String
     let state: PermissionState

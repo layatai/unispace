@@ -30,6 +30,14 @@ final class QUICRealtimeTransport: @unchecked Sendable {
     private var shouldDialDesiredPeer = false
     private var running = false
 
+    // WMM voice-classing keeps realtime pointer frames queued ahead of
+    // file/video traffic (protocol.md §Priority). Local socket option only —
+    // no wire impact on older peers.
+    private static func voiceClass(_ parameters: NWParameters) -> NWParameters {
+        parameters.serviceClass = .voice
+        return parameters
+    }
+
     init(listenPort: NWEndpoint.Port, directPort: NWEndpoint.Port, enableBonjour: Bool) {
         self.listenPort = listenPort
         self.directPort = directPort
@@ -40,10 +48,12 @@ final class QUICRealtimeTransport: @unchecked Sendable {
 
     func start(localDevice: DeviceDescriptor, workspace: WorkspaceSnapshot, key: Data) throws {
         stop()
-        let parameters = try NetworkPeerTransport.makeQUICParameters(
-            workspaceID: workspace.id,
-            key: key,
-            isDatagram: true
+        let parameters = Self.voiceClass(
+            try NetworkPeerTransport.makeQUICParameters(
+                workspaceID: workspace.id,
+                key: key,
+                isDatagram: true
+            )
         )
         let listener = try NWListener(using: parameters, on: listenPort)
         let record = NWTXTRecord([
@@ -190,10 +200,12 @@ final class QUICRealtimeTransport: @unchecked Sendable {
         guard let configuration = lock.withLock({ () -> (WorkspaceID, Data)? in
             guard running, let workspaceID, let key else { return nil }
             return (workspaceID, key)
-        }), let parameters = try? NetworkPeerTransport.makeQUICParameters(
-            workspaceID: configuration.0,
-            key: configuration.1,
-            isDatagram: true
+        }), let parameters = try? Self.voiceClass(
+            NetworkPeerTransport.makeQUICParameters(
+                workspaceID: configuration.0,
+                key: configuration.1,
+                isDatagram: true
+            )
         ) else { return }
         let connection = NWConnection(to: endpoint, using: parameters)
         install(connection, expectedDeviceID: expectedDeviceID, isOutbound: true)

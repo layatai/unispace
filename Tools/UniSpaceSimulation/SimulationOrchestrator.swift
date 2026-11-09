@@ -24,11 +24,13 @@ final class SimulationProcessClient: @unchecked Sendable {
     var processIdentifier: Int32 { process.processIdentifier }
     func start() throws {
         output.fileHandleForReading.readabilityHandler = { [weak self] handle in
-            self?.receive(handle.availableData)
+            let data = handle.availableData
+            if data.isEmpty { handle.readabilityHandler = nil }
+            self?.receive(data)
         }
         error.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
-            guard !data.isEmpty else { return }
+            guard !data.isEmpty else { handle.readabilityHandler = nil; return }
             self?.condition.withLock { self?.stderrData.append(data) }
         }
         process.terminationHandler = { [weak self] _ in
@@ -127,7 +129,7 @@ final class SimulationProcessClient: @unchecked Sendable {
                 if let index = messages.firstIndex(where: predicate) {
                     return messages.remove(at: index)
                 }
-                if !process.isRunning { throw exitedFailure() }
+                if !process.isRunning { throw exitedFailureLocked() }
                 guard condition.wait(until: deadline) else {
                     throw SimulationFailure("Timed out waiting for \(name)")
                 }
@@ -136,9 +138,11 @@ final class SimulationProcessClient: @unchecked Sendable {
     }
 
     private func exitedFailure(prefix: String? = nil) -> SimulationFailure {
-        let stderr = condition.withLock {
-            String(data: stderrData, encoding: .utf8) ?? ""
-        }
+        condition.withLock { exitedFailureLocked(prefix: prefix) }
+    }
+
+    private func exitedFailureLocked(prefix: String? = nil) -> SimulationFailure {
+        let stderr = String(data: stderrData, encoding: .utf8) ?? ""
         return SimulationFailure("\(prefix ?? "\(name) exited unexpectedly"). \(stderr)")
     }
 
@@ -354,6 +358,8 @@ final class SimulationOrchestrator {
         for condition in conditions where !condition.passed {
             failures.append(contentsOf: condition.failures)
         }
+        let queueJSON = try nodeA.command("deliveryMetrics").values["queue"] ?? "{}"
+        let queue = try JSONDecoder().decode([String: UInt64].self, from: Data(queueJSON.utf8))
         let report = SimulationReport(
             passed: failures.isEmpty,
             samplesPerCondition: samples,
@@ -361,7 +367,8 @@ final class SimulationOrchestrator {
             steps: steps,
             failures: failures,
             nodePIDs: nodePIDs,
-            artifactDirectory: keepArtifacts?.path
+            artifactDirectory: keepArtifacts?.path,
+            inputQueue: queue
         )
         return report
     }

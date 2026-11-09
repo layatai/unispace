@@ -244,6 +244,9 @@ private final class SimulatedWireTransport: PeerTransport, @unchecked Sendable {
         guard kind == .controlJSON, let connection = lock.withLock({ connection }) else { return }
         let decoded = try WireFrameCodec.decodeControl(payload)
         switch decoded.message {
+        case .inputProgress, .pointerCheckpoint, .resume, .resumeResult:
+            await connection.coordinator.startIndependentEventHandling()
+            connection.coordinator.enqueueIndependentEvent(.control(localDeviceID, decoded))
         case let .controllerClaim(epoch):
             await connection.coordinator.observeControllerClaim(epoch)
         case let .activate(activation):

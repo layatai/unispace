@@ -142,6 +142,26 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
         realtimeInputContinuation.finish()
     }
 
+    private var realtimeInputHandler: (@Sendable (DeviceID, RealtimePointerFrame) -> Void)?
+    private var sessionEventHandler: (@Sendable (PeerEvent) -> Void)?
+
+    public func setRealtimeInputHandler(_ handler: (@Sendable (DeviceID, RealtimePointerFrame) -> Void)?) {
+        lock.withLock { realtimeInputHandler = handler }
+    }
+
+    public func setSessionEventHandler(_ handler: (@Sendable (PeerEvent) -> Void)?) {
+        lock.withLock { sessionEventHandler = handler }
+    }
+
+    private func routeSessionEvent(_ event: PeerEvent, from source: DeviceID) -> Bool {
+        let handler = lock.withLock {
+            knownPeers[source]?.capabilities.contains(.controlResilienceV1) == true ? sessionEventHandler : nil
+        }
+        guard let handler else { return false }
+        handler(event)
+        return true
+    }
+
     public func events() -> AsyncStream<PeerEvent> { stream }
     public func realtimeInputEvents() -> AsyncStream<PeerEvent> { realtimeInputStream }
 
@@ -775,6 +795,7 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
     private func handleFrame(kind: WireFrameKind, payload: Data, managed: SecurePeerConnection) {
         do {
             guard let deviceID = managed.deviceID else { throw PeerTransportError.authenticationFailed }
+            guard lock.withLock({ connections[deviceID] === managed }) else { return }
             switch kind {
             case .controlJSON:
                 let envelope = try WireFrameCodec.decodeControl(payload)
@@ -782,7 +803,9 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
             case .inputBinary:
                 let frame = try WireFrameCodec.decodeInput(payload)
                 guard frame.controllerID == deviceID else { throw ControlProtocolError.malformedFrame }
-                emit(.input(deviceID, frame))
+                if !routeSessionEvent(.input(deviceID, frame), from: deviceID) {
+                    emit(.input(deviceID, frame))
+                }
             case .realtimePointerBinary:
                 throw ControlProtocolError.malformedFrame
             case .controlJSONV2:
@@ -825,6 +848,12 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
                     )
                 } ?? device
             }
+        }
+        switch envelope.message {
+        case .heartbeat, .realtimePointerProgress, .inputProgress, .pointerCheckpoint, .resume, .resumeResult:
+            if routeSessionEvent(.control(deviceID, envelope), from: deviceID) { return }
+        default:
+            break
         }
         emit(.control(deviceID, envelope))
         if case .hello = envelope.message {
@@ -1113,6 +1142,11 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
     }
 
     private func emit(_ event: PeerEvent) {
+        if case let .realtimeInput(source, frame) = event,
+           let handler = lock.withLock({ realtimeInputHandler }) {
+            handler(source, frame)
+            return
+        }
         continuation.yield(event)
         if case .realtimeInput = event {
             realtimeInputContinuation.yield(event)
@@ -1128,6 +1162,11 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
         tcp.keepaliveCount = 3
         let parameters = NWParameters(tls: nil, tcp: tcp)
         parameters.includePeerToPeer = true
+        // Realtime pointer input rides this connection when no UDP/QUIC lane is
+        // available; WMM voice-classing queues it ahead of file/video traffic
+        // (protocol.md §Priority). Local socket option only — no wire impact on
+        // older peers.
+        parameters.serviceClass = .voice
         return parameters
     }
 
@@ -1287,6 +1326,7 @@ final class SecurePeerConnection: @unchecked Sendable {
     private var sessionKey: SymmetricKey?
     private var authenticatedDeviceID: DeviceID?
     private var authenticatedKeyIndex: Int?
+    private var authenticatedPeerNonce: Data?
     private var outboundSequence: UInt64 = 0
     private var inboundSequence: UInt64?
 
@@ -1429,8 +1469,17 @@ final class SecurePeerConnection: @unchecked Sendable {
               expectedDeviceID == nil || expectedDeviceID == hello.deviceID else {
             throw PeerTransportError.authenticationFailed
         }
-        if lock.withLock({ sessionKey != nil }) { return }
         let proofPayload = helloProofPayload(deviceID: hello.deviceID, nonce: hello.nonce)
+        if let authenticated = lock.withLock({ authenticatedKeyIndex.map { ($0, authenticatedPeerNonce) } }) {
+            // The client may have lost our initial UDP hello. Only the listener
+            // answers retries, so two authenticated Macs cannot echo forever.
+            if isDatagram, !isOutbound, authenticated.1 == hello.nonce,
+               HMAC<SHA256>.isValidAuthenticationCode(hello.proof, authenticating: proofPayload,
+                                                     using: workspaceKeys[authenticated.0]) {
+                sendHello()
+            }
+            return
+        }
         guard let keyIndex = workspaceKeys.firstIndex(where: {
             HMAC<SHA256>.isValidAuthenticationCode(
                 hello.proof,
@@ -1454,6 +1503,7 @@ final class SecurePeerConnection: @unchecked Sendable {
             sessionKey = derived
             authenticatedDeviceID = hello.deviceID
             authenticatedKeyIndex = keyIndex
+            authenticatedPeerNonce = hello.nonce
             return true
         }
         if shouldNotify { authenticatedHandler?(hello.deviceID) }

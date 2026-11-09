@@ -1,0 +1,46 @@
+name: Seamless Window CI
+
+on:
+  pull_request:
+    paths:
+      - 'Sources/**'
+      - 'Tests/**'
+      - 'project.yml'
+      - '.github/workflows/seamless-window-ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    runs-on: macos-15
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - run: brew install xcodegen
+      - name: Generate project
+        run: xcodegen generate
+      - name: Build and test macOS implementation
+        run: |
+          set -o pipefail
+          mkdir -p .build/test-results
+          xcodebuild test -project UniSpace.xcodeproj -scheme UniSpace \
+            -destination 'platform=macOS,arch=arm64' CODE_SIGNING_ALLOWED=NO \
+            -only-testing:UniSpaceApplicationTests/SeamlessWindowTests \
+            -only-testing:UniSpaceInfrastructureTests/SeamlessWindowConnectionTests \
+            -resultBundlePath .build/test-results/SeamlessWindow.xcresult \
+            2>&1 | tee .build/test-results/seamless.log
+      - name: Universal release build
+        run: ./Scripts/build.sh --universal
+      - name: Retain generated project and validation results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: seamless-window-validation
+          path: |
+            UniSpace.xcodeproj/project.pbxproj
+            Resources/Info.plist
+            .build/test-results/SeamlessWindow.xcresult
+            .build/test-results/seamless.log
+          retention-days: 7

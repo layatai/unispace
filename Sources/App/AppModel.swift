@@ -34,6 +34,7 @@ final class AppModel: ObservableObject {
     @Published var lastError: String?
     @Published private(set) var inputMonitoringPermission: PermissionState = .unknown
     @Published private(set) var postEventsPermission: PermissionState = .unknown
+    @Published private(set) var screenRecordingPermission: PermissionState = .unknown
     @Published private(set) var launchAtLogin = false
     @Published private(set) var diagnosticLoggingEnabled = false
 
@@ -181,8 +182,10 @@ final class AppModel: ObservableObject {
                 .udpPointerV2,
                 .activationAcknowledgementV1,
                 .realtimePointerProgressV1,
+                .controlResilienceV1,
                 .workspacePresenceV1,
                 .fileTransferV1,
+                .fileClipboardStreamV2,
                 .clipboardTextV1,
                 .clipboardURLV1,
             ],
@@ -373,12 +376,12 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func stopControlling() {
+    func stopControlling(reason: String = "manual stop") {
         controlTransferGuard.beginStop()
         finishPendingActivationInput()
         capture.setSuppressionEnabled(false)
         Task {
-            await coordinator?.deactivateCurrentSession(reason: "manual stop")
+            await coordinator?.deactivateCurrentSession(reason: reason)
             controlTransferGuard.completeStop()
             statusMessage = isLocalController ? "Controller ready" : "Receiver ready"
         }
@@ -395,6 +398,7 @@ final class AppModel: ObservableObject {
     func refreshPermissions() {
         inputMonitoringPermission = permissionService.state(for: .inputMonitoring)
         postEventsPermission = permissionService.state(for: .postEvents)
+        screenRecordingPermission = permissionService.state(for: .screenRecording)
     }
 
     func refreshConnections() {
@@ -477,6 +481,7 @@ final class AppModel: ObservableObject {
         case .inputMonitoring: anchor = "Privacy_ListenEvent"
         case .postEvents: anchor = "Privacy_Accessibility"
         case .localNetwork: anchor = "Privacy_LocalNetwork"
+        case .screenRecording: anchor = "Privacy_ScreenCapture"
         }
         guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(anchor)") else { return }
         NSWorkspace.shared.open(url)
@@ -648,6 +653,13 @@ final class AppModel: ObservableObject {
                 diagnostic: { [diagnosticLog] message in diagnosticLog.record(message) }
             )
             self.coordinator = coordinator
+            await coordinator.startIndependentEventHandling()
+            transport.setSessionEventHandler { [weak coordinator] event in
+                coordinator?.enqueueIndependentEvent(event)
+            }
+            transport.setRealtimeInputHandler { [weak coordinator] source, frame in
+                coordinator?.handleIncomingRealtime(frame, from: source)
+            }
             applyPeerConnectionPolicy()
             startCaptureIfPossible()
             // Cancellation terminates these shared AsyncStreams, so their
@@ -896,6 +908,7 @@ final class AppModel: ObservableObject {
             break
         case let .connected(deviceID):
             connectedDevices.insert(deviceID)
+            await coordinator?.peerReconnected(deviceID)
             if let workspace {
                 try? await transport.send(ControlEnvelope(message: .workspace(workspace)), to: deviceID)
             }
@@ -927,6 +940,15 @@ final class AppModel: ObservableObject {
             )
             let previousState = await coordinator?.currentState()
             await coordinator?.peerDisconnected(deviceID)
+            let recovering = await coordinator?.currentState()
+            if case .recoveringController? = recovering {
+                statusMessage = "Reconnecting remote control…"
+                break
+            }
+            if case .recoveringReceiver? = recovering {
+                statusMessage = "Waiting for controller to reconnect…"
+                break
+            }
             if case let .receiving(_, source, _)? = previousState, source == deviceID {
                 controlTransferGuard.reset()
             } else if case let .controlling(_, target, _)? = previousState, target == deviceID {
@@ -996,7 +1018,8 @@ final class AppModel: ObservableObject {
                 activation,
                 from: source,
                 targetDisplay: display,
-                isInputInjectionAuthorized: postEventsPermission == .granted
+                isInputInjectionAuthorized: postEventsPermission == .granted,
+                sourceCapabilities: capabilities(of: source)
             ) == true
             if capabilities(of: source).contains(.activationAcknowledgementV1) {
                 try? await transport.send(
@@ -1084,6 +1107,8 @@ final class AppModel: ObservableObject {
             }
         case let .realtimePointerProgress(progress):
             _ = await coordinator?.receiveRealtimePointerProgress(progress, from: source)
+        case .inputProgress, .pointerCheckpoint, .resume, .resumeResult:
+            coordinator?.enqueueIndependentEvent(.control(source, ControlEnvelope(message: message)))
         case let .rotateWorkspaceKey(newKey):
             guard let workspace else { return }
             do {

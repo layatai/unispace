@@ -36,6 +36,27 @@ final class InfrastructureTests: XCTestCase {
         XCTAssertFalse(contents.contains("hidden message"))
     }
 
+    func testVoiceClassMarkingNeverThrowsAndReachesUDPSocket() throws {
+        // Marking is best-effort: it must swallow failures on any fd, including
+        // the standard streams.
+        for fileDescriptor in [Int32(0), Int32(1), Int32(2)] {
+            TransportTrafficClass.markVoiceClass(fileDescriptor)
+        }
+
+        let fileDescriptor = socket(AF_INET, SOCK_DGRAM, 0)
+        try XCTUnwrap(fileDescriptor >= 0 ? fileDescriptor : nil, "UDP test socket unavailable")
+        defer { close(fileDescriptor) }
+        TransportTrafficClass.markVoiceClass(fileDescriptor)
+
+        var tos: Int32 = 0
+        var length = socklen_t(MemoryLayout<Int32>.size)
+        let result = getsockopt(fileDescriptor, IPPROTO_IP, IP_TOS, &tos, &length)
+        // Restricted environments (sandboxed CI) may deny the option readback;
+        // the marking must still not be able to throw or disconnect.
+        guard result == 0 else { return }
+        XCTAssertEqual(tos, 0xB8)
+    }
+
     func testCursorSuppressionKeepsItsFirstAnchorUntilReleased() {
         let firstAnchor = CGPoint(x: 1512, y: 500)
         var state = CursorSuppressionState()
@@ -312,7 +333,9 @@ final class InfrastructureTests: XCTestCase {
                 QUICRealtimeTransport.serviceType,
                 NetworkFileTransferTransport.serviceType,
                 NetworkClipboardTransport.serviceType,
-                PairingNetworkService.serviceType
+                PairingNetworkService.serviceType,
+                SeamlessWindowService.serviceType,
+                SeamlessWindowService.videoType
             ]
         )
         XCTAssertFalse(try XCTUnwrap(plist["NSLocalNetworkUsageDescription"] as? String).isEmpty)
@@ -1619,6 +1642,62 @@ final class InfrastructureTests: XCTestCase {
         client.cancel()
         events.cancel()
         await transport.stop()
+    }
+
+    func testAuthenticatedDatagramListenerRepeatsLostServerHelloWithoutReauthenticating() async throws {
+        let workspaceID = WorkspaceID()
+        let serverID = DeviceID()
+        let clientID = DeviceID()
+        let key = PairingCryptoSession.randomData(count: 32)
+        let nonce = PairingCryptoSession.randomData(count: 32)
+        var proofData = Data("UniSpace pointer hello v2".utf8)
+        proofData.append(Data(workspaceID.rawValue.uuidString.utf8))
+        proofData.append(Data(clientID.rawValue.uuidString.utf8))
+        proofData.append(nonce)
+        let hello = SecureChannelHello(version: 2, workspaceID: workspaceID, deviceID: clientID,
+            nonce: nonce, proof: Data(HMAC<SHA256>.authenticationCode(for: proofData, using: SymmetricKey(data: key))))
+        let payload = try JSONEncoder().encode(hello)
+        var size = UInt32(payload.count).bigEndian
+        var packet = withUnsafeBytes(of: &size) { Data($0) }
+        packet.append(10)
+        packet.append(payload)
+        let datagram = packet
+        let queue = DispatchQueue(label: "UniSpaceTests.LostPointerHello")
+        let listener = try NWListener(using: .udp, on: .any)
+        let ready = expectation(description: "UDP listener ready")
+        let authenticated = expectation(description: "server authenticated exactly once")
+        let retained = SecureConnectionRetainer()
+        listener.stateUpdateHandler = { if case .ready = $0 { ready.fulfill() } }
+        listener.newConnectionHandler = { connection in
+            let managed = SecurePeerConnection(connection: connection, localDeviceID: serverID,
+                workspaceID: workspaceID, workspaceKey: key, expectedDeviceID: clientID,
+                isOutbound: false, transportKind: .tcp, isDatagram: true, securityProfile: .pointerV2)
+            retained.connection = managed
+            managed.authenticatedHandler = { _ in authenticated.fulfill() }
+            connection.start(queue: queue)
+        }
+        listener.start(queue: queue)
+        defer { retained.connection?.cancel(); listener.cancel() }
+        await fulfillment(of: [ready], timeout: 3)
+        let client = NWConnection(host: "127.0.0.1", port: try XCTUnwrap(listener.port), using: .udp)
+        defer { client.cancel() }
+        client.start(queue: queue)
+        let initial = expectation(description: "discard initial server hello")
+        client.receiveMessage { data, _, _, error in
+            XCTAssertNil(error)
+            XCTAssertNotNil(data)
+            initial.fulfill()
+        }
+        client.send(content: datagram, contentContext: .defaultMessage, isComplete: true, completion: .contentProcessed { _ in })
+        await fulfillment(of: [initial, authenticated], timeout: 3)
+        let retried = expectation(description: "server answers retried client hello")
+        client.receiveMessage { data, _, _, error in
+            XCTAssertNil(error)
+            XCTAssertEqual(data?.dropFirst(4).first, 10)
+            retried.fulfill()
+        }
+        client.send(content: datagram, contentContext: .defaultMessage, isComplete: true, completion: .contentProcessed { _ in })
+        await fulfillment(of: [retried], timeout: 2)
     }
 
     func testAuthenticatedPointerLaneReplacesRestartedWindowsRoute() async throws {

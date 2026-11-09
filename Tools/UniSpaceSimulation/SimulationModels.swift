@@ -105,6 +105,7 @@ struct SimulationReport: Codable, Sendable {
     let failures: [String]
     let nodePIDs: [Int32]
     let artifactDirectory: String?
+    var inputQueue: [String: UInt64]? = nil
 }
 
 struct SimulationThresholds: Sendable {

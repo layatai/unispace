@@ -23,6 +23,7 @@ public enum FileTransferFrameCodec {
         case resumeQuery = 9
         case resumeState = 10
         case failure = 11
+        case clipboardStream = 12
     }
 
     public static func encode(_ envelope: FileTransferEnvelope) throws -> Data {
@@ -77,6 +78,7 @@ public enum FileTransferFrameCodec {
         _ message: FileTransferMessage
     ) throws -> (kind: MessageKind, payload: Data) {
         switch message {
+        case let .clipboardStream(value): return (.clipboardStream, try ClipboardStreamCodec.encode(value))
         case let .offer(value):
             return (.offer, try jsonEncoder.encode(value))
         case let .request(value):
@@ -108,6 +110,7 @@ public enum FileTransferFrameCodec {
     ) throws -> FileTransferMessage {
         do {
             switch kind {
+            case .clipboardStream: return .clipboardStream(try ClipboardStreamCodec.decode(payload))
             case .offer:
                 return .offer(try jsonDecoder.decode(TransferOffer.self, from: payload))
             case .request:

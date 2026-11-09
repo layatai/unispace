@@ -15,7 +15,7 @@ final class ClipboardViewModel: ObservableObject {
     @Published var sharingEnabled: Bool
 
     private let defaults: UserDefaults
-    private let trustStore: KeychainTrustStore
+    private let trustStore: any TrustStore
     private let coordinator: ClipboardCoordinator
     private var bindingCancellable: AnyCancellable?
     private var contextTask: Task<Void, Never>?
@@ -26,7 +26,7 @@ final class ClipboardViewModel: ObservableObject {
 
     init(
         defaults: UserDefaults = .standard,
-        trustStore: KeychainTrustStore = KeychainTrustStore(),
+        trustStore: any TrustStore = KeychainTrustStore(),
         coordinator: ClipboardCoordinator? = nil
     ) {
         self.defaults = defaults
@@ -120,7 +120,7 @@ final class ClipboardViewModel: ObservableObject {
         }
     }
 
-    private func refreshContext(
+    func refreshContext(
         _ context: ContinuityContextSnapshot,
         localDevice: DeviceDescriptor
     ) async {
@@ -186,8 +186,10 @@ final class ClipboardViewModel: ObservableObject {
         let inferred = inferredFromApp ?? coordinatorDestination
         if activeDestinationID != inferred {
             activeDestinationID = inferred
-            await coordinator.setAutomaticDestination(inferred)
         }
+        // A workspace refresh restarts the coordinator and clears its route.
+        // The displayed peer can be unchanged while that route needs restoring.
+        await coordinator.setAutomaticDestination(inferred)
     }
 
     private func inferredDestination(
