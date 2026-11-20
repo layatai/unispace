@@ -27,6 +27,13 @@ public actor ClipboardStreamSource {
         let peer: DeviceID
         let requestID: UUID
     }
+    /// A completed finish, kept until the lease would have expired so a retry
+    /// after a lost `.finished` reply is answered instead of failing forever.
+    private struct FinishedLease {
+        let peer: DeviceID
+        let digest: Data
+        let deadline: UInt64
+    }
     private struct PendingOpen {
         let token: UUID
         let request: ClipboardStreamOpen
@@ -39,6 +46,7 @@ public actor ClipboardStreamSource {
     /// Coordinator-driven: only announced (or explicitly designated) peers may open leases.
     private var servedPeers: Set<DeviceID> = []
     private var leases: [UUID: Lease] = [:]
+    private var finishedLeases: [UUID: FinishedLease] = [:]
     private var pendingOpens: [OpenKey: PendingOpen] = [:]
     private var expiryTask: Task<Void, Never>?
     private var epoch = UUID()
@@ -118,11 +126,22 @@ public actor ClipboardStreamSource {
     }
     public func finish(_ request: ClipboardStreamFinish, peer: DeviceID) async throws -> ClipboardStreamFinish {
         await expire()
-        guard let lease = leases[request.leaseID], lease.peer == peer else { throw ClipboardStreamFailure.expired }
         guard request.digest.count == 32 else { throw ClipboardStreamFailure.invalidRequest }
+        if let finished = finishedLeases[request.leaseID], finished.peer == peer {
+            guard finished.digest == request.digest else { throw ClipboardStreamFailure.integrityFailure }
+            return .init(requestID: request.requestID, leaseID: request.leaseID, digest: finished.digest)
+        }
+        guard let lease = leases[request.leaseID], lease.peer == peer else { throw ClipboardStreamFailure.expired }
         let digest = try await lease.reader.digest()
         guard leases[request.leaseID] != nil else { throw ClipboardStreamFailure.cancelled }
         guard digest == request.digest else { throw ClipboardStreamFailure.integrityFailure }
+        if finishedLeases.count >= limits.maximumLeases * 4 {
+            // Bounded: drop the entry closest to expiry before recording another.
+            if let oldest = finishedLeases.min(by: { $0.value.deadline < $1.value.deadline })?.key {
+                finishedLeases.removeValue(forKey: oldest)
+            }
+        }
+        finishedLeases[request.leaseID] = FinishedLease(peer: peer, digest: digest, deadline: deadline())
         await close(request.leaseID, peer: peer)
         return .init(requestID: request.requestID, leaseID: request.leaseID, digest: digest)
     }
@@ -137,6 +156,7 @@ public actor ClipboardStreamSource {
         }
         let matching = leases.values.filter { $0.peer == peer }
         for lease in matching { leases.removeValue(forKey: lease.value.leaseID) }
+        finishedLeases = finishedLeases.filter { $0.value.peer != peer }
         servedPeers.remove(peer)
         for lease in matching { await lease.reader.close() }
     }
@@ -147,12 +167,13 @@ public actor ClipboardStreamSource {
         generation &+= 1
         epoch = UUID()
         let previous = selection; selection = nil; servedPeers.removeAll()
-        let active = Array(leases.values); leases.removeAll()
+        let active = Array(leases.values); leases.removeAll(); finishedLeases.removeAll()
         for lease in active { await lease.reader.close() }
         if let previous { await source.releaseSelection(previous.id) }
     }
     public func expire() async {
         let now = clock.nowNanoseconds()
+        finishedLeases = finishedLeases.filter { $0.value.deadline > now }
         let expired = leases.values.filter { $0.deadline <= now }
         for lease in expired { leases.removeValue(forKey: lease.value.leaseID) }
         for lease in expired { await lease.reader.close() }

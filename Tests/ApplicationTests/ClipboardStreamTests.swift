@@ -119,6 +119,33 @@ struct ClipboardStreamTests {
         #expect(finish.digest.count == 32)
         #expect(await source.reader.closed)
     }
+    @Test func repeatedFinishAfterLostReplyIsAnsweredUntilLeaseLifetimeEnds() async throws {
+        let source = StreamSourceSpy()
+        let clock = StreamTestClock()
+        let service = ClipboardStreamSource(source: source, clock: clock, limits: .init(leaseLifetimeNanoseconds: 10))
+        let peer = DeviceID()
+        let selection = try #require(try await service.replace(urls: [URL(fileURLWithPath: "/fixture/a")], destination: peer))
+        let lease = try await service.open(.init(selectionID: selection.id, fileID: selection.files[0].id, version: "version"), peer: peer)
+        let digest = Data(SHA256.hash(data: Data("abcdef".utf8)))
+        _ = try await service.finish(.init(leaseID: lease.leaseID, digest: digest), peer: peer)
+        // The first reply was lost: a retry with a fresh requestID still succeeds.
+        let retry = ClipboardStreamFinish(leaseID: lease.leaseID, digest: digest)
+        let answered = try await service.finish(retry, peer: peer)
+        #expect(answered.requestID == retry.requestID)
+        #expect(answered.digest == digest)
+        // A mismatched digest or another peer never rides on the remembered result.
+        await #expect(throws: ClipboardStreamFailure.integrityFailure) {
+            try await service.finish(.init(leaseID: lease.leaseID, digest: Data(repeating: 0, count: 32)), peer: peer)
+        }
+        await #expect(throws: ClipboardStreamFailure.expired) {
+            try await service.finish(.init(leaseID: lease.leaseID, digest: digest), peer: DeviceID())
+        }
+        clock.advance(11)
+        await #expect(throws: ClipboardStreamFailure.expired) {
+            try await service.finish(.init(leaseID: lease.leaseID, digest: digest), peer: peer)
+        }
+        await service.stop()
+    }
     @Test func expiryAndDisconnectReleaseReadersWithoutResurrectingSelections() async throws {
         let source = StreamSourceSpy()
         let clock = StreamTestClock()
