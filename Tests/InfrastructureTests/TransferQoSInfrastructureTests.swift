@@ -293,6 +293,9 @@ final class TransferQoSInfrastructureTests: XCTestCase {
 
         let diagnostics = await store.diagnostics()
         XCTAssertEqual(diagnostics.checkpointTimerCreationCount, 1)
+        // The timer task may not have reached its sleep yet on a loaded runner.
+        let timerScheduled = await eventually { clock.pendingSleepCount == 1 }
+        XCTAssertTrue(timerScheduled)
         XCTAssertEqual(clock.pendingSleepCount, 1)
     }
 
