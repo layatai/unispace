@@ -164,7 +164,7 @@ final class SimulationOrchestrator {
     private let executableURL: URL
     private let samples: Int
     private let keepArtifacts: URL?
-    private let thresholds = SimulationThresholds.ci
+    private let thresholds = SimulationThresholds.current
     private let root: URL
     private let configA: URL
     private let configB: URL
@@ -281,12 +281,25 @@ final class SimulationOrchestrator {
             let sent = try nodeA.command("clipboard", values: ["value": "simulation-clipboard"])
                 .values["value"] ?? ""
             let started = UInt64(sent.split(separator: "|").first ?? "0") ?? 0
-            try wait(timeout: 3, description: "clipboard delivery") {
+            // Poll finely: this wait is the latency measurement, and a 50 ms
+            // poll alone could add up to half of the 100 ms budget.
+            try wait(timeout: 3, description: "clipboard delivery", pollInterval: 0.005) {
                 try self.nodeB.command("clipboardRead").values["value"] == sent
             }
             let elapsed = Double(DispatchTime.now().uptimeNanoseconds - started) / 1_000_000
             if elapsed > thresholds.clipboardMilliseconds {
-                failures.append("Clipboard delivery took \(elapsed) ms")
+                let source = (try? self.nodeA.command("clipboardTiming").values) ?? [:]
+                let destination = (try? self.nodeB.command("clipboardTiming").values) ?? [:]
+                func stage(_ from: UInt64?, _ to: UInt64?) -> String {
+                    guard let from, let to, to >= from else { return "?" }
+                    return String(format: "%.1f", Double(to - from) / 1_000_000)
+                }
+                let observed = source["observedNanos"].flatMap { UInt64($0) }
+                let applyStart = destination["applyStartNanos"].flatMap { UInt64($0) }
+                let applyEnd = destination["applyEndNanos"].flatMap { UInt64($0) }
+                failures.append("Clipboard delivery took \(elapsed) ms (source poll \(stage(started, observed)) ms, "
+                    + "transfer \(stage(observed, applyStart)) ms, destination write \(stage(applyStart, applyEnd)) ms, "
+                    + "read-back \(stage(applyEnd, DispatchTime.now().uptimeNanoseconds)) ms)")
             }
         }
 
@@ -368,7 +381,8 @@ final class SimulationOrchestrator {
             failures: failures,
             nodePIDs: nodePIDs,
             artifactDirectory: keepArtifacts?.path,
-            inputQueue: queue
+            inputQueue: queue,
+            thresholdProfile: thresholds.name
         )
         return report
     }
@@ -469,7 +483,7 @@ final class SimulationOrchestrator {
 
     private func measurePointer(
         condition: String
-    ) throws -> (wire: LatencySummary, visible: LatencySummary, keyboard: LatencySummary) {
+    ) throws -> (wire: LatencySummary, visible: LatencySummary, keyboard: LatencySummary, realtimeShare: Double?) {
         _ = try nodeB.command("beginMetrics", values: ["condition": "\(condition)-warmup"])
         _ = try nodeA.command("moveBatch", values: ["count": "100", "intervalMicros": "8333"])
         _ = try nodeB.command("beginMetrics", values: ["condition": condition])
@@ -495,7 +509,7 @@ final class SimulationOrchestrator {
     private func metrics(
         from node: SimulationProcessClient,
         condition: String
-    ) throws -> (wire: LatencySummary, visible: LatencySummary, keyboard: LatencySummary) {
+    ) throws -> (wire: LatencySummary, visible: LatencySummary, keyboard: LatencySummary, realtimeShare: Double?) {
         let response = try node.command("metrics", values: ["condition": condition])
         func decode(_ key: String) throws -> LatencySummary {
             guard let string = response.values[key], let data = string.data(using: .utf8) else {
@@ -503,12 +517,15 @@ final class SimulationOrchestrator {
             }
             return try SimulationJSON.decoder.decode(LatencySummary.self, from: data)
         }
-        return (try decode("wire"), try decode("visible"), try decode("keyboard"))
+        let realtime = response.values["realtimePointerFrames"].flatMap { Int($0) } ?? 0
+        let reliable = response.values["reliablePointerFrames"].flatMap { Int($0) } ?? 0
+        let share = realtime + reliable > 0 ? Double(realtime) / Double(realtime + reliable) : nil
+        return (try decode("wire"), try decode("visible"), try decode("keyboard"), share)
     }
 
     private func evaluate(
         condition: String,
-        report: (wire: LatencySummary, visible: LatencySummary, keyboard: LatencySummary),
+        report: (wire: LatencySummary, visible: LatencySummary, keyboard: LatencySummary, realtimeShare: Double?),
         idleP95: Double?
     ) -> ConditionReport {
         var failures: [String] = []
@@ -526,18 +543,23 @@ final class SimulationOrchestrator {
         }
         for (name, summary) in [("wire", report.wire), ("visible", report.visible)] {
             if summary.maximumMilliseconds > thresholds.maximumLatencyMilliseconds {
-                failures.append("\(condition) \(name) max \(summary.maximumMilliseconds) ms > 50 ms")
+                failures.append("\(condition) \(name) max \(summary.maximumMilliseconds) ms > \(thresholds.maximumLatencyMilliseconds) ms")
             }
             if summary.maximumGapMilliseconds > thresholds.maximumLatencyMilliseconds {
-                failures.append("\(condition) \(name) stall \(summary.maximumGapMilliseconds) ms > 50 ms")
+                failures.append("\(condition) \(name) stall \(summary.maximumGapMilliseconds) ms > \(thresholds.maximumLatencyMilliseconds) ms")
             }
+        }
+        if let share = report.realtimeShare, share < thresholds.minimumRealtimeShare {
+            failures.append(String(format: "%@ realtime lane carried %.0f%% of pointer frames (< %.0f%%)",
+                condition, share * 100, thresholds.minimumRealtimeShare * 100))
         }
         return ConditionReport(
             name: condition,
             wire: report.wire,
             visible: report.visible,
             passed: failures.isEmpty,
-            failures: failures
+            failures: failures,
+            realtimeShare: report.realtimeShare
         )
     }
 
@@ -551,12 +573,13 @@ final class SimulationOrchestrator {
     private func wait(
         timeout: TimeInterval,
         description: String,
+        pollInterval: TimeInterval = 0.05,
         predicate: () throws -> Bool
     ) throws {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
             if try predicate() { return }
-            Thread.sleep(forTimeInterval: 0.05)
+            Thread.sleep(forTimeInterval: pollInterval)
         }
         throw SimulationFailure("Timed out waiting for \(description)")
     }
@@ -597,13 +620,14 @@ final class SimulationOrchestrator {
         return try SimulationPorts(
             control: next(socketType: SOCK_STREAM),
             realtime: next(socketType: SOCK_DGRAM),
+            pointer: next(socketType: SOCK_DGRAM),
             files: next(socketType: SOCK_STREAM),
             clipboard: next(socketType: SOCK_STREAM)
         )
     }
 
     private static func portValues(_ ports: SimulationPorts) -> [UInt16] {
-        [ports.control, ports.realtime, ports.files, ports.clipboard]
+        [ports.control, ports.realtime, ports.pointer, ports.files, ports.clipboard]
     }
 
     private static func availablePort(socketType: Int32) throws -> UInt16 {

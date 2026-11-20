@@ -51,6 +51,51 @@ struct ClipboardFeatureBaselineTests {
         await fixture.coordinator.stop()
     }
 
+    /// Regression (build 46): with a second clipboard-capable peer online (a
+    /// Linux receiver), an idle workspace refresh restarted the coordinator,
+    /// cleared its destination, and the resolver had no unambiguous choice, so
+    /// both Macs stopped dialing and rejected each other's clipboard channel.
+    @Test
+    func routeSurvivesRefreshWhileAnotherCompatiblePeerIsOnline() async {
+        let fixture = Fixture()
+        defer { fixture.cleanUp() }
+        let linux = DeviceDescriptor(id: DeviceID(), name: "Linux receiver",
+                                     capabilities: [.clipboardTextV1], platform: .linux)
+        fixture.workspace.updateDevice(linux)
+        // A control session with the Mac peer establishes the route.
+        await fixture.refresh(connected: [fixture.peer.id],
+                              session: .init(phase: .controlling, peerID: fixture.peer.id))
+        #expect(fixture.transport.desiredPeer == fixture.peer.id)
+        // The session ends and the Linux receiver comes online: still the Mac.
+        await fixture.refresh(connected: [fixture.peer.id, linux.id])
+        #expect(fixture.transport.desiredPeer == fixture.peer.id)
+        // A workspace update (presence, addresses, displays) restarts the
+        // coordinator; the established route must survive it.
+        fixture.peer.name = "Peer with new presence"
+        fixture.workspace.updateDevice(fixture.peer)
+        await fixture.refresh(connected: [fixture.peer.id, linux.id])
+        #expect(fixture.transport.startCount == 2)
+        #expect(fixture.model.activeDestinationID == fixture.peer.id)
+        #expect(fixture.transport.desiredPeer == fixture.peer.id)
+        await fixture.coordinator.stop()
+    }
+
+    @Test
+    func rememberedRouteIsDroppedWhenItsPeerLeavesTheWorkspace() async {
+        let fixture = Fixture()
+        defer { fixture.cleanUp() }
+        let linux = DeviceDescriptor(id: DeviceID(), name: "Linux receiver",
+                                     capabilities: [.clipboardTextV1], platform: .linux)
+        fixture.workspace.updateDevice(linux)
+        await fixture.refresh(connected: [fixture.peer.id],
+                              session: .init(phase: .controlling, peerID: fixture.peer.id))
+        fixture.workspace.devices.removeAll { $0.id == fixture.peer.id }
+        await fixture.refresh(connected: [linux.id])
+        #expect(fixture.model.activeDestinationID == linux.id, "The only remaining candidate takes over")
+        #expect(fixture.transport.desiredPeer == linux.id)
+        await fixture.coordinator.stop()
+    }
+
     @Test
     func leavingWorkspaceClearsDestination() async {
         let fixture = Fixture()
@@ -87,8 +132,12 @@ private final class Fixture {
     }
 
     func refresh() async {
-        await model.refreshContext(.init(workspace: workspace, connectedDeviceIDs: [peer.id],
-            controllerID: local.id, controlSession: .idle, workspaceKeyRevision: revision), localDevice: local)
+        await refresh(connected: [peer.id])
+    }
+
+    func refresh(connected: Set<DeviceID>, session: ControlSessionSnapshot = .idle) async {
+        await model.refreshContext(.init(workspace: workspace, connectedDeviceIDs: connected,
+            controllerID: local.id, controlSession: session, workspaceKeyRevision: revision), localDevice: local)
     }
 
     func rotateKey() { revision += 1; trust.rotate() }

@@ -648,14 +648,10 @@ final class ApplicationTests: XCTestCase {
         )
         XCTAssertTrue(accepted)
 
-        for _ in 0..<500 where clock.pendingSleepCount == 0 {
-            await Task.yield()
-        }
+        await yieldWhile { clock.pendingSleepCount == 0 }
         XCTAssertGreaterThanOrEqual(clock.pendingSleepCount, 1)
         clock.advance(by: 4_000_000_000)
-        for _ in 0..<500 where clock.pendingSleepCount == 0 {
-            await Task.yield()
-        }
+        await yieldWhile { clock.pendingSleepCount == 0 }
         XCTAssertGreaterThanOrEqual(clock.pendingSleepCount, 1)
 
         guard case let .receiving(_, source, session) = await coordinator.currentState() else {
@@ -1503,8 +1499,8 @@ final class ApplicationTests: XCTestCase {
             absoluteY: 10
         ))
         await coordinator.flushPendingInput()
-        for _ in 0..<100 {
-            if await coordinator.currentState() == .idle { break }
+        let idleDeadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while ContinuousClock.now < idleDeadline, await coordinator.currentState() != .idle {
             await Task.yield()
         }
 
@@ -1544,14 +1540,14 @@ final class ApplicationTests: XCTestCase {
         ))
 
         let flush = Task { await coordinator.flushPendingInput() }
-        for _ in 0..<500 where !clock.hasPendingSleep(
+        await yieldWhile { !clock.hasPendingSleep(
             for: ControlSessionCoordinator.reliablePointerTimeout
-        ) { await Task.yield() }
+        ) }
         XCTAssertTrue(clock.hasPendingSleep(for: ControlSessionCoordinator.reliablePointerTimeout))
         clock.advance(by: ControlSessionCoordinator.realtimeProgressTimeoutNanos)
         await flush.value
-        for _ in 0..<100 {
-            if await coordinator.currentState() == .idle { break }
+        let idleDeadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while ContinuousClock.now < idleDeadline, await coordinator.currentState() != .idle {
             await Task.yield()
         }
 
@@ -1596,7 +1592,7 @@ final class ApplicationTests: XCTestCase {
             ))
             await coordinator.flushPendingInput()
         }
-        for _ in 0..<100 where transport.realtimeFrames.isEmpty { await Task.yield() }
+        await yieldWhile { transport.realtimeFrames.isEmpty }
         let probe = try XCTUnwrap(transport.realtimeFrames.last)
         let acknowledged = await coordinator.receiveRealtimePointerProgress(
             .init(
@@ -1607,7 +1603,7 @@ final class ApplicationTests: XCTestCase {
             from: remote
         )
         XCTAssertTrue(acknowledged)
-        for _ in 0..<100 where clock.pendingSleepCount < 3 { await Task.yield() }
+        await yieldWhile { clock.pendingSleepCount < 3 }
         XCTAssertGreaterThanOrEqual(clock.pendingSleepCount, 3)
         clock.advance(by: ControlSessionCoordinator.realtimeProgressTimeoutNanos)
         await delivery.value
@@ -1678,8 +1674,8 @@ final class ApplicationTests: XCTestCase {
             ))
             await coordinator.flushPendingInput()
         }
-        for _ in 0..<100 where transport.realtimeFrames.isEmpty { await Task.yield() }
-        for _ in 0..<100 where clock.pendingSleepCount < 3 { await Task.yield() }
+        await yieldWhile { transport.realtimeFrames.isEmpty }
+        await yieldWhile { clock.pendingSleepCount < 3 }
         clock.advance(by: ControlSessionCoordinator.realtimeProgressTimeoutNanos)
         await delivery.value
 
@@ -1736,8 +1732,8 @@ final class ApplicationTests: XCTestCase {
             ))
             await coordinator.flushPendingInput()
         }
-        for _ in 0..<100 where transport.realtimeFrames.isEmpty { await Task.yield() }
-        for _ in 0..<100 where clock.pendingSleepCount < 3 { await Task.yield() }
+        await yieldWhile { transport.realtimeFrames.isEmpty }
+        await yieldWhile { clock.pendingSleepCount < 3 }
         clock.advance(by: ControlSessionCoordinator.realtimeProgressTimeoutNanos)
         await delivery.value
 
@@ -1861,12 +1857,10 @@ final class ApplicationTests: XCTestCase {
             )
         }
         let sessionID = try await activationSessionID(in: transport)
-        for _ in 0..<500 where !transport.controlMessages.contains(where: {
+        await yieldWhile { !transport.controlMessages.contains(where: {
             guard case let .heartbeat(heartbeatSessionID, _) = $0 else { return false }
             return heartbeatSessionID == sessionID
-        }) {
-            await Task.yield()
-        }
+        }) }
         XCTAssertTrue(transport.controlMessages.contains(where: {
             guard case let .heartbeat(heartbeatSessionID, _) = $0 else { return false }
             return heartbeatSessionID == sessionID
@@ -2018,7 +2012,7 @@ final class ApplicationTests: XCTestCase {
             )
         }
         let sessionID = try await activationSessionID(in: transport)
-        for _ in 0..<500 where clock.pendingSleepCount == 0 { await Task.yield() }
+        await yieldWhile { clock.pendingSleepCount == 0 }
         XCTAssertGreaterThanOrEqual(clock.pendingSleepCount, 1)
         clock.advance(by: 1_000_000_000)
 
@@ -2067,7 +2061,7 @@ final class ApplicationTests: XCTestCase {
             )
         }
         let sessionID = try await activationSessionID(in: transport)
-        for _ in 0..<500 where clock.pendingSleepCount == 0 { await Task.yield() }
+        await yieldWhile { clock.pendingSleepCount == 0 }
         clock.advance(by: 2_000_000_000)
 
         let acknowledged = await coordinator.receiveActivationResult(
