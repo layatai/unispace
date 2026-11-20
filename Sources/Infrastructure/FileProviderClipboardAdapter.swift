@@ -1,5 +1,5 @@
 import AppKit
-import FileProvider
+@preconcurrency import FileProvider
 import Foundation
 import UniSpaceApplication
 import UniSpaceDomain
