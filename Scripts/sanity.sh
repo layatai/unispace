@@ -50,6 +50,8 @@ regression_tests=(
   # Idle cross-machine copy/paste with offline peers in the workspace.
   "UniSpaceInfrastructureTests/ClipboardRegressionTests"
   "UniSpaceApplicationTests/ContinuityDestinationResolverTests"
+  # Clipboard route survives coordinator restarts with a second peer online (build 46).
+  "UniSpaceAppTests/ClipboardFeatureBaselineTests"
   # Realtime progress and activation under scheduler load (former CI flakes).
   "UniSpaceApplicationTests/ApplicationTests/testRealtimeProgressKeepsSessionAliveWhenReliableProbeDeliveryStalls"
   "UniSpaceApplicationTests/ApplicationTests/testAcknowledgedActivationBuffersInputUntilPeerAccepts"
