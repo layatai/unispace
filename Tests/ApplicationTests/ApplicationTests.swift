@@ -2192,7 +2192,10 @@ final class ApplicationTests: XCTestCase {
 }
 
 private func activationSessionID(in transport: TransportSpy) async throws -> SessionID {
-    for _ in 0..<500 {
+    // Deadline rather than a yield count: loaded CI runners can need far more
+    // than 500 yields before the activation task sends its first message.
+    let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+    while ContinuousClock.now < deadline {
         if let sessionID = transport.controlMessages.compactMap({ message -> SessionID? in
             guard case let .activate(activation) = message else { return nil }
             return activation.sessionID
