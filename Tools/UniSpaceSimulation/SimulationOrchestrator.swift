@@ -288,7 +288,18 @@ final class SimulationOrchestrator {
             }
             let elapsed = Double(DispatchTime.now().uptimeNanoseconds - started) / 1_000_000
             if elapsed > thresholds.clipboardMilliseconds {
-                failures.append("Clipboard delivery took \(elapsed) ms")
+                let source = (try? self.nodeA.command("clipboardTiming").values) ?? [:]
+                let destination = (try? self.nodeB.command("clipboardTiming").values) ?? [:]
+                func stage(_ from: UInt64?, _ to: UInt64?) -> String {
+                    guard let from, let to, to >= from else { return "?" }
+                    return String(format: "%.1f", Double(to - from) / 1_000_000)
+                }
+                let observed = source["observedNanos"].flatMap { UInt64($0) }
+                let applyStart = destination["applyStartNanos"].flatMap { UInt64($0) }
+                let applyEnd = destination["applyEndNanos"].flatMap { UInt64($0) }
+                failures.append("Clipboard delivery took \(elapsed) ms (source poll \(stage(started, observed)) ms, "
+                    + "transfer \(stage(observed, applyStart)) ms, destination write \(stage(applyStart, applyEnd)) ms, "
+                    + "read-back \(stage(applyEnd, DispatchTime.now().uptimeNanoseconds)) ms)")
             }
         }
 

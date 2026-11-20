@@ -22,6 +22,7 @@ actor SimulationNodeRuntime {
     private let controlLatencyActivity = ControlLatencyActivity()
     private var peerEventsTask: Task<Void, Never>?
     private var realtimeInputTask: Task<Void, Never>?
+    private let timedClipboard: TimedClipboardService
     private var clipboardChurnTask: Task<Void, Never>?
     private var controlConnected = false
     private var stopping = false
@@ -76,7 +77,8 @@ actor SimulationNodeRuntime {
             listenerRetryDelays: [0.1, 0.2, 0.5]
         )
         pasteboard = await SimulationPasteboardBox(name: configuration.pasteboardName)
-        let clipboardService = await pasteboard.makeClipboardService()
+        let clipboardService = TimedClipboardService(base: await pasteboard.makeClipboardService())
+        timedClipboard = clipboardService
         clipboardCoordinator = ClipboardCoordinator(
             transport: clipboardTransport,
             clipboard: clipboardService
@@ -297,6 +299,8 @@ actor SimulationNodeRuntime {
             return ["value": stamped]
         case "clipboardRead":
             return ["value": await pasteboard.readClipboard() ?? ""]
+        case "clipboardTiming":
+            return timedClipboard.timing()
         case "clipboardChurnStart":
             startClipboardChurn()
             return [:]

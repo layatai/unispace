@@ -187,3 +187,49 @@ enum SimulationFiles {
         }
     }
 }
+
+/// Timestamps clipboard stages so a slow round trip can be attributed to the
+/// source poll, the network hop, or the destination pasteboard write.
+final class TimedClipboardService: ClipboardService, @unchecked Sendable {
+    private let base: ClipboardService
+    private let lock = NSLock()
+    // Lock-guarded so the node can read timings off the main actor.
+    nonisolated(unsafe) private var lastObservedNanos: UInt64?
+    nonisolated(unsafe) private var lastApplyStartNanos: UInt64?
+    nonisolated(unsafe) private var lastApplyEndNanos: UInt64?
+
+    nonisolated init(base: ClipboardService) { self.base = base }
+
+    func events() -> AsyncStream<ClipboardObservation> {
+        let upstream = base.events()
+        return AsyncStream { continuation in
+            let task = Task { [weak self] in
+                for await observation in upstream {
+                    self?.lock.withLock { self?.lastObservedNanos = DispatchTime.now().uptimeNanoseconds }
+                    continuation.yield(observation)
+                }
+                continuation.finish()
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    func stop() { base.stop() }
+
+    func apply(_ payload: ClipboardPayload) {
+        let start = DispatchTime.now().uptimeNanoseconds
+        base.apply(payload)
+        let end = DispatchTime.now().uptimeNanoseconds
+        lock.withLock { lastApplyStartNanos = start; lastApplyEndNanos = end }
+    }
+
+    nonisolated func timing() -> [String: String] {
+        lock.withLock {
+            [
+                "observedNanos": lastObservedNanos.map(String.init) ?? "",
+                "applyStartNanos": lastApplyStartNanos.map(String.init) ?? "",
+                "applyEndNanos": lastApplyEndNanos.map(String.init) ?? "",
+            ]
+        }
+    }
+}
