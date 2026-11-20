@@ -113,7 +113,9 @@ struct LossyTransportHarnessTests {
             let profile = LossyProfile(seed: 0x2545_F491_4F6C_DD1D, lossProbability: loss, reorderDelayProbability: 0.35,
                                        maxReorderSlots: 4, duplicateProbability: 0.1)
             let pipe = LossyPipe<RealtimePointerFrame>(profile: profile)
-            for index in 0..<frameCount { _ = pipe.feed(scripted(index)).emissions }
+            for index in 0..<frameCount {
+                for frame in pipe.feed(scripted(index)).emissions { _ = receiver.receive(frame, from: peer) }
+            }
             for frame in pipe.flush() { _ = receiver.receive(frame, from: peer) }
             let dispositions = pipe.dispositions
             // Lost moves need no retransmission: every delivered frame carries

@@ -70,7 +70,8 @@ struct ClipboardStreamGoldenVectorTests {
         let escape = ClipboardStreamSelection(epoch: selection.epoch, id: selection.id, generation: selection.generation,
             files: [.init(id: selection.files[0].id, name: "../escape", size: 1,
                           version: selection.files[0].version, contentType: selection.files[0].contentType)])
-        #expect(throws: ClipboardStreamFailure.invalidRequest) { try escape.validate(limits: .default) }
+        // Names go through the shared transfer filename validator.
+        #expect(throws: FileTransferProtocolError.invalidFilename("../escape")) { try escape.validate(limits: .default) }
     }
 
     private static func message(kind: Int, payload: [String: Any]) throws -> ClipboardStreamMessage {
