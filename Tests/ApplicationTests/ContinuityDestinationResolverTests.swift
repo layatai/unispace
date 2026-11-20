@@ -92,6 +92,41 @@ final class ContinuityDestinationResolverTests: XCTestCase {
         ), filePeer.id)
     }
 
+    /// Regression: the live workspace pairs two Macs with Linux and Windows
+    /// peers. While idle, offline peers must not hide the only connected Mac,
+    /// and peers without clipboard capabilities never count as candidates.
+    func testIdleMacKeepsClipboardRouteWhenOtherPairedPeersAreOfflineOrIncompatible() {
+        let local = device("00000000-0000-0000-0000-00000000000A")
+        let mac = device("00000000-0000-0000-0000-00000000000B")
+        let linux = device("00000000-0000-0000-0000-00000000000C")
+        let windows = DeviceDescriptor(
+            id: DeviceID(rawValue: UUID(uuidString: "00000000-0000-0000-0000-00000000000D")!),
+            name: "Windows",
+            capabilities: [.crossPlatformInputV2],
+            platform: .windows
+        )
+        let devices = [local, mac, linux, windows]
+        func resolve(connected: Set<DeviceID>, session: ControlSessionSnapshot = .idle) -> DeviceID? {
+            ContinuityDestinationResolver.resolve(
+                localDeviceID: local.id,
+                controllerID: nil,
+                controlSession: session,
+                devices: devices,
+                connectedDeviceIDs: connected,
+                requiredCapabilities: [.clipboardTextV1, .clipboardURLV1]
+            )
+        }
+
+        XCTAssertEqual(resolve(connected: [mac.id]), mac.id, "Offline peers must not block the only connected Mac")
+        XCTAssertEqual(resolve(connected: [mac.id, windows.id]), mac.id, "Incompatible peers never compete")
+        XCTAssertNil(resolve(connected: [mac.id, linux.id]), "Two idle candidates are ambiguous")
+        XCTAssertEqual(
+            resolve(connected: [mac.id, linux.id], session: .init(phase: .controlling, peerID: mac.id)),
+            mac.id,
+            "An active session disambiguates between connected candidates"
+        )
+    }
+
     private func device(_ uuid: String) -> DeviceDescriptor {
         DeviceDescriptor(
             id: DeviceID(rawValue: UUID(uuidString: uuid)!),

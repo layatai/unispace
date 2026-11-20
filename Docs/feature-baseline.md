@@ -18,6 +18,16 @@ simulated injector, or enabled toggle cannot establish live feature correctness.
 An unrun or incomplete check is `NOT_TESTED` or `INCONCLUSIVE`, never `PASS`.
 An observed failure remains `FAIL` even when other evidence is missing.
 
+## Quick sanity gate
+
+`bash Scripts/sanity.sh` is a 2–4 minute gate for day-to-day changes. It checks
+that the generated project matches `project.yml`, runs the pinned regression
+tests listed in the script (one per fixed bug), and runs a short two-process
+simulation. Add `--live --peer user@host --expected-build N` to also check that
+both Macs run the expected build and to run the clipboard and Finder probes
+below. It reports `PASS`, `FAIL`, or `NOT_TESTED` per check and exits non-zero
+on any `FAIL`. It does not replace the full baseline before shipping.
+
 ## Feature coverage and live acceptance
 
 | Feature | Automated baseline | Required live evidence |
