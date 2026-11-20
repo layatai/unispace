@@ -7,6 +7,7 @@ import UniSpaceInfrastructure
 @MainActor
 final class ClipboardViewModel: ObservableObject {
     private static let sharingPreferenceKey = "continuity.clipboardSharingEnabled"
+    private static let clipboardCapabilities: Set<DeviceCapability> = [.clipboardTextV1, .clipboardURLV1]
 
     @Published private(set) var connectedDeviceIDs = Set<DeviceID>()
     @Published private(set) var knownDevices: [DeviceDescriptor] = []
@@ -23,6 +24,10 @@ final class ClipboardViewModel: ObservableObject {
     private var configuredWorkspace: ContinuityWorkspaceConfiguration?
     private var cachedWorkspaceKey: (WorkspaceID, UInt64, Data)?
     private var reportedConfigurationFailureWorkspaceID: WorkspaceID?
+    /// Last clipboard route, kept across coordinator restarts (see refreshContext).
+    private var rememberedDestinationID: DeviceID?
+    /// Opt-in diagnostic sink; set when bound to the app model.
+    var diagnostic: ((String) -> Void)?
 
     init(
         defaults: UserDefaults = .standard,
@@ -65,6 +70,7 @@ final class ClipboardViewModel: ObservableObject {
 
     func bind(to appModel: AppModel) {
         guard bindingCancellable == nil else { return }
+        diagnostic = { [weak appModel] message in appModel?.recordDiagnostic(message) }
         startConnectionObservation()
         bindingCancellable = appModel.continuityContextPublisher
             .receive(on: RunLoop.main)
@@ -101,6 +107,7 @@ final class ClipboardViewModel: ObservableObject {
         reportedConfigurationFailureWorkspaceID = nil
         connectedDeviceIDs = []
         activeDestinationID = nil
+        rememberedDestinationID = nil
         knownDevices = []
         let coordinator = self.coordinator
         Task { await coordinator.stop() }
@@ -129,6 +136,7 @@ final class ClipboardViewModel: ObservableObject {
 
         guard let workspace = context.workspace else {
             reportedConfigurationFailureWorkspaceID = nil
+            rememberedDestinationID = nil
             if configuredWorkspace != nil {
                 configuredWorkspace = nil
                 activeDestinationID = nil
@@ -158,6 +166,7 @@ final class ClipboardViewModel: ObservableObject {
                 capabilities: [.clipboardTextV1, .clipboardURLV1]
             )
             if configuration != configuredWorkspace {
+                diagnostic?("Clipboard coordinator restart; workspace devices=\(workspace.devices.count)")
                 try await coordinator.start(
                     localDevice: configuration.localDevice,
                     workspace: configuration.workspace,
@@ -183,8 +192,22 @@ final class ClipboardViewModel: ObservableObject {
             localDeviceID: localDevice.id
         )
         let coordinatorDestination = await coordinator.automaticDestinationDeviceID()
-        let inferred = inferredFromApp ?? coordinatorDestination
+        // A coordinator restart forgets its route. With two compatible peers
+        // online the resolver has no idle choice, so fall back to the route this
+        // view model last used while that peer is still a compatible member;
+        // otherwise clipboard sharing silently stops until the next session.
+        let remembered = rememberedDestinationID.flatMap { id in
+            workspace.devices.contains {
+                $0.id == id && $0.id != localDevice.id &&
+                    !$0.capabilities.isDisjoint(with: Self.clipboardCapabilities)
+            } ? id : nil
+        }
+        let inferred = inferredFromApp ?? coordinatorDestination ?? remembered
+        rememberedDestinationID = inferred
         if activeDestinationID != inferred {
+            diagnostic?("Clipboard route \(activeDestinationID.map(\.description) ?? "none") -> "
+                + "\(inferred.map(\.description) ?? "none"); resolver=\(inferredFromApp.map(\.description) ?? "ambiguous"), "
+                + "connected=\(context.connectedDeviceIDs.count), remembered=\(remembered != nil)")
             activeDestinationID = inferred
         }
         // A workspace refresh restarts the coordinator and clears its route.

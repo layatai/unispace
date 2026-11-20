@@ -167,6 +167,7 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
 
     public var activeControlPort: NWEndpoint.Port? { lock.withLock { readyControlPort } }
     public var activeQUICPort: NWEndpoint.Port? { lock.withLock { readyQUICPort } }
+    public var activePointerPort: NWEndpoint.Port? { lock.withLock { authenticatedPointerTransport }?.activePort }
 
     public func start(localDevice: DeviceDescriptor, workspace: WorkspaceSnapshot, key: Data) async throws {
         try await start(localDevice: localDevice, workspace: workspace, workspaceKeys: [key])
@@ -275,10 +276,10 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
                 )))
             }
         }
+        // Macs advertise udpPointerV2 too: this lane is the Mac-to-Mac pointer
+        // fast path, not only the portable-receiver one.
         if enableRealtime,
-           workspace.devices.contains(where: {
-               $0.platform.isPortableReceiver && $0.capabilities.contains(.udpPointerV2)
-           }) {
+           workspace.devices.contains(where: { $0.id != localDevice.id && $0.capabilities.contains(.udpPointerV2) }) {
             do {
                 let pointerTransport = AuthenticatedPointerTransport(
                     listenPort: configuredPointerListenPort,
@@ -341,7 +342,10 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
             guard let self else { return }
             let lanes = self.lock.withLock { () -> (QUICRealtimeTransport?, AuthenticatedPointerTransport?, Bool) in
                 self.desiredRealtimePeerID = deviceID
-                let supportsUDP = deviceID.flatMap { self.knownPeers[$0] }?.capabilities.contains(.udpPointerV2) == true
+                // Only hand the peer to the UDP lane when that lane exists; otherwise
+                // QUIC must keep it, or the pointer has no realtime lane at all.
+                let supportsUDP = self.authenticatedPointerTransport != nil
+                    && deviceID.flatMap { self.knownPeers[$0] }?.capabilities.contains(.udpPointerV2) == true
                 return (self.realtimeTransport, self.authenticatedPointerTransport, supportsUDP)
             }
             let shouldDial = role == .dialer

@@ -1839,6 +1839,69 @@ final class InfrastructureTests: XCTestCase {
         transport.stop()
     }
 
+    func testMacPeersGetAuthenticatedPointerLaneWithoutPortableReceiver() async throws {
+        // Regression: the UDP lane only started for Linux/Windows receivers while
+        // Mac peers advertising udpPointerV2 were still routed away from QUIC,
+        // leaving Mac-to-Mac pointer motion with no realtime lane at all.
+        let workspaceID = WorkspaceID()
+        let key = PairingCryptoSession.randomData(count: 32)
+        let receiverID = DeviceID()
+        let controllerID = DeviceID()
+        let receiver = DeviceDescriptor(id: receiverID, name: "Receiver", capabilities: [.udpPointerV2], platform: .macOS)
+        let controller = DeviceDescriptor(id: controllerID, name: "Controller", capabilities: [.udpPointerV2], platform: .macOS)
+        let receiverTransport = NetworkPeerTransport(
+            listenPort: .any, directPort: .any, pointerListenPort: .any, directPointerPort: .any,
+            enableBonjour: false, enableQUIC: false
+        )
+        try await receiverTransport.start(
+            localDevice: receiver,
+            workspace: WorkspaceSnapshot(id: workspaceID, name: "Mac", localDeviceID: receiverID, devices: [receiver, controller]),
+            key: key
+        )
+        var receiverPointerPort: NWEndpoint.Port?
+        for _ in 0..<100 where receiverPointerPort == nil {
+            receiverPointerPort = receiverTransport.activePointerPort
+            if receiverPointerPort == nil { try await Task.sleep(for: .milliseconds(20)) }
+        }
+        let pointerPort = try XCTUnwrap(receiverPointerPort, "A Mac-only workspace must start the UDP pointer lane")
+        let received = expectation(description: "Mac receiver got a realtime pointer frame")
+        received.assertForOverFulfill = false
+        receiverTransport.setRealtimeInputHandler { source, _ in
+            if source == controllerID { received.fulfill() }
+        }
+        receiverTransport.setRealtimePeer(controllerID, role: .listener)
+
+        let routedReceiver = DeviceDescriptor(
+            id: receiverID, name: receiver.name, peerAddresses: [try PeerAddress("127.0.0.1")],
+            capabilities: [.udpPointerV2], platform: .macOS
+        )
+        let controllerTransport = NetworkPeerTransport(
+            listenPort: .any, directPort: .any, pointerListenPort: .any, directPointerPort: pointerPort,
+            enableBonjour: false, enableQUIC: false
+        )
+        try await controllerTransport.start(
+            localDevice: controller,
+            workspace: WorkspaceSnapshot(id: workspaceID, name: "Mac", localDeviceID: controllerID, devices: [controller, routedReceiver]),
+            key: key
+        )
+        controllerTransport.setRealtimePeer(receiverID, role: .dialer)
+        let epoch = ControllerEpoch(generation: 1, controllerID: controllerID)
+        var sent = false
+        for sequence in 0..<150 where !sent {
+            sent = try await controllerTransport.sendRealtime(RealtimePointerFrame(
+                workspaceID: workspaceID, sessionID: SessionID(), controllerID: controllerID, epoch: epoch,
+                generation: 1, sequence: UInt64(sequence), deltaX: 1, deltaY: 1,
+                cumulativeDeltaX: Double(sequence + 1), cumulativeDeltaY: Double(sequence + 1),
+                absoluteX: 0, absoluteY: 0, timestampNanos: 1
+            ), to: receiverID)
+            if !sent { try await Task.sleep(for: .milliseconds(20)) }
+        }
+        XCTAssertTrue(sent, "Mac-to-Mac realtime pointer frames must have a lane")
+        await fulfillment(of: [received], timeout: 3)
+        await controllerTransport.stop()
+        await receiverTransport.stop()
+    }
+
     func testAuthenticatedPointerLaneLetsMacControllerDialReceiver() async throws {
         let workspaceID = WorkspaceID()
         let key = PairingCryptoSession.randomData(count: 32)

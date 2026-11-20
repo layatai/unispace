@@ -460,6 +460,11 @@ final class AppModel: ObservableObject {
 
     var diagnosticLogURL: URL { diagnosticLog.fileURL }
 
+    /// Lets continuity view models add lines to the opt-in diagnostic log.
+    func recordDiagnostic(_ message: String) {
+        diagnosticLog.record(message)
+    }
+
     func connect(_ first: DisplayEndpoint, to second: DisplayEndpoint) {
         guard var workspace else { return }
         workspace.topology.connect(first, to: second)
