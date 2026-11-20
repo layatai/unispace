@@ -281,7 +281,9 @@ final class SimulationOrchestrator {
             let sent = try nodeA.command("clipboard", values: ["value": "simulation-clipboard"])
                 .values["value"] ?? ""
             let started = UInt64(sent.split(separator: "|").first ?? "0") ?? 0
-            try wait(timeout: 3, description: "clipboard delivery") {
+            // Poll finely: this wait is the latency measurement, and a 50 ms
+            // poll alone could add up to half of the 100 ms budget.
+            try wait(timeout: 3, description: "clipboard delivery", pollInterval: 0.005) {
                 try self.nodeB.command("clipboardRead").values["value"] == sent
             }
             let elapsed = Double(DispatchTime.now().uptimeNanoseconds - started) / 1_000_000
@@ -551,12 +553,13 @@ final class SimulationOrchestrator {
     private func wait(
         timeout: TimeInterval,
         description: String,
+        pollInterval: TimeInterval = 0.05,
         predicate: () throws -> Bool
     ) throws {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
             if try predicate() { return }
-            Thread.sleep(forTimeInterval: 0.05)
+            Thread.sleep(forTimeInterval: pollInterval)
         }
         throw SimulationFailure("Timed out waiting for \(description)")
     }
