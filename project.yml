@@ -1,6 +1,7 @@
 name: UniSpace
 options:
   minimumXcodeGenVersion: 2.46.0
+  xcodeVersion: "14.3"
   deploymentTarget:
     macOS: "14.0"
   createIntermediateGroups: true
