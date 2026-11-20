@@ -17,7 +17,7 @@ struct LossyTransportHarnessTests {
             emissions.append(contentsOf: pipe.flush())
             return (pipe.dispositions, emissions)
         }
-        let seed = 0x2545_F491_4F6C_DD1D
+        let seed: UInt64 = 0x2545_F491_4F6C_DD1D
         let first = channel(seed: seed)
         let second = channel(seed: seed)
         #expect(first.dispositions == second.dispositions)
@@ -174,8 +174,9 @@ final class LossyStreamPairFixture: Sendable {
         // Dropped requests must notify their requester across the pair, so the
         // receiver direction routes synthesized notices through the sender's
         // loopback, which is connected to the receiver coordinator.
+        let localID = local.id
         let reachReceiver: @Sendable (FileTransferEnvelope) async -> Void = { notice in
-            try? await senderLoopback.send(notice, to: local.id)
+            try? await senderLoopback.send(notice, to: localID)
         }
         sender = ClipboardStreamCoordinator(transport: LossyTransport(base: senderLoopback,
             profile: LossyProfile(seed: seed, lossProbability: lossProbability, reorderDelayProbability: 0.2,
