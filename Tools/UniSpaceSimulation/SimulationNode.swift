@@ -151,11 +151,13 @@ actor SimulationNodeRuntime {
         transport.setSessionEventHandler { event in
             if case let .input(_, frame) = event {
                 metrics.recordWire(timestampNanos: frame.timestampNanos, isPointer: Self.isPointer(frame.event))
+                if Self.isPointer(frame.event) { metrics.recordPointerLane(realtime: false) }
             }
             coordinator.enqueueIndependentEvent(event)
         }
         transport.setRealtimeInputHandler { source, frame in
             metrics.recordWire(timestampNanos: frame.timestampNanos, isPointer: true)
+            metrics.recordPointerLane(realtime: true)
             coordinator.handleIncomingRealtime(frame, from: source)
         }
         realtimeInputTask = Task.detached(
@@ -165,6 +167,7 @@ actor SimulationNodeRuntime {
                 guard !Task.isCancelled else { return }
                 if case let .realtimeInput(source, frame) = event {
                     metrics.recordWire(timestampNanos: frame.timestampNanos, isPointer: true)
+            metrics.recordPointerLane(realtime: true)
                     coordinator.handleIncomingRealtime(frame, from: source)
                 }
             }
@@ -256,6 +259,8 @@ actor SimulationNodeRuntime {
                     data: try SimulationJSON.encoder.encode(metrics.keyboardReport(condition)),
                     encoding: .utf8
                 )!,
+                "realtimePointerFrames": String(metrics.laneCounts(condition).realtime),
+                "reliablePointerFrames": String(metrics.laneCounts(condition).reliable),
             ]
         case "moveBatch":
             let count = Int(command.values["count"] ?? "1000") ?? 1_000
@@ -361,6 +366,7 @@ actor SimulationNodeRuntime {
                 timestampNanos: frame.timestampNanos,
                 isPointer: Self.isPointer(frame.event)
             )
+            if Self.isPointer(frame.event) { metrics.recordPointerLane(realtime: false) }
             await coordinator.handleIncoming(frame, from: source)
         case .realtimeInput:
             break

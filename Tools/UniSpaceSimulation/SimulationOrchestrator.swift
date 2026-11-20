@@ -164,7 +164,7 @@ final class SimulationOrchestrator {
     private let executableURL: URL
     private let samples: Int
     private let keepArtifacts: URL?
-    private let thresholds = SimulationThresholds.ci
+    private let thresholds = SimulationThresholds.current
     private let root: URL
     private let configA: URL
     private let configB: URL
@@ -381,7 +381,8 @@ final class SimulationOrchestrator {
             failures: failures,
             nodePIDs: nodePIDs,
             artifactDirectory: keepArtifacts?.path,
-            inputQueue: queue
+            inputQueue: queue,
+            thresholdProfile: thresholds.name
         )
         return report
     }
@@ -482,7 +483,7 @@ final class SimulationOrchestrator {
 
     private func measurePointer(
         condition: String
-    ) throws -> (wire: LatencySummary, visible: LatencySummary, keyboard: LatencySummary) {
+    ) throws -> (wire: LatencySummary, visible: LatencySummary, keyboard: LatencySummary, realtimeShare: Double?) {
         _ = try nodeB.command("beginMetrics", values: ["condition": "\(condition)-warmup"])
         _ = try nodeA.command("moveBatch", values: ["count": "100", "intervalMicros": "8333"])
         _ = try nodeB.command("beginMetrics", values: ["condition": condition])
@@ -508,7 +509,7 @@ final class SimulationOrchestrator {
     private func metrics(
         from node: SimulationProcessClient,
         condition: String
-    ) throws -> (wire: LatencySummary, visible: LatencySummary, keyboard: LatencySummary) {
+    ) throws -> (wire: LatencySummary, visible: LatencySummary, keyboard: LatencySummary, realtimeShare: Double?) {
         let response = try node.command("metrics", values: ["condition": condition])
         func decode(_ key: String) throws -> LatencySummary {
             guard let string = response.values[key], let data = string.data(using: .utf8) else {
@@ -516,12 +517,15 @@ final class SimulationOrchestrator {
             }
             return try SimulationJSON.decoder.decode(LatencySummary.self, from: data)
         }
-        return (try decode("wire"), try decode("visible"), try decode("keyboard"))
+        let realtime = response.values["realtimePointerFrames"].flatMap { Int($0) } ?? 0
+        let reliable = response.values["reliablePointerFrames"].flatMap { Int($0) } ?? 0
+        let share = realtime + reliable > 0 ? Double(realtime) / Double(realtime + reliable) : nil
+        return (try decode("wire"), try decode("visible"), try decode("keyboard"), share)
     }
 
     private func evaluate(
         condition: String,
-        report: (wire: LatencySummary, visible: LatencySummary, keyboard: LatencySummary),
+        report: (wire: LatencySummary, visible: LatencySummary, keyboard: LatencySummary, realtimeShare: Double?),
         idleP95: Double?
     ) -> ConditionReport {
         var failures: [String] = []
@@ -539,18 +543,23 @@ final class SimulationOrchestrator {
         }
         for (name, summary) in [("wire", report.wire), ("visible", report.visible)] {
             if summary.maximumMilliseconds > thresholds.maximumLatencyMilliseconds {
-                failures.append("\(condition) \(name) max \(summary.maximumMilliseconds) ms > 50 ms")
+                failures.append("\(condition) \(name) max \(summary.maximumMilliseconds) ms > \(thresholds.maximumLatencyMilliseconds) ms")
             }
             if summary.maximumGapMilliseconds > thresholds.maximumLatencyMilliseconds {
-                failures.append("\(condition) \(name) stall \(summary.maximumGapMilliseconds) ms > 50 ms")
+                failures.append("\(condition) \(name) stall \(summary.maximumGapMilliseconds) ms > \(thresholds.maximumLatencyMilliseconds) ms")
             }
+        }
+        if let share = report.realtimeShare, share < thresholds.minimumRealtimeShare {
+            failures.append(String(format: "%@ realtime lane carried %.0f%% of pointer frames (< %.0f%%)",
+                condition, share * 100, thresholds.minimumRealtimeShare * 100))
         }
         return ConditionReport(
             name: condition,
             wire: report.wire,
             visible: report.visible,
             passed: failures.isEmpty,
-            failures: failures
+            failures: failures,
+            realtimeShare: report.realtimeShare
         )
     }
 

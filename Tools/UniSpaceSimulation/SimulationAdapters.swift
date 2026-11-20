@@ -81,6 +81,8 @@ final class SimulationMetricsRecorder: @unchecked Sendable {
         var visibleSources: [UInt64] = []
         var visibleArrivals: [UInt64] = []
         var keyboardWire: [UInt64] = []
+        var realtimePointerFrames = 0
+        var reliablePointerFrames = 0
     }
 
     private let lock = NSLock()
@@ -107,6 +109,22 @@ final class SimulationMetricsRecorder: @unchecked Sendable {
                 bucket.keyboardWire.append(now - timestampNanos)
             }
             buckets[condition] = bucket
+        }
+    }
+
+    /// Counts which lane delivered a pointer frame (realtime vs reliable).
+    func recordPointerLane(realtime: Bool) {
+        lock.withLock {
+            var bucket = buckets[condition, default: Bucket()]
+            if realtime { bucket.realtimePointerFrames += 1 } else { bucket.reliablePointerFrames += 1 }
+            buckets[condition] = bucket
+        }
+    }
+
+    func laneCounts(_ condition: String) -> (realtime: Int, reliable: Int) {
+        lock.withLock {
+            let bucket = buckets[condition, default: Bucket()]
+            return (bucket.realtimePointerFrames, bucket.reliablePointerFrames)
         }
     }
 

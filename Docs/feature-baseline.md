@@ -28,6 +28,13 @@ both Macs run the expected build and to run the clipboard and Finder probes
 below. It reports `PASS`, `FAIL`, or `NOT_TESTED` per check and exits non-zero
 on any `FAIL`. It does not replace the full baseline before shipping.
 
+The two-process simulation has two threshold profiles. `strict` (default) is
+used locally and before release. CI sets `UNISPACE_SIM_PROFILE=hosted`, which
+widens the timing budgets for GitHub-hosted runners whose scheduler stalls the
+simulator for 60–80 ms. Both profiles require at least 90% of pointer frames on
+the realtime lane, a timing-independent check that fails whenever the fast lane
+is missing.
+
 ## Feature coverage and live acceptance
 
 | Feature | Automated baseline | Required live evidence |
