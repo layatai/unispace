@@ -9,3 +9,4 @@ xcuserdata/
 /Scripts/.ship.env
 /Linux/target/
 /Linux/ui/node_modules/
+.cairn/datasources.private.json

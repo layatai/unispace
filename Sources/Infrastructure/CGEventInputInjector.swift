@@ -7,12 +7,14 @@ public final class CGEventInputInjector: InputInjector, @unchecked Sendable {
     typealias DisplayBoundsProvider = @Sendable () -> [CGRect]
     typealias EventPoster = @Sendable (CGEvent) -> Void
     typealias CursorWarpHandler = @Sendable (CGPoint) -> Void
+    typealias DisplayWakeHandler = @Sendable () -> Void
 
     public var pointerPositionHandler: (@Sendable (Double, Double) -> Void)?
     private let lock = NSLock()
     private let displayBoundsProvider: DisplayBoundsProvider
     private let eventPoster: EventPoster
     private let cursorWarpHandler: CursorWarpHandler
+    private let displayWakeHandler: DisplayWakeHandler
     private var displayBounds: [CGRect]
     private var cursorPosition = CGPoint.zero
     private var flags = CGEventFlags()
@@ -24,19 +26,33 @@ public final class CGEventInputInjector: InputInjector, @unchecked Sendable {
             displayBoundsProvider: Self.activeDisplayBounds,
             initialCursorPosition: CGEvent(source: nil)?.location ?? .zero,
             eventPoster: { $0.post(tap: .cgSessionEventTap) },
-            cursorWarpHandler: { _ = CGWarpMouseCursorPosition($0) }
+            cursorWarpHandler: { _ = CGWarpMouseCursorPosition($0) },
+            displayWakeHandler: Self.wakeDisplay
         )
+    }
+
+    /// Wakes a display-sleeping Mac when a remote cursor arrives: `CGWarpMouseCursorPosition`
+    /// is not user activity, so the idle timer keeps running and the screen stays blank.
+    /// `caffeinate -u` is the documented simulate-user-activity path.
+    /// ponytail: caffeinate -u only; an IOPMAssertion is the upgrade if it proves unreliable.
+    private static func wakeDisplay() {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/caffeinate")
+        process.arguments = ["-u", "-t", "2"]
+        try? process.run()
     }
 
     init(
         displayBoundsProvider: @escaping DisplayBoundsProvider,
         initialCursorPosition: CGPoint = CGEvent(source: nil)?.location ?? .zero,
         eventPoster: @escaping EventPoster = { $0.post(tap: .cgSessionEventTap) },
-        cursorWarpHandler: @escaping CursorWarpHandler = { _ = CGWarpMouseCursorPosition($0) }
+        cursorWarpHandler: @escaping CursorWarpHandler = { _ = CGWarpMouseCursorPosition($0) },
+        displayWakeHandler: @escaping DisplayWakeHandler = CGEventInputInjector.wakeDisplay
     ) {
         self.displayBoundsProvider = displayBoundsProvider
         self.eventPoster = eventPoster
         self.cursorWarpHandler = cursorWarpHandler
+        self.displayWakeHandler = displayWakeHandler
         displayBounds = displayBoundsProvider()
         cursorPosition = initialCursorPosition
     }
@@ -62,6 +78,7 @@ public final class CGEventInputInjector: InputInjector, @unchecked Sendable {
         let activationPoint = cursorPosition
         lock.unlock()
         cursorWarpHandler(activationPoint)
+        displayWakeHandler()
     }
 
     public func inject(_ event: InputEvent) {
