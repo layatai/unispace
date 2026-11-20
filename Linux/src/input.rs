@@ -314,7 +314,12 @@ impl InputSink for UinputSink {
         edge: DisplayEdge,
         normalized_position: f64,
     ) -> Result<()> {
-        self.emit(&activation_events(width, height, edge, normalized_position))
+        // One SYN_REPORT per frame: batching all positions into a single
+        // frame collapses to its last value, so the nudge would never register.
+        for frame in activation_events(width, height, edge, normalized_position) {
+            self.emit(&frame)?;
+        }
+        Ok(())
     }
 
     fn inject(&mut self, event: &InputEvent) -> Result<()> {
@@ -403,6 +408,7 @@ impl InputSink for NullInputSink {
 /// back. A lone placement move is deduped/ignored by some compositors' idle
 /// trackers, leaving a blanked display unlit; registered motion resets the
 /// idle timer and wakes it. All nudge positions stay inside the display.
+/// Each returned frame must be emitted with its own `SYN_REPORT`.
 /// ponytail: uinput jiggle only; if a locked screensaver still ignores it,
 /// the upgrade is a dbus `SimulateUserActivity` poke in `receiver.rs`.
 pub fn activation_events(
@@ -410,7 +416,7 @@ pub fn activation_events(
     height: f64,
     edge: DisplayEdge,
     normalized_position: f64,
-) -> Vec<LinuxEvent> {
+) -> Vec<[LinuxEvent; 2]> {
     let position = normalized_position.clamp(0.0, 1.0);
     let (x, y) = match edge {
         DisplayEdge::Left => (1, (height * position).round() as i32),
@@ -430,19 +436,15 @@ pub fn activation_events(
         DisplayEdge::Top => (x, y + 1),
         DisplayEdge::Bottom => (x, (y - 1).max(1)),
     };
-    [
-        (x, y),
-        (nx, ny),
-        (x, y),
-    ]
-    .iter()
-    .flat_map(|&(x, y)| {
-        [
-            LinuxEvent::new(EventType::ABSOLUTE.0, AbsoluteAxisCode::ABS_X.0, x),
-            LinuxEvent::new(EventType::ABSOLUTE.0, AbsoluteAxisCode::ABS_Y.0, y),
-        ]
-    })
-    .collect()
+    [(x, y), (nx, ny), (x, y)]
+        .iter()
+        .map(|&(x, y)| {
+            [
+                LinuxEvent::new(EventType::ABSOLUTE.0, AbsoluteAxisCode::ABS_X.0, x),
+                LinuxEvent::new(EventType::ABSOLUTE.0, AbsoluteAxisCode::ABS_Y.0, y),
+            ]
+        })
+        .collect()
 }
 
 fn hid_to_linux(usage: u16) -> Option<KeyCode> {
@@ -508,14 +510,17 @@ mod tests {
     use super::*;
     #[test]
     fn activation_places_nudges_and_returns() {
-        let coords = |events: &[LinuxEvent]| {
-            events
+        let coords = |frames: &[[LinuxEvent; 2]]| {
+            frames
                 .iter()
+                .flatten()
                 .filter(|event| event.event_type() == EventType::ABSOLUTE)
                 .map(|event| (event.code(), event.value()))
                 .collect::<Vec<_>>()
         };
         let left = activation_events(1920.0, 1080.0, DisplayEdge::Left, 0.5);
+        // Place, nudge, return: three separate frames.
+        assert_eq!(left.len(), 3);
         assert_eq!(
             coords(&left),
             [
@@ -528,14 +533,8 @@ mod tests {
             ]
         );
         let bottom = activation_events(1920.0, 1080.0, DisplayEdge::Bottom, 0.25);
-        assert_eq!(
-            coords(&bottom)[5],
-            (AbsoluteAxisCode::ABS_Y.0, 1078)
-        );
-        assert_eq!(
-            coords(&bottom)[3],
-            (AbsoluteAxisCode::ABS_Y.0, 1077)
-        );
+        assert_eq!(coords(&bottom)[5], (AbsoluteAxisCode::ABS_Y.0, 1078));
+        assert_eq!(coords(&bottom)[3], (AbsoluteAxisCode::ABS_Y.0, 1077));
         // Nudge stays clamped for tiny displays.
         let tiny = activation_events(2.0, 2.0, DisplayEdge::Right, 0.5);
         assert!(coords(&tiny).iter().all(|&(_, value)| value >= 0));
