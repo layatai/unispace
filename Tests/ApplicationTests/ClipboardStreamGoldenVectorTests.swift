@@ -44,7 +44,8 @@ struct ClipboardStreamGoldenVectorTests {
     @Test func rangeVectorIsByteStableAcrossDecodeAndReencode() throws {
         let file = try GoldenVectorFile.load()
         let vector = try #require(file.vectors.first { $0.name == "range-with-data-byte-exact" })
-        let frame = try #require(Data(hexEncoded: try #require(vector.frameHex)))
+        let frameHex = try #require(vector.frameHex)
+        let frame = try #require(Data(hexEncoded: frameHex))
         guard case let .range(range) = try ClipboardStreamCodec.decode(frame) else {
             Issue.record("range vector did not decode to a range message")
             return
@@ -60,8 +61,8 @@ struct ClipboardStreamGoldenVectorTests {
     @Test func selectionValidationAcceptsTheAnnounceAndRejectsPathEscapes() throws {
         let file = try GoldenVectorFile.load()
         let vector = try #require(file.vectors.first { $0.name == "announce-selection" })
-        guard case let .announce(selection) = try Self.message(kind: vector.kind,
-                                                               payload: try #require(vector.payload)) else {
+        let payload = try #require(vector.payload)
+        guard case let .announce(selection) = try Self.message(kind: vector.kind, payload: payload) else {
             Issue.record("announce vector did not build an announce message")
             return
         }
