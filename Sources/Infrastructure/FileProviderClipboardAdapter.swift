@@ -11,11 +11,19 @@ public final class FileProviderClipboardAdapter: ClipboardVirtualFileAdapter {
     public var availabilityChanged: (@MainActor @Sendable (String?) -> Void)?
     public var onDownload: (@Sendable (ClipboardProviderFile, URL, @Sendable @escaping (UInt64, UInt64) async -> Void) async throws -> Void)?
     private let pasteboard: NSPasteboard
-    private var files: [String: ClipboardProviderFile] = [:]
+    /// Internal for tests; published files keyed by provider item ID.
+    var files: [String: ClipboardProviderFile] = [:]
+    private let storageRoot: () throws -> URL
     private var jobs: [UUID: Task<Void, Never>] = [:]
     private var scanner: Task<Void, Never>?
     private var ownedChangeCount: Int?
-    public init(pasteboard: NSPasteboard = .general) { self.pasteboard = pasteboard }
+    public convenience init(pasteboard: NSPasteboard = .general) {
+        self.init(pasteboard: pasteboard, storageRoot: { try ClipboardProviderStorage.root })
+    }
+    /// Tests point the bridge at a temporary directory instead of the app group.
+    init(pasteboard: NSPasteboard, storageRoot: @escaping () throws -> URL) {
+        self.pasteboard = pasteboard; self.storageRoot = storageRoot
+    }
     public func prepare() async throws {
         try ClipboardProviderStorage.prepare()
         try await NSFileProviderManager.add(Self.domain)
@@ -76,7 +84,7 @@ public final class FileProviderClipboardAdapter: ClipboardVirtualFileAdapter {
     }
     private func persistManifest() throws {
         try ClipboardProviderStorage.write(ClipboardProviderManifest(files: Array(files.values)),
-            to: ClipboardProviderStorage.root.appendingPathComponent("manifest.json"))
+            to: storageRoot().appendingPathComponent("manifest.json"))
     }
     private func startScanner() {
         guard scanner == nil else { return }
@@ -87,8 +95,8 @@ public final class FileProviderClipboardAdapter: ClipboardVirtualFileAdapter {
             }
         }
     }
-    private func scan() {
-        guard let root = try? ClipboardProviderStorage.root,
+    func scan() {
+        guard let root = try? storageRoot(),
               let requests = try? FileManager.default.contentsOfDirectory(at: root.appendingPathComponent("requests"), includingPropertiesForKeys: nil) else { return }
         for url in requests where url.pathExtension == "json" {
             guard let bytes = try? Data(contentsOf: url), let request = try? JSONDecoder().decode(ClipboardProviderFetch.self, from: bytes),
@@ -116,6 +124,6 @@ public final class FileProviderClipboardAdapter: ClipboardVirtualFileAdapter {
         }
     }
     private func respond(_ value: ClipboardProviderResult) throws {
-        try ClipboardProviderStorage.write(value, to: ClipboardProviderStorage.root.appendingPathComponent("responses/\(value.id.uuidString).json"))
+        try ClipboardProviderStorage.write(value, to: storageRoot().appendingPathComponent("responses/\(value.id.uuidString).json"))
     }
 }

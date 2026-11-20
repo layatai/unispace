@@ -139,6 +139,7 @@ targets:
     - target: UniSpaceDomain
     - target: UniSpaceApplication
     - target: UniSpaceInfrastructure
+    - target: UniSpaceClipboardProviderShared
     - target: UniSpaceSimulation
     settings:
       base:
