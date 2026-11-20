@@ -38,6 +38,11 @@ jobs:
             CODE_SIGNING_ALLOWED=NO 2>&1 | tee .build/test-results/transfer-qos.log
 
       - name: Run complete non-UI suite
+        env:
+          # Hosted runners stall the simulator's main threads for 60-80 ms;
+          # use the wider timing budgets. The realtime-lane share stays strict.
+          # Local and pre-release runs keep the strict profile.
+          UNISPACE_SIM_PROFILE: hosted
         run: |
           set -o pipefail
           ./Scripts/test.sh --unit 2>&1 | tee .build/test-results/full-unit.log

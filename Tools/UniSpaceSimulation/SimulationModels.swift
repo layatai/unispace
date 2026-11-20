@@ -3,6 +3,8 @@ import Foundation
 struct SimulationPorts: Codable, Sendable {
     let control: UInt16
     let realtime: UInt16
+    /// Authenticated UDP pointer lane; it must not share the realtime port.
+    let pointer: UInt16
     let files: UInt16
     let clipboard: UInt16
 }
@@ -90,6 +92,7 @@ struct ConditionReport: Codable, Sendable {
     let visible: LatencySummary
     let passed: Bool
     let failures: [String]
+    var realtimeShare: Double? = nil
 }
 
 struct SimulationStepReport: Codable, Sendable {
@@ -106,6 +109,7 @@ struct SimulationReport: Codable, Sendable {
     let nodePIDs: [Int32]
     let artifactDirectory: String?
     var inputQueue: [String: UInt64]? = nil
+    var thresholdProfile: String? = nil
 }
 
 struct SimulationThresholds: Sendable {
@@ -117,8 +121,13 @@ struct SimulationThresholds: Sendable {
     let activationMilliseconds: Double
     let clipboardMilliseconds: Double
     let reconnectMilliseconds: Double
+    /// Share of pointer frames that must arrive on the realtime lane. Timing
+    /// independent, so it catches a missing fast lane on any runner.
+    let minimumRealtimeShare: Double
+    let name: String
 
-    static let ci = Self(
+    /// Local and pre-release runs on developer Macs.
+    static let strict = Self(
         idleP95Milliseconds: 35,
         keyboardP95Milliseconds: 25,
         maximumLatencyMilliseconds: 50,
@@ -126,8 +135,31 @@ struct SimulationThresholds: Sendable {
         loadedP95DeltaMilliseconds: 5,
         activationMilliseconds: 250,
         clipboardMilliseconds: 100,
-        reconnectMilliseconds: 5_000
+        reconnectMilliseconds: 5_000,
+        minimumRealtimeShare: 0.9,
+        name: "strict"
     )
+
+    /// Shared GitHub-hosted macOS runners, whose scheduler stalls starve the
+    /// simulator's main threads for 60-80 ms regardless of the code under test.
+    /// Wider timing budgets; the realtime-lane share stays as strict.
+    static let hosted = Self(
+        idleP95Milliseconds: 60,
+        keyboardP95Milliseconds: 50,
+        maximumLatencyMilliseconds: 150,
+        loadedP95Factor: 1.5,
+        loadedP95DeltaMilliseconds: 15,
+        activationMilliseconds: 500,
+        clipboardMilliseconds: 300,
+        reconnectMilliseconds: 10_000,
+        minimumRealtimeShare: 0.9,
+        name: "hosted"
+    )
+
+    /// `UNISPACE_SIM_PROFILE=hosted` selects the hosted-runner budgets.
+    static var current: Self {
+        ProcessInfo.processInfo.environment["UNISPACE_SIM_PROFILE"] == "hosted" ? .hosted : .strict
+    }
 }
 
 struct SimulationFailure: LocalizedError {
