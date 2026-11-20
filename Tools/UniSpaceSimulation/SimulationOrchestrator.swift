@@ -597,13 +597,14 @@ final class SimulationOrchestrator {
         return try SimulationPorts(
             control: next(socketType: SOCK_STREAM),
             realtime: next(socketType: SOCK_DGRAM),
+            pointer: next(socketType: SOCK_DGRAM),
             files: next(socketType: SOCK_STREAM),
             clipboard: next(socketType: SOCK_STREAM)
         )
     }
 
     private static func portValues(_ ports: SimulationPorts) -> [UInt16] {
-        [ports.control, ports.realtime, ports.files, ports.clipboard]
+        [ports.control, ports.realtime, ports.pointer, ports.files, ports.clipboard]
     }
 
     private static func availablePort(socketType: Int32) throws -> UInt16 {

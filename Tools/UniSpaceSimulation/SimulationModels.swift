@@ -3,6 +3,8 @@ import Foundation
 struct SimulationPorts: Codable, Sendable {
     let control: UInt16
     let realtime: UInt16
+    /// Authenticated UDP pointer lane; it must not share the realtime port.
+    let pointer: UInt16
     let files: UInt16
     let clipboard: UInt16
 }
