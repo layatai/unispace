@@ -43,6 +43,7 @@ public actor FileTransferCoordinator {
     private let sourceProvider: any FileSourceProvider
     private let pasteboard: any FilePasteboard
     private let limits: FileTransferLimits
+    private let clipboardStreams: ClipboardStreamCoordinator?
 
     private let stream: AsyncStream<FileTransferCoordinatorEvent>
     private let continuation: AsyncStream<FileTransferCoordinatorEvent>.Continuation
@@ -65,13 +66,15 @@ public actor FileTransferCoordinator {
         store: any TransferStore,
         sourceProvider: any FileSourceProvider,
         pasteboard: any FilePasteboard,
-        limits: FileTransferLimits = .default
+        limits: FileTransferLimits = .default,
+        clipboardStreams: ClipboardStreamCoordinator? = nil
     ) {
         self.transport = transport
         self.store = store
         self.sourceProvider = sourceProvider
         self.pasteboard = pasteboard
         self.limits = limits
+        self.clipboardStreams = clipboardStreams
         var captured: AsyncStream<FileTransferCoordinatorEvent>.Continuation?
         stream = AsyncStream(bufferingPolicy: .bufferingNewest(128)) { captured = $0 }
         continuation = captured!
@@ -109,6 +112,7 @@ public actor FileTransferCoordinator {
         lastPasteboardChangeCount = nil
         pendingPasteboardSelection = nil
 
+        await clipboardStreams?.start(localDevice: localDevice, workspace: workspace)
         await store.removeExpired(now: Date(), limits: limits)
         try await recoverTransfers()
         startTransportObservationIfNeeded()
@@ -118,6 +122,7 @@ public actor FileTransferCoordinator {
 
     public func stop() async {
         started = false
+        await clipboardStreams?.stop()
         transferTasks.values.forEach { $0.cancel() }
         transferTasks.removeAll()
         transferTaskTokens.removeAll()
@@ -157,11 +162,13 @@ public actor FileTransferCoordinator {
         guard deviceID != localDevice?.id else {
             guard automaticDestination != nil else { return }
             automaticDestination = nil
+            await clipboardStreams?.setDestination(nil)
             transport.setDesiredPeer(nil)
             return
         }
         guard automaticDestination != deviceID else { return }
         automaticDestination = deviceID
+        await clipboardStreams?.setDestination(deviceID)
         transport.setDesiredPeer(deviceID)
         await offerPendingPasteboardSelectionIfPossible()
     }
@@ -329,6 +336,10 @@ public actor FileTransferCoordinator {
         guard started,
               selection.changeCount != lastPasteboardChangeCount else { return }
         lastPasteboardChangeCount = selection.changeCount
+        if let clipboardStreams {
+            try? await clipboardStreams.copied(selection.urls)
+            return
+        }
         pendingPasteboardSelection = selection
         await offerPendingPasteboardSelectionIfPossible()
     }
@@ -359,11 +370,13 @@ public actor FileTransferCoordinator {
         guard started else { return }
         switch event {
         case let .connected(deviceID):
+            await clipboardStreams?.connection(deviceID, active: true)
             connectedPeers.insert(deviceID)
             yield(.connections(connectedPeers))
             await resumeTransfers(with: deviceID)
             await offerPendingPasteboardSelectionIfPossible()
         case let .disconnected(deviceID):
+            await clipboardStreams?.connection(deviceID, active: false)
             connectedPeers.remove(deviceID)
             yield(.connections(connectedPeers))
             await pauseTransfers(with: deviceID)
@@ -391,6 +404,7 @@ public actor FileTransferCoordinator {
 
     private func handle(_ message: FileTransferMessage, from peer: DeviceID) async throws {
         switch message {
+        case let .clipboardStream(value): await clipboardStreams?.receive(value, from: peer)
         case let .offer(offer):
             try await receiveOffer(offer, from: peer)
         case let .request(request):
@@ -957,6 +971,7 @@ public actor FileTransferCoordinator {
 
     private func transferID(in message: FileTransferMessage) -> TransferID? {
         switch message {
+        case .clipboardStream: nil
         case let .offer(value): value.manifest.transferID
         case let .request(value): value.transferID
         case let .chunk(value): value.transferID

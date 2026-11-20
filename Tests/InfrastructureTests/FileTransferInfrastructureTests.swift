@@ -243,6 +243,36 @@ final class FileTransferInfrastructureTests: XCTestCase {
     }
 
     @MainActor
+    func testIncomingFileClipboardOwnershipWithdrawsTheOldLocalSelection() async throws {
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
+        defer { pasteboard.releaseGlobally() }
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let local = directory.appendingPathComponent("local.txt")
+        try Data("local".utf8).write(to: local)
+        let files = SystemFilePasteboard(pasteboard: pasteboard, pollingInterval: .seconds(60))
+        let events = files.events()
+        pasteboard.clearContents()
+        XCTAssertTrue(pasteboard.writeObjects([local as NSURL]))
+        files.pollNowForTesting()
+        let copied = await firstValue(from: events, timeout: .seconds(1))
+        XCTAssertEqual(copied?.urls, [local.standardizedFileURL])
+
+        let incoming = NSPasteboardItem()
+        XCTAssertTrue(incoming.setString(local.absoluteString, forType: .fileURL))
+        XCTAssertTrue(incoming.setString(UUID().uuidString, forType: SystemFilePasteboard.originType))
+        pasteboard.clearContents()
+        XCTAssertTrue(pasteboard.writeObjects([incoming]))
+        files.pollNowForTesting()
+        let withdrawn = await firstValue(from: events, timeout: .seconds(1))
+        XCTAssertEqual(withdrawn?.urls, [])
+        XCTAssertEqual(withdrawn?.changeCount, pasteboard.changeCount)
+        files.pollNowForTesting()
+        let duplicate = await firstValue(from: events, timeout: .milliseconds(100))
+        XCTAssertNil(duplicate)
+    }
+
+    @MainActor
     func testSharedPasteboardRoutesTextAndFinderFilesWithoutCrossConsumption() async throws {
         let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
         defer { pasteboard.releaseGlobally() }
@@ -268,6 +298,11 @@ final class FileTransferInfrastructureTests: XCTestCase {
         XCTAssertEqual(text?.representations, [
             ClipboardRepresentation(kind: .plainText, value: "shared continuity text")
         ])
+        // Replacing file clipboard ownership with text must withdraw any old
+        // deferred selection, while keeping text out of the file transfer path.
+        let withdrawal = await firstValue(from: fileEvents, timeout: .seconds(1))
+        XCTAssertEqual(withdrawal?.urls, [])
+        XCTAssertEqual(withdrawal?.changeCount, pasteboard.changeCount)
 
         let directory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }

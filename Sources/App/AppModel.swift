@@ -185,6 +185,7 @@ final class AppModel: ObservableObject {
                 .controlResilienceV1,
                 .workspacePresenceV1,
                 .fileTransferV1,
+                .fileClipboardStreamV2,
                 .clipboardTextV1,
                 .clipboardURLV1,
             ],

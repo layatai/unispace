@@ -94,12 +94,14 @@ public final class SystemFilePasteboard: FilePasteboard {
         // new Finder copy would immediately offer the same files back to the peer.
         if items.contains(where: { $0.string(forType: Self.originType) != nil }) {
             lastObservedChangeCount = changeCount
+            continuation.yield(PasteboardFileSelection(changeCount: changeCount, urls: []))
             return
         }
 
         // Do not interpret a plain-text `file://` string as a Finder file copy.
         guard items.contains(where: { $0.types.contains(.fileURL) }) else {
             lastObservedChangeCount = changeCount
+            continuation.yield(PasteboardFileSelection(changeCount: changeCount, urls: []))
             return
         }
 

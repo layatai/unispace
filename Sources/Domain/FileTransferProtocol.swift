@@ -22,6 +22,7 @@ public struct TransferEntryID: UUIDIdentifier, Comparable {
 
 public extension DeviceCapability {
     static let fileTransferV1 = Self(rawValue: "file-transfer-v1")
+    static let fileClipboardStreamV2 = Self(rawValue: "file-clipboard-stream-v2")
 }
 
 public struct FileTransferLimits: Codable, Equatable, Sendable {
@@ -209,29 +210,7 @@ public struct TransferManifestEntry: Codable, Equatable, Identifiable, Sendable 
 
     @discardableResult
     public func validated(limits: FileTransferLimits = .default) throws -> Self {
-        let normalized = filename.precomposedStringWithCanonicalMapping
-        let invalidScalars = CharacterSet.controlCharacters
-            .union(.illegalCharacters)
-            .union(CharacterSet(charactersIn: "<>:\"|?*"))
-        let basename = filename.split(separator: ".", maxSplits: 1).first.map(String.init) ?? filename
-        let reservedWindowsNames: Set<String> = [
-            "CON", "PRN", "AUX", "NUL",
-            "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
-            "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
-        ]
-        guard filename == normalized,
-              !filename.isEmpty,
-              filename != ".",
-              filename != "..",
-              !filename.hasSuffix("."),
-              !filename.hasSuffix(" "),
-              filename.utf8.count <= limits.maximumFilenameBytes,
-              filename.rangeOfCharacter(from: invalidScalars) == nil,
-              !filename.contains("/"),
-              !filename.contains("\\"),
-              !reservedWindowsNames.contains(basename.uppercased()) else {
-            throw FileTransferProtocolError.invalidFilename(filename)
-        }
+        try TransferFilename.validate(filename, limits: limits)
         guard sha256.count == 32 else {
             throw FileTransferProtocolError.invalidDigest(id)
         }
@@ -454,6 +433,7 @@ public struct TransferFailure: Codable, Equatable, Sendable {
 }
 
 public enum FileTransferMessage: Codable, Equatable, Sendable {
+    case clipboardStream(ClipboardStreamMessage)
     case offer(TransferOffer)
     case request(TransferRequest)
     case chunk(TransferChunk)
@@ -502,5 +482,33 @@ public struct FileTransferEnvelope: Codable, Equatable, Sendable {
             throw FileTransferProtocolError.peerMismatch
         }
         return self
+    }
+}
+
+public enum TransferFilename {
+    public static func validate(_ filename: String, limits: FileTransferLimits = .default) throws {
+        let normalized = filename.precomposedStringWithCanonicalMapping
+        let invalidScalars = CharacterSet.controlCharacters
+            .union(.illegalCharacters)
+            .union(CharacterSet(charactersIn: "<>:\"|?*"))
+        let basename = filename.split(separator: ".", maxSplits: 1).first.map(String.init) ?? filename
+        let reservedWindowsNames: Set<String> = [
+            "CON", "PRN", "AUX", "NUL",
+            "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+            "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+        ]
+        guard filename == normalized,
+              !filename.isEmpty,
+              filename != ".",
+              filename != "..",
+              !filename.hasSuffix("."),
+              !filename.hasSuffix(" "),
+              filename.utf8.count <= limits.maximumFilenameBytes,
+              filename.rangeOfCharacter(from: invalidScalars) == nil,
+              !filename.contains("/"),
+              !filename.contains("\\"),
+              !reservedWindowsNames.contains(basename.uppercased()) else {
+            throw FileTransferProtocolError.invalidFilename(filename)
+        }
     }
 }
