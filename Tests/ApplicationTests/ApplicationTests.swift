@@ -1499,8 +1499,8 @@ final class ApplicationTests: XCTestCase {
             absoluteY: 10
         ))
         await coordinator.flushPendingInput()
-        for _ in 0..<100 {
-            if await coordinator.currentState() == .idle { break }
+        let idleDeadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while ContinuousClock.now < idleDeadline, await coordinator.currentState() != .idle {
             await Task.yield()
         }
 
@@ -1546,8 +1546,8 @@ final class ApplicationTests: XCTestCase {
         XCTAssertTrue(clock.hasPendingSleep(for: ControlSessionCoordinator.reliablePointerTimeout))
         clock.advance(by: ControlSessionCoordinator.realtimeProgressTimeoutNanos)
         await flush.value
-        for _ in 0..<100 {
-            if await coordinator.currentState() == .idle { break }
+        let idleDeadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while ContinuousClock.now < idleDeadline, await coordinator.currentState() != .idle {
             await Task.yield()
         }
 

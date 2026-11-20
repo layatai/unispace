@@ -341,8 +341,10 @@ final class ControlResilienceTests: XCTestCase {
         XCTAssertFalse(sender.send(move))
     }
 
-    private func eventually(_ condition: () async -> Bool) async -> Bool {
-        for _ in 0..<2_000 {
+    // Wall-clock deadline: a fixed yield count ran out on loaded CI runners.
+    private func eventually(timeout: Duration = .seconds(5), _ condition: () async -> Bool) async -> Bool {
+        let deadline = ContinuousClock.now.advanced(by: timeout)
+        while ContinuousClock.now < deadline {
             if await condition() { return true }
             await Task.yield()
         }

@@ -503,15 +503,17 @@ final class CoordinatorStateCoverageTests: XCTestCase {
         )
     }
 
+    // Wall-clock deadline: a fixed attempt count ran out on loaded CI runners.
     private func waitUntil(
-        attempts: Int = 500,
+        timeout: Duration = .seconds(5),
         condition: @escaping () async -> Bool
     ) async -> Bool {
-        for _ in 0..<attempts {
+        let deadline = ContinuousClock.now.advanced(by: timeout)
+        while ContinuousClock.now < deadline {
             if await condition() { return true }
             await Task.yield()
         }
-        return false
+        return await condition()
     }
 }
 
@@ -788,10 +790,7 @@ final class InputRecoveryTests: XCTestCase {
     }
 
     private func waitUntil(_ predicate: () -> Bool) async -> Bool {
-        for _ in 0..<1_000 {
-            if predicate() { return true }
-            await Task.yield()
-        }
+        await yieldWhile { !predicate() }
         return predicate()
     }
 }
