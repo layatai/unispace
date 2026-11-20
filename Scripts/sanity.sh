@@ -86,7 +86,8 @@ if xcodebuild test -project UniSpace.xcodeproj -scheme UniSpace \
     -destination 'platform=macOS,arch=arm64' CODE_SIGNING_ALLOWED=NO \
     -derivedDataPath .build/sanity/DerivedData "${only_testing[@]}" \
     > "$results_dir/regression-tests.log" 2>&1; then
-  passed=$(grep -cE "Test Case .*passed" "$results_dir/regression-tests.log")
+  # XCTest prints "Test Case ... passed"; Swift Testing prints "✔ Test name() passed".
+  passed=$(grep -cE "Test Case .*passed|✔ Test [^ ]+\(.*\) passed" "$results_dir/regression-tests.log")
   record PASS "regression tests" "$passed test cases"
 else
   failed=$(grep -E "Test Case .*failed|error: -\[| error: " "$results_dir/regression-tests.log" | head -3 | cut -c1-160)
