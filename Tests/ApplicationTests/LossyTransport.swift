@@ -152,6 +152,9 @@ private extension ClipboardStreamMessage {
     }
 }
 
+/// Generic types cannot hold static stored properties on older Swift toolchains.
+private let lossyTransportFlushDelayMilliseconds = 25
+
 /// Lossy/reordering decorator around any `FileTransferTransport` fake. Both
 /// directions of a paired simulation are wrapped separately, each with its own
 /// seed, so channel behavior never depends on wall-clock or network timing.
@@ -164,7 +167,6 @@ final class LossyTransport<Base: FileTransferTransport>: FileTransferTransport, 
     let failureNoticeRoute: (@Sendable (FileTransferEnvelope) async -> Void)?
     private let lock = NSLock()
     private var flushing = false
-    private static let flushDelayMilliseconds = 25
 
     init(base: Base, profile: LossyProfile,
          failureNoticeRoute: (@Sendable (FileTransferEnvelope) async -> Void)? = nil) {
@@ -213,7 +215,7 @@ final class LossyTransport<Base: FileTransferTransport>: FileTransferTransport, 
         }
         guard startFlush else { return }
         Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(Self.flushDelayMilliseconds))
+            try? await Task.sleep(for: .milliseconds(lossyTransportFlushDelayMilliseconds))
             guard let self else { return }
             while true {
                 let batch = self.pipe.flush()

@@ -34,7 +34,7 @@ final class QUICRealtimeTransport: @unchecked Sendable {
     // file/video traffic (protocol.md §Priority). Local socket option only —
     // no wire impact on older peers.
     private static func voiceClass(_ parameters: NWParameters) -> NWParameters {
-        parameters.serviceClass = .voice
+        parameters.serviceClass = .interactiveVoice
         return parameters
     }
 

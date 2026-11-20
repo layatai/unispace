@@ -1166,7 +1166,7 @@ public final class NetworkPeerTransport: PeerTransport, @unchecked Sendable {
         // available; WMM voice-classing queues it ahead of file/video traffic
         // (protocol.md §Priority). Local socket option only — no wire impact on
         // older peers.
-        parameters.serviceClass = .voice
+        parameters.serviceClass = .interactiveVoice
         return parameters
     }
 
