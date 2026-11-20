@@ -19,13 +19,25 @@ public final class FileProviderClipboardAdapter: ClipboardVirtualFileAdapter {
     public func prepare() async throws {
         try ClipboardProviderStorage.prepare()
         try await NSFileProviderManager.add(Self.domain)
-        let domains = try await NSFileProviderManager.domains()
-        guard domains.first(where: { $0.identifier == Self.domain.identifier })?.userEnabled == true else {
+        guard try await Self.isDomainUserEnabled(Self.domain.identifier) else {
             availabilityChanged?("Enable UniSpace’s File Provider in System Settings to paste remote files.")
             throw ClipboardStreamFailure.unsupported
         }
         availabilityChanged?(nil)
         startScanner()
+    }
+    /// Reduces the non-Sendable domain list to a Bool inside the callback so
+    /// nothing non-Sendable crosses back onto the main actor (Swift 6.1).
+    private nonisolated static func isDomainUserEnabled(_ identifier: NSFileProviderDomainIdentifier) async throws -> Bool {
+        try await withCheckedThrowingContinuation { continuation in
+            NSFileProviderManager.getDomainsWithCompletionHandler { domains, error in
+                if let error {
+                    continuation.resume(throwing: error)
+                } else {
+                    continuation.resume(returning: domains.contains { $0.identifier == identifier && $0.userEnabled })
+                }
+            }
+        }
     }
     public func publish(_ selection: ClipboardStreamSelection, from peer: DeviceID) async throws {
         try selection.validate()
