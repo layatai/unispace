@@ -13,6 +13,8 @@ public struct SystemPermissionService: PermissionService {
             CGPreflightPostEventAccess() ? .granted : .denied
         case .localNetwork:
             .unknown
+        case .screenRecording:
+            CGPreflightScreenCaptureAccess() ? .granted : .denied
         }
     }
 
@@ -25,6 +27,8 @@ public struct SystemPermissionService: PermissionService {
             CGRequestPostEventAccess()
         case .localNetwork:
             false
+        case .screenRecording:
+            CGRequestScreenCaptureAccess()
         }
     }
 }

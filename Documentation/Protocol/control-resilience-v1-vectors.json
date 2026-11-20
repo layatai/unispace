@@ -1,0 +1,88 @@
+[
+  {
+    "name": "progress",
+    "control": {
+      "version": 2,
+      "type": "inputProgress",
+      "payload": {
+        "sessionID": {
+          "rawValue": "22222222-2222-2222-2222-222222222222"
+        },
+        "sequence": 9
+      }
+    }
+  },
+  {
+    "name": "checkpoint",
+    "control": {
+      "version": 2,
+      "type": "pointerCheckpoint",
+      "payload": {
+        "checkpoint": {
+          "sessionID": {
+            "rawValue": "22222222-2222-2222-2222-222222222222"
+          },
+          "generation": 4,
+          "reliableSequence": 9,
+          "cumulativeDeltaX": 12.5,
+          "cumulativeDeltaY": -3
+        }
+      }
+    }
+  },
+  {
+    "name": "resume",
+    "control": {
+      "version": 2,
+      "type": "resume",
+      "payload": {
+        "resume": {
+          "previousSessionID": {
+            "rawValue": "11111111-1111-1111-1111-111111111111"
+          },
+          "sessionID": {
+            "rawValue": "22222222-2222-2222-2222-222222222222"
+          },
+          "epoch": {
+            "generation": 2,
+            "controllerID": {
+              "rawValue": "33333333-3333-3333-3333-333333333333"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "resumeAccepted",
+    "control": {
+      "version": 2,
+      "type": "resumeResult",
+      "payload": {
+        "previousSessionID": {
+          "rawValue": "11111111-1111-1111-1111-111111111111"
+        },
+        "sessionID": {
+          "rawValue": "22222222-2222-2222-2222-222222222222"
+        },
+        "accepted": true
+      }
+    }
+  },
+  {
+    "name": "resumeRejected",
+    "control": {
+      "version": 2,
+      "type": "resumeResult",
+      "payload": {
+        "previousSessionID": {
+          "rawValue": "11111111-1111-1111-1111-111111111111"
+        },
+        "sessionID": {
+          "rawValue": "22222222-2222-2222-2222-222222222222"
+        },
+        "accepted": false
+      }
+    }
+  }
+]

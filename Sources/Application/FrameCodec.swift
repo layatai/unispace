@@ -120,6 +120,9 @@ private struct PortableControlEnvelope: Codable {
         var normalizedPosition: Double? = nil
         var workspaceKey: Data? = nil
         var workspacePresence: WorkspacePresenceSnapshot? = nil
+        var previousSessionID: SessionID? = nil
+        var checkpoint: PointerCheckpoint? = nil
+        var resume: ControlSessionResume? = nil
     }
 
     init(_ envelope: ControlEnvelope) {
@@ -153,6 +156,18 @@ private struct PortableControlEnvelope: Codable {
                 generation: progress.generation,
                 sequence: progress.sequence
             )
+        case let .inputProgress(progress):
+            type = "inputProgress"
+            payload = Payload(sessionID: progress.sessionID, sequence: progress.sequence)
+        case let .pointerCheckpoint(checkpoint):
+            type = "pointerCheckpoint"
+            payload = Payload(checkpoint: checkpoint)
+        case let .resume(resume):
+            type = "resume"
+            payload = Payload(resume: resume)
+        case let .resumeResult(previousSessionID, sessionID, accepted):
+            type = "resumeResult"
+            payload = Payload(sessionID: sessionID, accepted: accepted, previousSessionID: previousSessionID)
         case let .boundaryCrossed(sessionID, displayID, edge, normalizedPosition):
             type = "boundaryCrossed"
             payload = Payload(
@@ -202,6 +217,15 @@ private struct PortableControlEnvelope: Codable {
                 generation: try required(payload.generation),
                 sequence: try required(payload.sequence)
             ))
+        case "inputProgress":
+            message = .inputProgress(.init(sessionID: try required(payload.sessionID), sequence: try required(payload.sequence)))
+        case "pointerCheckpoint":
+            message = .pointerCheckpoint(try required(payload.checkpoint))
+        case "resume":
+            message = .resume(try required(payload.resume))
+        case "resumeResult":
+            message = .resumeResult(previousSessionID: try required(payload.previousSessionID),
+                                    sessionID: try required(payload.sessionID), accepted: try required(payload.accepted))
         case "boundaryCrossed":
             message = .boundaryCrossed(
                 sessionID: try required(payload.sessionID),

@@ -12,6 +12,7 @@ final class RealtimePointerCaptureSender: @unchecked Sendable {
         var cumulativePointerY: Double
         var lastAcknowledgedSequence: UInt64?
         var lastAcknowledgementNanos: UInt64?
+        var unacknowledgedSinceNanos: UInt64?
         var isSuspended = false
     }
 
@@ -21,6 +22,7 @@ final class RealtimePointerCaptureSender: @unchecked Sendable {
     private let clock: MonotonicClock
     private let lock = NSLock()
     private var session: Session?
+    private var progressTimeoutNanos = ControlSessionCoordinator.realtimeProgressTimeoutNanos
 
     init(
         workspaceID: WorkspaceID,
@@ -55,8 +57,20 @@ final class RealtimePointerCaptureSender: @unchecked Sendable {
                 cumulativePointerX: cumulativePointerX,
                 cumulativePointerY: cumulativePointerY,
                 lastAcknowledgedSequence: acknowledgedSequence,
-                lastAcknowledgementNanos: acknowledgedAtNanos
+                lastAcknowledgementNanos: acknowledgedAtNanos,
+                unacknowledgedSinceNanos: acknowledgedSequence.map { $0 &+ 1 == sequence } == true
+                    ? nil : acknowledgedAtNanos
             )
+        }
+    }
+
+    func takeCheckpoint(reliableSequence: UInt64) -> PointerCheckpoint? {
+        lock.withLock {
+            guard let active = session else { return nil }
+            session = nil
+            return .init(sessionID: active.sessionID, generation: active.generation,
+                         reliableSequence: reliableSequence, cumulativeDeltaX: active.cumulativePointerX,
+                         cumulativeDeltaY: active.cumulativePointerY)
         }
     }
 
@@ -76,15 +90,19 @@ final class RealtimePointerCaptureSender: @unchecked Sendable {
         guard case let .pointerMove(deltaX, deltaY, absoluteX, absoluteY) = event else {
             return false
         }
-        let prepared = lock.withLock { () -> (RealtimePointerFrame, DeviceID)? in
-            guard var active = session, !active.isSuspended else { return nil }
-            if active.lastAcknowledgementNanos != nil {
+        return lock.withLock {
+            guard var active = session, !active.isSuspended else { return false }
+            // Idle time is not packet loss. Start the deadline only when there
+            // is movement outstanding, and never extend it just by sending.
+            if let unacknowledgedSince = active.unacknowledgedSinceNanos {
                 let now = clock.nowNanoseconds()
-                guard let acknowledgedAt = active.lastAcknowledgementNanos,
-                      now >= acknowledgedAt,
-                      now - acknowledgedAt <= ControlSessionCoordinator.realtimeProgressTimeoutNanos else {
-                    return nil
+                guard now >= unacknowledgedSince,
+                      now - unacknowledgedSince <= progressTimeoutNanos else {
+                    return false
                 }
+            }
+            if active.lastAcknowledgementNanos != nil, active.unacknowledgedSinceNanos == nil {
+                active.unacknowledgedSinceNanos = clock.nowNanoseconds()
             }
             active.cumulativePointerX += deltaX
             active.cumulativePointerY += deltaY
@@ -104,11 +122,10 @@ final class RealtimePointerCaptureSender: @unchecked Sendable {
                 timestampNanos: clock.nowNanoseconds()
             )
             active.sequence &+= 1
+            guard transport.sendRealtimeImmediately(frame, to: active.target) else { return false }
             session = active
-            return (frame, active.target)
+            return true
         }
-        guard let prepared else { return false }
-        return transport.sendRealtimeImmediately(prepared.0, to: prepared.1)
     }
 
     func acknowledge(_ progress: RealtimePointerProgress, from source: DeviceID) -> Bool {
@@ -124,8 +141,25 @@ final class RealtimePointerCaptureSender: @unchecked Sendable {
             }
             active.lastAcknowledgedSequence = progress.sequence
             active.lastAcknowledgementNanos = clock.nowNanoseconds()
+            active.unacknowledgedSinceNanos = progress.sequence &+ 1 == active.sequence
+                ? nil : active.lastAcknowledgementNanos
             session = active
             return true
+        }
+    }
+
+    func updateProgressTimeout(roundTripNanos: UInt64, jitterNanos: UInt64) {
+        lock.withLock {
+            let estimate = min(roundTripNanos, 1_000_000_000) + 4 * min(jitterNanos, 500_000_000) + 500_000_000
+            progressTimeoutNanos = min(3_000_000_000, max(ControlSessionCoordinator.realtimeProgressTimeoutNanos, estimate))
+        }
+    }
+
+    func hasExpiredOutstandingMotion() -> Bool {
+        lock.withLock {
+            guard let since = session?.unacknowledgedSinceNanos else { return false }
+            let now = clock.nowNanoseconds()
+            return now >= since && now - since > progressTimeoutNanos
         }
     }
 
@@ -134,7 +168,7 @@ final class RealtimePointerCaptureSender: @unchecked Sendable {
         return lock.withLock {
             guard let acknowledgedAt = session?.lastAcknowledgementNanos,
                   now >= acknowledgedAt else { return false }
-            return now - acknowledgedAt <= ControlSessionCoordinator.realtimeProgressTimeoutNanos
+            return now - acknowledgedAt <= progressTimeoutNanos
         }
     }
 

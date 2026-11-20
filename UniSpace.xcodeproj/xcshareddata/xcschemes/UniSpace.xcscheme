@@ -29,6 +29,20 @@
             buildForAnalyzing = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"
+               BlueprintIdentifier = "7688B4C3E33D623CC3F88C8F"
+               BuildableName = "UniSpaceAppTests.xctest"
+               BlueprintName = "UniSpaceAppTests"
+               ReferencedContainer = "container:UniSpace.xcodeproj">
+            </BuildableReference>
+         </BuildActionEntry>
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "NO"
+            buildForProfiling = "NO"
+            buildForArchiving = "NO"
+            buildForAnalyzing = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
                BlueprintIdentifier = "6BAE33DC4609458DCD50753E"
                BuildableName = "UniSpaceApplicationTests.xctest"
                BlueprintName = "UniSpaceApplicationTests"
@@ -140,6 +154,17 @@
                BlueprintIdentifier = "039350D04D5DC5574F78FB7F"
                BuildableName = "UniSpaceInfrastructureTests.xctest"
                BlueprintName = "UniSpaceInfrastructureTests"
+               ReferencedContainer = "container:UniSpace.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
+         <TestableReference
+            skipped = "NO"
+            parallelizable = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "7688B4C3E33D623CC3F88C8F"
+               BuildableName = "UniSpaceAppTests.xctest"
+               BlueprintName = "UniSpaceAppTests"
                ReferencedContainer = "container:UniSpace.xcodeproj">
             </BuildableReference>
          </TestableReference>

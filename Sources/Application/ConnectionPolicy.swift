@@ -53,6 +53,7 @@ public enum ControlSessionPhase: String, Sendable, Equatable {
     case activating
     case controlling
     case receiving
+    case recovering
 }
 
 public enum RealtimeConnectionRole: Sendable, Equatable {
@@ -78,6 +79,6 @@ public struct ControlSessionSnapshot: Sendable, Equatable {
     public static let idle = ControlSessionSnapshot(phase: .idle)
 
     public var protectsInputLatency: Bool {
-        phase == .activating || phase == .controlling || phase == .receiving
+        phase != .idle
     }
 }

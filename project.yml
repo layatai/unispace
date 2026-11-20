@@ -84,6 +84,8 @@ targets:
           - _unispace-xfer._tcp
           - _unispace-clip._tcp
           - _unispace-pair._tcp
+          - _unispace-win._tcp
+          - _unispace-vid._tcp
         NSLocalNetworkUsageDescription: UniSpace discovers and connects to trusted Macs, Linux PCs, and Windows PCs so you can control them and share clipboard data and files over your private network.
     entitlements:
       path: Resources/UniSpace.entitlements
@@ -132,6 +134,21 @@ targets:
     settings:
       base:
         GENERATE_INFOPLIST_FILE: true
+  UniSpaceAppTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - Tests/AppTests
+      - path: Sources/App
+        excludes:
+          - UniSpaceApp.swift
+    dependencies:
+      - target: UniSpaceDomain
+      - target: UniSpaceApplication
+      - target: UniSpaceInfrastructure
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: true
   UniSpaceUITests:
     type: bundle.ui-testing
     platform: macOS
@@ -150,6 +167,7 @@ schemes:
         UniSpaceApplicationTests: [test]
         UniSpaceInfrastructureTests: [test]
         UniSpaceSimulation: [build]
+        UniSpaceAppTests: [test]
         UniSpaceUITests: [test]
     test:
       gatherCoverageData: true
@@ -157,6 +175,7 @@ schemes:
         - UniSpaceDomainTests
         - UniSpaceApplicationTests
         - UniSpaceInfrastructureTests
+        - UniSpaceAppTests
         - UniSpaceUITests
   UniSpaceSimulation:
     build:

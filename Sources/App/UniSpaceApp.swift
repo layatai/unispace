@@ -7,6 +7,7 @@ struct UniSpaceApp: App {
     @StateObject private var model = AppModel()
     @StateObject private var transferModel = FileTransferViewModel()
     @StateObject private var clipboardModel = ClipboardViewModel()
+    @StateObject private var seamlessModel = SeamlessWindowViewModel()
     @State private var selection: WorkspaceView.Destination = .general
     @Environment(\.openWindow) private var openWindow
 
@@ -16,6 +17,7 @@ struct UniSpaceApp: App {
                 model: model,
                 clipboardModel: clipboardModel,
                 transferModel: transferModel,
+                seamlessModel: seamlessModel,
                 selection: $selection
             )
                 .frame(minWidth: 760, minHeight: 540)
@@ -24,6 +26,7 @@ struct UniSpaceApp: App {
                     model.refreshPermissions()
                     transferModel.bind(to: model)
                     clipboardModel.bind(to: model)
+                    seamlessModel.bind(to: model)
                 }
                 .onDisappear { DockIconVisibility.hideWhenNoVisibleWindows() }
         }
@@ -34,10 +37,13 @@ struct UniSpaceApp: App {
             CommandGroup(after: .appInfo) {
                 Button("Make This Mac Controller") { model.makeThisMacController() }
                     .disabled(model.workspace == nil || model.isLocalController)
-                Button("Stop Remote Control") { model.stopControlling() }
+                Button("Stop Remote Control") { model.stopControlling(); seamlessModel.returnHome() }
                     .keyboardShortcut(.escape, modifiers: [.control, .option, .command])
                     .disabled(model.workspace == nil)
                 Divider()
+                Button("Show Seamless Windows") { openSeamless() }
+                Button("Bring All Windows Home") { seamlessModel.returnHome() }
+                    .disabled(!seamlessModel.busy)
                 Button("Show Continuity") { openContinuity() }
                     .keyboardShortcut("k", modifiers: [.command, .shift])
                     .disabled(model.workspace == nil)
@@ -50,14 +56,59 @@ struct UniSpaceApp: App {
         MenuBarExtra {
             menuContent
         } label: {
-            Image(systemName: model.isLocalController ? "cursorarrow.motionlines" : "display")
+            Image(systemName: seamlessModel.busy ? "macwindow.on.rectangle"
+                : model.isLocalController ? "cursorarrow.motionlines" : "display")
         }
     }
 
     @ViewBuilder
     private var menuContent: some View {
         Text(model.workspace?.name ?? "UniSpace")
-        Text(model.statusMessage)
+        Text(seamlessModel.busy ? seamlessModel.status : model.statusMessage)
+
+        Divider()
+
+        Button("Seamless Windows…") { openSeamless() }
+        if seamlessModel.enabled {
+            Menu("Move Window to Mac") {
+                ForEach(seamlessModel.peers) { peer in
+                    Menu(peer.name) {
+                        ForEach(seamlessModel.windows, id: \.id) { window in
+                            Button("\(window.application) — \(window.title)") { seamlessModel.moveWindow(window, to: peer.id) }
+                        }
+                    }
+                }
+                Divider()
+                Button("Refresh Windows on This Mac") {
+                    Task { await seamlessModel.refreshWindows() }
+                }
+                .disabled(seamlessModel.loading)
+            }
+            .disabled(seamlessModel.busy)
+        }
+        Button("Bring All Windows Home") { seamlessModel.returnHome() }
+            .disabled(!seamlessModel.busy)
+
+        Menu("Move Window from Mac") {
+            ForEach(seamlessModel.peers) { peer in
+                ForEach(seamlessModel.remoteCatalogs[peer.id] ?? [], id: \.id) { window in
+                    Button("\(window.application) — \(window.title) — \(peer.name)") {
+                        seamlessModel.pullWindow(window, from: peer.id)
+                    }
+                    .disabled(seamlessModel.loadingRemoteWindows)
+                }
+            }
+            if seamlessModel.remoteCatalogs.values.allSatisfy({ $0.isEmpty }) {
+                Text(seamlessModel.loadingRemoteWindows ? "Loading windows…" :
+                    (seamlessModel.remoteCatalogError ?? "No remote windows available"))
+            }
+            Divider()
+            Button("Refresh Windows from All Macs") {
+                Task { await seamlessModel.refreshAllRemoteWindows() }
+            }
+            .disabled(seamlessModel.loadingRemoteWindows)
+        }
+        .disabled(!seamlessModel.enabled || seamlessModel.busy)
 
         Divider()
 
@@ -105,6 +156,10 @@ struct UniSpaceApp: App {
         openMainWindow(selecting: .transfers)
     }
 
+    private func openSeamless() {
+        openMainWindow(selecting: .seamless)
+    }
+
     private func openMainWindow(selecting destination: WorkspaceView.Destination) {
         selection = destination
         DockIconVisibility.show()
@@ -140,6 +195,15 @@ private final class UniSpaceApplicationDelegate: NSObject, NSApplicationDelegate
     @objc private func windowVisibilityDidChange(_ notification: Notification) {
         DockIconVisibility.hideWhenNoVisibleWindows()
     }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if let proxy = sender.windows.first(where: { $0.identifier?.rawValue == "seamless-proxy" }) {
+            proxy.deminiaturize(nil)
+            proxy.makeKeyAndOrderFront(nil)
+            return false
+        }
+        return true
+    }
 }
 
 @MainActor
@@ -151,8 +215,7 @@ private enum DockIconVisibility {
     static func hideWhenNoVisibleWindows() {
         DispatchQueue.main.async {
             let hasVisibleWindow = NSApplication.shared.windows.contains {
-                $0.isVisible
-                    && !$0.isMiniaturized
+                ($0.isVisible && !$0.isMiniaturized || $0.identifier?.rawValue == "seamless-proxy")
                     && $0.styleMask.contains(.titled)
                     && $0.level == .normal
             }
