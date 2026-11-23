@@ -375,11 +375,14 @@ public struct WorkspaceSnapshot: Codable, Equatable, Sendable {
     }
 
     /// Adds or refreshes a device the user explicitly paired, clearing any
-    /// earlier forget.
+    /// earlier forget. The admission is always recorded, even with no local
+    /// history, so it can supersede a removal this replica has not seen yet,
+    /// and it is stamped after any known change so a skewed clock cannot
+    /// leave a freshly paired device marked forgotten.
     public mutating func admit(_ device: DeviceDescriptor, stamp: UInt64 = DeviceMembershipChange.now()) {
-        if isForgotten(device.id) || membershipChanges.contains(where: { $0.deviceID == device.id }) {
-            record(DeviceMembershipChange(deviceID: device.id, removed: false, stamp: stamp))
-        }
+        let known = membershipChanges.first { $0.deviceID == device.id }?.stamp
+        let admissionStamp = known.map { max(stamp, $0 &+ 1) } ?? stamp
+        record(DeviceMembershipChange(deviceID: device.id, removed: false, stamp: admissionStamp))
         if let index = devices.firstIndex(where: { $0.id == device.id }) {
             devices[index] = device
         } else {

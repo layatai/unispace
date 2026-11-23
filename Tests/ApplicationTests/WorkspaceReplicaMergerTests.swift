@@ -132,6 +132,36 @@ final class WorkspaceReplicaMergerTests: XCTestCase {
         XCTAssertFalse(onPeer.isForgotten(fixture.forgottenID))
     }
 
+    func testRepairThroughReplicaThatMissedTheForgetSurvivesMerge() throws {
+        let fixture = ForgetFixture()
+        var forgetter = fixture.snapshot(localDeviceID: fixture.localID, devices: [fixture.local, fixture.peer, fixture.forgotten])
+        forgetter.forget(fixture.forgottenID, stamp: 1_000)
+        var pairingHost = fixture.snapshot(localDeviceID: fixture.peerID, devices: [fixture.local, fixture.peer])
+        pairingHost.admit(fixture.forgotten, stamp: 2_000)
+
+        let onForgetter = try XCTUnwrap(WorkspaceReplicaMerger.mergeSnapshot(forgetter, with: pairingHost))
+        let onHost = try XCTUnwrap(WorkspaceReplicaMerger.mergeSnapshot(pairingHost, with: forgetter))
+
+        XCTAssertTrue(onForgetter.devices.contains { $0.id == fixture.forgottenID })
+        XCTAssertTrue(onHost.devices.contains { $0.id == fixture.forgottenID })
+    }
+
+    func testRepairAdvancesPastRemovalStampedByFasterClock() throws {
+        let fixture = ForgetFixture()
+        var host = fixture.snapshot(localDeviceID: fixture.localID, devices: [fixture.local, fixture.peer])
+        host.record(DeviceMembershipChange(deviceID: fixture.forgottenID, removed: true, stamp: 9_000))
+
+        host.admit(fixture.forgotten, stamp: 2_000)
+
+        XCTAssertFalse(host.isForgotten(fixture.forgottenID))
+        XCTAssertTrue(host.devices.contains { $0.id == fixture.forgottenID })
+        let stale = fixture.snapshot(localDeviceID: fixture.peerID, devices: [fixture.local, fixture.peer])
+        var staleWithRemoval = stale
+        staleWithRemoval.record(DeviceMembershipChange(deviceID: fixture.forgottenID, removed: true, stamp: 9_000))
+        let merged = try XCTUnwrap(WorkspaceReplicaMerger.mergeSnapshot(host, with: staleWithRemoval))
+        XCTAssertTrue(merged.devices.contains { $0.id == fixture.forgottenID })
+    }
+
     func testSnapshotsWithoutMembershipChangesStillDecode() throws {
         let fixture = ForgetFixture()
         let snapshot = fixture.snapshot(localDeviceID: fixture.localID, devices: [fixture.local])
