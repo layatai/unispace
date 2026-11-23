@@ -13,6 +13,13 @@ final class FileTransferViewModel: ObservableObject {
     @Published private(set) var knownDevices: [DeviceDescriptor] = []
     @Published var selectedDestinationID: DeviceID?
     @Published var lastError: String?
+    /// Whether files copied on another device can be pasted here. `.unknown`
+    /// until the File Provider domain has been queried.
+    @Published private(set) var filePastingState: PermissionState = .unknown
+    /// The peer whose copied files are waiting because file pasting is off.
+    @Published private(set) var blockedFilesPeerID: DeviceID?
+    /// Opt-in diagnostic sink; set when bound to the app model.
+    var diagnostic: ((String) -> Void)?
 
     private let trustStore: KeychainTrustStore
     private let coordinator: FileTransferCoordinator
@@ -29,6 +36,7 @@ final class FileTransferViewModel: ObservableObject {
     private var cachedWorkspaceKey: (WorkspaceID, UInt64, Data)?
     private var reportedConfigurationFailureWorkspaceID: WorkspaceID?
     private var controlConnectedDeviceIDs = Set<DeviceID>()
+    private var activationCancellable: AnyCancellable?
 
     init(
         trustStore: KeychainTrustStore = KeychainTrustStore(),
@@ -69,8 +77,24 @@ final class FileTransferViewModel: ObservableObject {
             )
         }
 
-        nativeClipboardAdapter?.availabilityChanged = { [weak self] message in
-            self?.lastError = message
+        nativeClipboardAdapter?.enabledChanged = { [weak self] enabled in
+            guard let self else { return }
+            self.filePastingState = enabled ? .granted : .denied
+            if enabled { self.blockedFilesPeerID = nil }
+            self.diagnostic?("File pasting \(enabled ? "enabled" : "disabled"): UniSpace Clipboard File Provider domain")
+        }
+        nativeClipboardAdapter?.publishBlocked = { [weak self] peer in
+            guard let self else { return }
+            self.blockedFilesPeerID = peer
+            self.diagnostic?("Files from \(peer) not pasteable: UniSpace Clipboard File Provider is disabled")
+        }
+        if nativeClipboardAdapter != nil {
+            // Users enable the domain in System Settings, then come back.
+            activationCancellable = NotificationCenter.default
+                .publisher(for: NSApplication.didBecomeActiveNotification)
+                .sink { [weak self] _ in
+                    Task { @MainActor in await self?.refreshFilePasting() }
+                }
         }
 
         if ProcessInfo.processInfo.arguments.contains("--ui-testing-transfers") {
@@ -96,6 +120,19 @@ final class FileTransferViewModel: ObservableObject {
         eventTask?.cancel()
     }
 
+    var needsFilePasting: Bool { filePastingState == .denied }
+
+    func refreshFilePasting() async {
+        await nativeClipboardAdapter?.refreshAvailability()
+    }
+
+    /// File Provider domains are switched on under Login Items & Extensions;
+    /// there is no API to request it, so the best we can do is open the pane.
+    func openFilePastingSettings() {
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.LoginItems-Settings.extension") else { return }
+        NSWorkspace.shared.open(url)
+    }
+
     var activeTransferCount: Int {
         transfers.filter(\.isActive).count
     }
@@ -111,7 +148,9 @@ final class FileTransferViewModel: ObservableObject {
 
     func bind(to appModel: AppModel) {
         guard bindingCancellable == nil else { return }
+        diagnostic = { [weak appModel] message in appModel?.recordDiagnostic(message) }
         startEventObservation()
+        Task { await refreshFilePasting() }
         bindingCancellable = appModel.continuityContextPublisher
             .receive(on: RunLoop.main)
             .sink { [weak self, weak appModel] context in

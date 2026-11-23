@@ -90,6 +90,12 @@ struct WorkspaceView: View {
                     .frame(width: 7, height: 7)
                     .accessibilityLabel("Enabled")
             }
+            if destination == .transfers && transferModel.needsFilePasting {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                    .help("File pasting is off")
+                    .accessibilityLabel("File pasting is off")
+            }
         }
         .badge(destination == .devices ? model.devices.count : transferBadge(destination))
         .tag(destination)
@@ -127,7 +133,7 @@ struct WorkspaceView: View {
     private var detail: some View {
         switch selection {
         case .general:
-            GeneralView(model: model)
+            GeneralView(model: model, transferModel: transferModel)
         case .displays:
             DisplaysView(model: model)
         case .devices:
@@ -168,6 +174,7 @@ struct WorkspaceView: View {
 
 struct GeneralView: View {
     @ObservedObject var model: AppModel
+    @ObservedObject var transferModel: FileTransferViewModel
     @State private var isConfirmingLeave = false
 
     var body: some View {
@@ -275,6 +282,10 @@ struct GeneralView: View {
                     permission: .postEvents,
                     model: model
                 )
+                if transferModel.filePastingState != .unknown {
+                    Divider().padding(.leading, 44)
+                    FilePastingPermissionRow(model: transferModel)
+                }
             }
             .card(padding: 0)
 
@@ -397,8 +408,21 @@ struct PermissionRow: View {
     let title: String
     let detail: String
     let state: PermissionState
-    let permission: PermissionKind
-    @ObservedObject var model: AppModel
+    var allowTitle = "Allow…"
+    let allow: () -> Void
+    let openSettings: () -> Void
+
+    init(title: String, detail: String, state: PermissionState, permission: PermissionKind, model: AppModel) {
+        self.init(title: title, detail: detail, state: state,
+                  allow: { model.request(permission) },
+                  openSettings: { model.openSystemSettings(for: permission) })
+    }
+
+    init(title: String, detail: String, state: PermissionState, allowTitle: String = "Allow…",
+         allow: @escaping () -> Void, openSettings: @escaping () -> Void) {
+        self.title = title; self.detail = detail; self.state = state
+        self.allowTitle = allowTitle; self.allow = allow; self.openSettings = openSettings
+    }
 
     private var isGranted: Bool { state == .granted }
 
@@ -425,11 +449,9 @@ struct PermissionRow: View {
                 StatusPill(title: "Allowed", systemImage: "checkmark", tone: .positive)
             } else {
                 HStack(spacing: 8) {
-                    Button("Allow…") { model.request(permission) }
+                    Button(allowTitle, action: allow)
                         .buttonStyle(.borderedProminent)
-                    Button {
-                        model.openSystemSettings(for: permission)
-                    } label: {
+                    Button(action: openSettings) {
                         Image(systemName: "arrow.up.forward.app")
                     }
                     .buttonStyle(.borderless)
@@ -440,5 +462,25 @@ struct PermissionRow: View {
         .padding(14)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(title). \(isGranted ? "Allowed" : "Not allowed")")
+    }
+}
+
+/// File pasting depends on the UniSpace Clipboard File Provider, which macOS
+/// lets the user switch off. There is no prompt to request it, so both
+/// buttons lead to System Settings, and the state refreshes when UniSpace
+/// becomes active again.
+struct FilePastingPermissionRow: View {
+    @ObservedObject var model: FileTransferViewModel
+
+    var body: some View {
+        PermissionRow(
+            title: "File Pasting",
+            detail: "Lets you paste files copied on another device into Finder. In System Settings, "
+                + "scroll to Extensions, click File Providers and turn on UniSpace.",
+            state: model.filePastingState,
+            allowTitle: "Turn On…",
+            allow: model.openFilePastingSettings,
+            openSettings: model.openFilePastingSettings
+        )
     }
 }

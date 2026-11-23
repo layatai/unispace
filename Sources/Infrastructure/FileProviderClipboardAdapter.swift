@@ -8,7 +8,13 @@ import UniSpaceClipboardProviderShared
 @MainActor
 public final class FileProviderClipboardAdapter: ClipboardVirtualFileAdapter {
     public static let domain = NSFileProviderDomain(identifier: .init("clipboard-v2"), displayName: "UniSpace Clipboard")
-    public var availabilityChanged: (@MainActor @Sendable (String?) -> Void)?
+    /// Reports whether the user has the UniSpace Clipboard domain turned on.
+    /// macOS lets users disable a File Provider domain; while it is off,
+    /// files copied on a peer cannot be pasted on this Mac.
+    public var enabledChanged: (@MainActor @Sendable (Bool) -> Void)?
+    /// Called when a peer offered files that could not be published because
+    /// the domain is disabled, so the UI can say whose files are waiting.
+    public var publishBlocked: (@MainActor @Sendable (DeviceID) -> Void)?
     public var onDownload: (@Sendable (ClipboardProviderFile, URL, @Sendable @escaping (UInt64, UInt64) async -> Void) async throws -> Void)?
     private let pasteboard: NSPasteboard
     /// Internal for tests; published files keyed by provider item ID.
@@ -17,21 +23,36 @@ public final class FileProviderClipboardAdapter: ClipboardVirtualFileAdapter {
     private var jobs: [UUID: Task<Void, Never>] = [:]
     private var scanner: Task<Void, Never>?
     private var ownedChangeCount: Int?
+    private let domainEnabled: @MainActor @Sendable () async throws -> Bool
+    public private(set) var isEnabled: Bool?
     public convenience init(pasteboard: NSPasteboard = .general) {
-        self.init(pasteboard: pasteboard, storageRoot: { try ClipboardProviderStorage.root })
+        self.init(pasteboard: pasteboard, storageRoot: { try ClipboardProviderStorage.root }, domainEnabled: {
+            try ClipboardProviderStorage.prepare()
+            // Adding an existing domain is a no-op; it keeps UniSpace listed
+            // under File Providers in System Settings so the user can enable it.
+            try await NSFileProviderManager.add(Self.domain)
+            return try await Self.isDomainUserEnabled(Self.domain.identifier)
+        })
     }
-    /// Tests point the bridge at a temporary directory instead of the app group.
-    init(pasteboard: NSPasteboard, storageRoot: @escaping () throws -> URL) {
-        self.pasteboard = pasteboard; self.storageRoot = storageRoot
+    /// Tests point the bridge at a temporary directory instead of the app group
+    /// and replace the system domain query.
+    init(pasteboard: NSPasteboard, storageRoot: @escaping () throws -> URL,
+         domainEnabled: @escaping @MainActor @Sendable () async throws -> Bool = { true }) {
+        self.pasteboard = pasteboard; self.storageRoot = storageRoot; self.domainEnabled = domainEnabled
+    }
+    /// Queries the domain state and reports changes. Failures count as disabled
+    /// because remote files cannot be pasted either way.
+    @discardableResult
+    public func refreshAvailability() async -> Bool {
+        let enabled = (try? await domainEnabled()) ?? false
+        if isEnabled != enabled {
+            isEnabled = enabled
+            enabledChanged?(enabled)
+        }
+        return enabled
     }
     public func prepare() async throws {
-        try ClipboardProviderStorage.prepare()
-        try await NSFileProviderManager.add(Self.domain)
-        guard try await Self.isDomainUserEnabled(Self.domain.identifier) else {
-            availabilityChanged?("Enable UniSpace’s File Provider in System Settings to paste remote files.")
-            throw ClipboardStreamFailure.unsupported
-        }
-        availabilityChanged?(nil)
+        guard await refreshAvailability() else { throw ClipboardStreamFailure.unsupported }
         startScanner()
     }
     /// Reduces the non-Sendable domain list to a Bool inside the callback so
@@ -49,7 +70,12 @@ public final class FileProviderClipboardAdapter: ClipboardVirtualFileAdapter {
     }
     public func publish(_ selection: ClipboardStreamSelection, from peer: DeviceID) async throws {
         try selection.validate()
-        try await prepare()
+        do {
+            try await prepare()
+        } catch {
+            publishBlocked?(peer)
+            throw error
+        }
         guard let manager = NSFileProviderManager(for: Self.domain) else { throw ClipboardStreamFailure.unsupported }
         let additions = selection.files.map { file in
             ClipboardProviderFile(peerID: peer.rawValue, selectionID: selection.id, fileID: file.id,
