@@ -131,6 +131,13 @@ struct UniSpaceApp: App {
                 Divider()
                 Text("Permissions needed")
             }
+            if transferModel.needsFilePasting {
+                Divider()
+                Button("Turn On File Pasting…") {
+                    transferModel.openFilePastingSettings()
+                    openTransferCenter()
+                }
+            }
         }
 
         Divider()

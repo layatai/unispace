@@ -35,6 +35,10 @@ struct TransferCenterView: View {
                 detail: "Encrypted, resumable file delivery between paired Macs, Linux PCs, and Windows PCs."
             )
 
+            if model.needsFilePasting {
+                filePastingBanner
+            }
+
             HStack(spacing: 12) {
                 destinationControl
                 Spacer(minLength: 16)
@@ -53,6 +57,31 @@ struct TransferCenterView: View {
             }
         }
         .padding(20)
+    }
+
+    private var filePastingBanner: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.title3)
+                .foregroundStyle(.orange)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(model.blockedFilesPeerID.map { "Files copied on \(model.deviceName($0)) can’t be pasted here" }
+                    ?? "File pasting is off")
+                    .font(.body.weight(.medium))
+                Text("Copied files from other devices need UniSpace’s File Provider. In System Settings, "
+                    + "scroll to Extensions, click File Providers and turn on UniSpace.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 12)
+            Button("Open System Settings", action: model.openFilePastingSettings)
+                .buttonStyle(.borderedProminent)
+                .accessibilityIdentifier("enable-file-pasting")
+        }
+        .card(padding: 14)
+        .accessibilityElement(children: .contain)
     }
 
     @ViewBuilder

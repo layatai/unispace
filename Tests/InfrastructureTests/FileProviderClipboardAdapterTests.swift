@@ -108,4 +108,60 @@ struct FileProviderClipboardAdapterTests {
         await fixture.adapter.withdraw(UUID(), from: DeviceID())
         #expect(fixture.pasteboard.string(forType: .string) == "someone else")
     }
+
+    @Test func disabledDomainBlocksPublishAndReportsWhoseFilesWait() async throws {
+        let pasteboard = NSPasteboard(name: .init("UniSpace-disabled-\(UUID())"))
+        defer { pasteboard.releaseGlobally() }
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("UniSpace-disabled-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let adapter = FileProviderClipboardAdapter(pasteboard: pasteboard, storageRoot: { root }, domainEnabled: { false })
+        var states: [Bool] = []
+        var blocked: [DeviceID] = []
+        adapter.enabledChanged = { states.append($0) }
+        adapter.publishBlocked = { blocked.append($0) }
+        let peer = DeviceID()
+        let selection = ClipboardStreamSelection(epoch: UUID(), generation: 1,
+            files: [ClipboardStreamFile(name: "notes.txt", size: 5, version: "v1")])
+
+        await #expect(throws: ClipboardStreamFailure.unsupported) {
+            try await adapter.publish(selection, from: peer)
+        }
+        #expect(blocked == [peer])
+        #expect(states == [false])
+        #expect(adapter.isEnabled == false)
+        #expect(pasteboard.pasteboardItems?.isEmpty ?? true)
+        // A repeated query with no change does not report again.
+        #expect(await adapter.refreshAvailability() == false)
+        #expect(states == [false])
+    }
+
+    @Test func enablingTheDomainIsReportedOnTheNextQuery() async {
+        let enabled = LockedFlag(false)
+        let adapter = FileProviderClipboardAdapter(pasteboard: NSPasteboard(name: .init("UniSpace-toggle-\(UUID())")),
+            storageRoot: { FileManager.default.temporaryDirectory }, domainEnabled: { enabled.value })
+        var states: [Bool] = []
+        adapter.enabledChanged = { states.append($0) }
+        #expect(await adapter.refreshAvailability() == false)
+        enabled.value = true
+        #expect(await adapter.refreshAvailability() == true)
+        #expect(states == [false, true])
+    }
+
+    @Test func failedDomainQueryCountsAsDisabled() async {
+        struct QueryFailed: Error {}
+        let adapter = FileProviderClipboardAdapter(pasteboard: NSPasteboard(name: .init("UniSpace-fail-\(UUID())")),
+            storageRoot: { FileManager.default.temporaryDirectory }, domainEnabled: { throw QueryFailed() })
+        #expect(await adapter.refreshAvailability() == false)
+        #expect(adapter.isEnabled == false)
+    }
+}
+
+private final class LockedFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: Bool
+    init(_ value: Bool) { stored = value }
+    var value: Bool {
+        get { lock.withLock { stored } }
+        set { lock.withLock { stored = newValue } }
+    }
 }
