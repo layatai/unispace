@@ -1,10 +1,13 @@
 import Foundation
+import OSLog
 import UniSpaceDomain
 
 /// Coordinates active-peer clipboard sharing without retaining clipboard history.
 /// All mutable routing, ordering, and deduplication state is actor-isolated and
 /// discarded when the workspace stops.
 public actor ClipboardCoordinator {
+    private static let logger = ClipboardDiagnostics.logger("clipboard.coordinator")
+
     private let transport: any ClipboardTransport
     private let clipboard: any ClipboardService
     private let limits: ClipboardLimits
@@ -48,6 +51,24 @@ public actor ClipboardCoordinator {
         workspace: WorkspaceSnapshot,
         key: Data
     ) async throws {
+        // Continuity restarts this coordinator whenever any part of the
+        // workspace configuration changes (display or address refreshes, peer
+        // hellos). For the same workspace and local device, keep the routing
+        // decision and an unsent local copy: the transport needs its desired
+        // peer back before the caller's next refresh (an activating peer may
+        // already be dialing), and a copy made before activation must still
+        // reach the peer once it connects.
+        let carried: (destination: DeviceID?, pending: ClipboardObservation?)
+        if started,
+           self.workspace?.id == workspace.id,
+           self.localDevice?.id == localDevice.id {
+            let destination = automaticDestination.flatMap { id in
+                workspace.devices.contains(where: { $0.id == id }) ? id : nil
+            }
+            carried = (destination, pendingObservation)
+        } else {
+            carried = (nil, nil)
+        }
         if started { await stop() }
         guard key.count >= 32,
               workspace.localDeviceID == localDevice.id,
@@ -59,10 +80,13 @@ public actor ClipboardCoordinator {
         self.workspace = workspace
         connectedPeers.removeAll()
         connectionContinuation.yield(connectedPeers)
-        automaticDestination = nil
-        pendingObservation = nil
+        automaticDestination = carried.destination
+        pendingObservation = carried.pending
         engine = ClipboardSyncEngine(localDeviceID: localDevice.id, limits: limits)
         started = true
+        Self.logger.info(
+            "Clipboard coordinator started; destination \(ClipboardDiagnostics.label(carried.destination), privacy: .public), pending copy carried: \(carried.pending != nil, privacy: .public)"
+        )
 
         startTransportObservationIfNeeded()
         do {
@@ -74,6 +98,8 @@ public actor ClipboardCoordinator {
             engine = nil
             throw error
         }
+        // The transport starts with no desired peer; restore the carried one.
+        transport.setDesiredPeer(sharingEnabled ? automaticDestination : nil)
 
         if sharingEnabled { await startClipboardObservation() }
     }
@@ -107,6 +133,7 @@ public actor ClipboardCoordinator {
     public func setSharingEnabled(_ enabled: Bool) async {
         guard sharingEnabled != enabled else { return }
         sharingEnabled = enabled
+        Self.logger.info("Clipboard sharing \(enabled ? "enabled" : "disabled", privacy: .public)")
         transport.setDesiredPeer(enabled ? automaticDestination : nil)
         if enabled, started {
             await startClipboardObservation()
@@ -124,11 +151,15 @@ public actor ClipboardCoordinator {
     public func setAutomaticDestination(_ deviceID: DeviceID?) async {
         guard deviceID != localDevice?.id else {
             guard automaticDestination != nil else { return }
+            Self.logger.info("Clipboard destination cleared (local device selected)")
             automaticDestination = nil
             transport.setDesiredPeer(nil)
             return
         }
         guard automaticDestination != deviceID else { return }
+        Self.logger.info(
+            "Clipboard destination \(ClipboardDiagnostics.label(self.automaticDestination), privacy: .public) -> \(ClipboardDiagnostics.label(deviceID), privacy: .public)"
+        )
         automaticDestination = deviceID
         transport.setDesiredPeer(sharingEnabled ? deviceID : nil)
         await sendPendingObservationIfPossible()
@@ -150,18 +181,36 @@ public actor ClipboardCoordinator {
     }
 
     private func handle(_ observation: ClipboardObservation) async {
-        guard started, sharingEnabled else { return }
+        guard started, sharingEnabled else {
+            Self.logger.debug("Clipboard observation ignored: sharing inactive")
+            return
+        }
+        Self.logger.info(
+            "Clipboard observation received: \(observation.representations.count, privacy: .public) representation(s)"
+        )
         pendingObservation = observation
         await sendPendingObservationIfPossible()
     }
 
     private func sendPendingObservationIfPossible() async {
-        guard let observation = pendingObservation,
-              let localDevice,
-              let workspace,
-              let destination = automaticDestination,
-              connectedPeers.contains(destination),
-              let engine else { return }
+        guard let observation = pendingObservation else {
+            Self.logger.debug("Clipboard send skipped: no pending copy")
+            return
+        }
+        guard let localDevice, let workspace, let engine else {
+            Self.logger.info("Clipboard send deferred: coordinator not started")
+            return
+        }
+        guard let destination = automaticDestination else {
+            Self.logger.info("Clipboard send deferred: no destination")
+            return
+        }
+        guard connectedPeers.contains(destination) else {
+            Self.logger.info(
+                "Clipboard send deferred: destination \(ClipboardDiagnostics.label(destination), privacy: .public) not connected"
+            )
+            return
+        }
 
         pendingObservation = nil
         do {
@@ -169,6 +218,7 @@ public actor ClipboardCoordinator {
             guard let payload = try candidateEngine.makeLocalPayload(
                 representations: observation.representations
             ) else {
+                Self.logger.info("Clipboard send skipped: engine produced no payload")
                 return
             }
             try await transport.send(
@@ -180,8 +230,14 @@ public actor ClipboardCoordinator {
                 to: destination
             )
             self.engine = candidateEngine
+            Self.logger.info(
+                "Clipboard send ok to \(ClipboardDiagnostics.label(destination), privacy: .public), revision \(payload.revision, privacy: .public)"
+            )
         } catch {
             // Clipboard contents and representation values are never logged.
+            Self.logger.error(
+                "Clipboard send failed to \(ClipboardDiagnostics.label(destination), privacy: .public): \(String(describing: type(of: error)), privacy: .public); keeping copy pending"
+            )
             if pendingObservation == nil { pendingObservation = observation }
         }
     }
@@ -190,10 +246,16 @@ public actor ClipboardCoordinator {
         guard started else { return }
         switch event {
         case let .connected(deviceID):
+            Self.logger.info(
+                "Clipboard peer connected: \(ClipboardDiagnostics.label(deviceID), privacy: .public); pending copy: \(self.pendingObservation != nil, privacy: .public)"
+            )
             connectedPeers.insert(deviceID)
             connectionContinuation.yield(connectedPeers)
             await sendPendingObservationIfPossible()
         case let .disconnected(deviceID):
+            Self.logger.info(
+                "Clipboard peer disconnected: \(ClipboardDiagnostics.label(deviceID), privacy: .public)"
+            )
             connectedPeers.remove(deviceID)
             connectionContinuation.yield(connectedPeers)
         case let .failure(deviceID):

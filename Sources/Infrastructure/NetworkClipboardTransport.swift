@@ -1,6 +1,7 @@
 import CryptoKit
 import Foundation
 import Network
+import OSLog
 import UniSpaceApplication
 import UniSpaceDomain
 
@@ -26,6 +27,7 @@ public final class NetworkClipboardTransport: ClipboardTransport, @unchecked Sen
     private let configuredDirectPort: NWEndpoint.Port
     private let enableBonjour: Bool
     private let listenerRetryDelays: [TimeInterval]
+    private let unexpectedPeerGrace: TimeInterval
     private let stream: AsyncStream<ClipboardTransportEvent>
     private let continuation: AsyncStream<ClipboardTransportEvent>.Continuation
 
@@ -38,6 +40,12 @@ public final class NetworkClipboardTransport: ClipboardTransport, @unchecked Sen
     private var readyPort: NWEndpoint.Port?
     private var connections: [DeviceID: SecureClipboardConnection] = [:]
     private var pendingConnections: [ObjectIdentifier: SecureClipboardConnection] = [:]
+    /// Authenticated workspace peers that connected before this Mac selected
+    /// them as the clipboard destination. Activation reaches the peer over the
+    /// control channel before the Mac's continuity context updates the desired
+    /// peer, so the peer's first dial often wins that race. Parking keeps the
+    /// authenticated channel open briefly instead of closing it.
+    private var parkedConnections: [DeviceID: SecureClipboardConnection] = [:]
     private var retryAttempts: [DeviceID: Int] = [:]
     private var retryTokens: [DeviceID: UUID] = [:]
     private var desiredPeerID: DeviceID?
@@ -49,8 +57,10 @@ public final class NetworkClipboardTransport: ClipboardTransport, @unchecked Sen
         listenPort: NWEndpoint.Port = NetworkClipboardTransport.clipboardPort,
         directPort: NWEndpoint.Port = NetworkClipboardTransport.clipboardPort,
         enableBonjour: Bool = true,
-        listenerRetryDelays: [TimeInterval] = [1, 2, 4, 8, 15]
+        listenerRetryDelays: [TimeInterval] = [1, 2, 4, 8, 15],
+        unexpectedPeerGrace: TimeInterval = 3
     ) {
+        self.unexpectedPeerGrace = max(unexpectedPeerGrace, 0)
         configuredListenPort = listenPort
         configuredDirectPort = directPort
         self.enableBonjour = enableBonjour
@@ -130,6 +140,11 @@ public final class NetworkClipboardTransport: ClipboardTransport, @unchecked Sen
         queue.async { [weak self] in
             guard let self else { return }
             let cancelled = self.lock.clipboardWithLock { () -> [SecureClipboardConnection] in
+                if self.desiredPeerID != deviceID {
+                    Self.logger.info(
+                        "Clipboard desired peer \(Self.label(self.desiredPeerID), privacy: .public) -> \(Self.label(deviceID), privacy: .public)"
+                    )
+                }
                 self.desiredPeerID = deviceID
                 let staleRetryIDs = self.retryTokens.keys.filter { $0 != deviceID }
                 for id in staleRetryIDs {
@@ -145,6 +160,15 @@ public final class NetworkClipboardTransport: ClipboardTransport, @unchecked Sen
             }
             cancelled.forEach { $0.cancel() }
             guard let deviceID else { return }
+            let parked = self.lock.clipboardWithLock {
+                self.parkedConnections.removeValue(forKey: deviceID)
+            }
+            if let parked {
+                Self.logger.info(
+                    "Clipboard promoting parked inbound connection from \(Self.label(deviceID), privacy: .public)"
+                )
+                self.register(parked, as: deviceID, objectID: ObjectIdentifier(parked))
+            }
             let ownsDial = self.lock.clipboardWithLock {
                 PeerConnectionPolicy.macCanDial(self.knownPeers[deviceID]) &&
                     (self.localDevice.map { $0.id < deviceID } ?? false)
@@ -155,9 +179,16 @@ public final class NetworkClipboardTransport: ClipboardTransport, @unchecked Sen
 
     public func send(_ envelope: ClipboardEnvelope, to deviceID: DeviceID) async throws {
         guard let connection = lock.clipboardWithLock({ connections[deviceID] }) else {
+            Self.logger.error(
+                "Clipboard send to \(Self.label(deviceID), privacy: .public) failed: no registered connection"
+            )
             throw NetworkClipboardError.peerUnavailable(deviceID)
         }
-        try await connection.send(ClipboardFrameCodec.encode(envelope))
+        let frame = try ClipboardFrameCodec.encode(envelope)
+        Self.logger.info(
+            "Clipboard send to \(Self.label(deviceID), privacy: .public) via \(connection.directionLabel, privacy: .public) connection, \(frame.count, privacy: .public) bytes"
+        )
+        try await connection.send(frame)
     }
 
     private func stopSynchronously() {
@@ -165,13 +196,15 @@ public final class NetworkClipboardTransport: ClipboardTransport, @unchecked Sen
             let values = (
                 listener,
                 browser,
-                Array(connections.values) + Array(pendingConnections.values)
+                Array(connections.values) + Array(pendingConnections.values) +
+                    Array(parkedConnections.values)
             )
             listener = nil
             browser = nil
             readyPort = nil
             connections.removeAll()
             pendingConnections.removeAll()
+            parkedConnections.removeAll()
             retryAttempts.removeAll()
             retryTokens.removeAll()
             desiredPeerID = nil
@@ -389,44 +422,86 @@ public final class NetworkClipboardTransport: ClipboardTransport, @unchecked Sen
         }
     }
 
+    private enum RegistrationOutcome {
+        case registered(newlyConnected: Bool, replaced: SecureClipboardConnection?)
+        case parked(previous: SecureClipboardConnection?)
+        case rejected(reason: String)
+    }
+
     private func register(
         _ secure: SecureClipboardConnection,
         as deviceID: DeviceID,
         objectID: ObjectIdentifier
     ) {
-        let localID = lock.clipboardWithLock { localDevice?.id }
-        var replaced: SecureClipboardConnection?
-        var rejected = false
-        var newlyConnected = false
-        lock.clipboardWithLock {
+        let outcome = lock.clipboardWithLock { () -> RegistrationOutcome in
             pendingConnections.removeValue(forKey: objectID)
+            guard running else { return .rejected(reason: "transport stopped") }
             guard desiredPeerID == deviceID else {
-                rejected = true
-                return
-            }
-            if let existing = connections[deviceID], existing !== secure {
-                let prefersOutbound = localID.map { $0 < deviceID } ?? false
-                let newPreferred = secure.isOutbound == prefersOutbound
-                let existingPreferred = existing.isOutbound == prefersOutbound
-                if newPreferred && !existingPreferred {
-                    connections[deviceID] = secure
-                    replaced = existing
-                } else {
-                    rejected = true
+                guard knownPeers[deviceID] != nil else {
+                    return .rejected(reason: "unknown workspace peer")
                 }
-            } else {
-                newlyConnected = connections[deviceID] == nil
-                connections[deviceID] = secure
+                let previous = parkedConnections[deviceID]
+                parkedConnections[deviceID] = secure
+                return .parked(previous: previous === secure ? nil : previous)
             }
+            if parkedConnections[deviceID] === secure {
+                parkedConnections.removeValue(forKey: deviceID)
+            }
+            var replaced: SecureClipboardConnection?
+            if let existing = connections[deviceID], existing !== secure {
+                if existing.isOutbound != secure.isOutbound {
+                    // Simultaneous dials from both ends: keep the direction the
+                    // lower device ID owns so both ends converge on one socket.
+                    let localID = localDevice?.id
+                    let prefersOutbound = localID.map { $0 < deviceID } ?? false
+                    guard secure.isOutbound == prefersOutbound else {
+                        return .rejected(reason: "duplicate; existing connection has the preferred direction")
+                    }
+                }
+                // Same direction: the dialing side only redials after it gave up
+                // on its previous socket, so the newest connection is the one it
+                // reads from. Keeping the older one strands sends on a dead socket.
+                replaced = existing
+            }
+            let newlyConnected = connections[deviceID] == nil
+            connections[deviceID] = secure
             retryTokens.removeValue(forKey: deviceID)
+            return .registered(newlyConnected: newlyConnected, replaced: replaced)
         }
 
-        if rejected {
+        switch outcome {
+        case let .rejected(reason):
+            Self.logger.notice(
+                "Clipboard rejected \(secure.directionLabel, privacy: .public) connection from \(Self.label(deviceID), privacy: .public): \(reason, privacy: .public)"
+            )
             secure.cancel()
             return
+        case let .parked(previous):
+            Self.logger.notice(
+                "Clipboard parked \(secure.directionLabel, privacy: .public) connection from \(Self.label(deviceID), privacy: .public): desired peer is \(Self.label(self.lock.clipboardWithLock { self.desiredPeerID }), privacy: .public)"
+            )
+            previous?.cancel()
+            queue.asyncAfter(deadline: .now() + unexpectedPeerGrace) { [weak self, weak secure] in
+                guard let self, let secure else { return }
+                let expired = self.lock.clipboardWithLock { () -> Bool in
+                    guard self.parkedConnections[deviceID] === secure else { return false }
+                    self.parkedConnections.removeValue(forKey: deviceID)
+                    return true
+                }
+                guard expired else { return }
+                Self.logger.notice(
+                    "Clipboard closed parked connection from \(Self.label(deviceID), privacy: .public): it never became the desired peer"
+                )
+                secure.cancel()
+            }
+            return
+        case let .registered(newlyConnected, replaced):
+            Self.logger.info(
+                "Clipboard accepted \(secure.directionLabel, privacy: .public) connection from \(Self.label(deviceID), privacy: .public)\(replaced == nil ? "" : ", replacing an older one", privacy: .public)"
+            )
+            replaced?.cancel()
+            if newlyConnected { emit(.connected(deviceID)) }
         }
-        replaced?.cancel()
-        if newlyConnected { emit(.connected(deviceID)) }
         queue.asyncAfter(deadline: .now() + 10) { [weak self, weak secure] in
             guard let self, let secure else { return }
             self.lock.clipboardWithLock {
@@ -443,12 +518,18 @@ public final class NetworkClipboardTransport: ClipboardTransport, @unchecked Sen
     ) {
         let removedDeviceID: DeviceID? = lock.clipboardWithLock {
             pendingConnections.removeValue(forKey: objectID)
+            if let deviceID = secure.deviceID, parkedConnections[deviceID] === secure {
+                parkedConnections.removeValue(forKey: deviceID)
+            }
             guard let deviceID = secure.deviceID,
                   connections[deviceID] === secure else { return nil }
             connections.removeValue(forKey: deviceID)
             return deviceID
         }
         if let removedDeviceID {
+            Self.logger.info(
+                "Clipboard connection to \(Self.label(removedDeviceID), privacy: .public) closed"
+            )
             emit(.disconnected(removedDeviceID))
             scheduleDirectConnection(to: removedDeviceID, immediately: false)
         } else if let expectedDeviceID {
@@ -506,6 +587,10 @@ public final class NetworkClipboardTransport: ClipboardTransport, @unchecked Sen
             isOutbound: true
         )
     }
+
+    static let logger = ClipboardDiagnostics.logger("clipboard.transport")
+
+    static func label(_ deviceID: DeviceID?) -> String { ClipboardDiagnostics.label(deviceID) }
 
     private func emit(_ event: ClipboardTransportEvent) {
         continuation.yield(event)
@@ -648,6 +733,8 @@ final class SecureClipboardConnection: @unchecked Sendable {
     }
 
     func cancel() { connection.cancel() }
+
+    var directionLabel: String { isOutbound ? "outbound" : "inbound" }
 
     private func sendHello() {
         let payload = helloProofPayload(deviceID: localDeviceID, nonce: localNonce)

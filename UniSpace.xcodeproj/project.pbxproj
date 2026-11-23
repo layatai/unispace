@@ -93,6 +93,7 @@
 		61FCC01F57B69BCE6F728037 /* ClipboardFileProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8C5FBB7F0B33F3B66EC6C5DC /* ClipboardFileProvider.swift */; };
 		62AFAE0A022941A1E7F6158C /* UniSpaceFileProvider.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 96A382412D4E0DFF9FA8D693 /* UniSpaceFileProvider.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		630D9260AED7669F82DBAF80 /* UniSpaceApplication.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = CD69866EFD7AE9229BB70567 /* UniSpaceApplication.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		633E6BA9ECBB4B274C4E3770 /* ClipboardDiagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 91A21E5110283CC3B83681AE /* ClipboardDiagnostics.swift */; };
 		63F9954BAE0212DB110EDDFE /* FinderFileContinuityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A031EE96F2A7B2DA05629C9 /* FinderFileContinuityTests.swift */; };
 		64D7A647CC98A3FEAF3F7535 /* SetupFlowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63C1907F88FD14FAAC86A99A /* SetupFlowView.swift */; };
 		66F7A7064DB2BF2D55F0B435 /* FileTransferFrameCodec.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7839FF3F393FF040EED7F696 /* FileTransferFrameCodec.swift */; };
@@ -177,6 +178,7 @@
 		DCAA07DC37059F14C56900DB /* SeamlessWindowProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 629B522E709B2BB43705FFC2 /* SeamlessWindowProtocol.swift */; };
 		DED47A3ABE3B26E0ED9BB1A1 /* PairingNetworkService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3705E48046B8D56DACF3CF21 /* PairingNetworkService.swift */; };
 		E034025641B0B85D250166EF /* InputProgressReporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2CDEEC5C207ECEE78AE75A7C /* InputProgressReporter.swift */; };
+		E0966C5AE593E28DEE361078 /* ClipboardActivationRaceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E30107FE413D6EB813086FE /* ClipboardActivationRaceTests.swift */; };
 		E25E13D691ED0B7A6BFBE196 /* SystemFileSourceProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A9A0F31519F8DAC02DA201F /* SystemFileSourceProvider.swift */; };
 		E2B5B14F80F0AAFA8D17CE58 /* FileTransferDestinationResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99336AF6F5B53F63D7F3024F /* FileTransferDestinationResolver.swift */; };
 		E41FB56FC55B098152423FCC /* UniSpaceDomain.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = D0CF733F292C646448A74827 /* UniSpaceDomain.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
@@ -498,6 +500,7 @@
 		2AFC6A90264C9CB57CA0405D /* SeamlessWindowProxy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SeamlessWindowProxy.swift; sourceTree = "<group>"; };
 		2CDEEC5C207ECEE78AE75A7C /* InputProgressReporter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InputProgressReporter.swift; sourceTree = "<group>"; };
 		2CF070D689C1AA7C27334F7E /* WorkspaceLifecycle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceLifecycle.swift; sourceTree = "<group>"; };
+		2E30107FE413D6EB813086FE /* ClipboardActivationRaceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipboardActivationRaceTests.swift; sourceTree = "<group>"; };
 		2FA52A038F54BA3B30DE23EE /* LossyTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LossyTransport.swift; sourceTree = "<group>"; };
 		32B913D6ED478D7DC6D20CCE /* NetworkClipboardTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NetworkClipboardTransport.swift; sourceTree = "<group>"; };
 		35494408D8AE45C073E2B2D6 /* ClipboardStreamTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipboardStreamTests.swift; sourceTree = "<group>"; };
@@ -551,6 +554,7 @@
 		908F95DFCA8BBA9EDB02324C /* FileTransferUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileTransferUITests.swift; sourceTree = "<group>"; };
 		90C9469A035EE4BF2726C200 /* WindowPresentationState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowPresentationState.swift; sourceTree = "<group>"; };
 		918BD24F1FF035FE50FDBF36 /* UniSpace.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = UniSpace.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		91A21E5110283CC3B83681AE /* ClipboardDiagnostics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipboardDiagnostics.swift; sourceTree = "<group>"; };
 		932AE2DF23AD73CE9D06228F /* Base.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Base.xcconfig; sourceTree = "<group>"; };
 		94B269E19BAB68A2BD698AB3 /* SeamlessWindowViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SeamlessWindowViewModel.swift; sourceTree = "<group>"; };
 		955E18CB8A8476625C1772C6 /* WorkspaceReplicaMerger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceReplicaMerger.swift; sourceTree = "<group>"; };
@@ -878,6 +882,7 @@
 		9A371D04D8AE4C32DA671CAB /* InfrastructureTests */ = {
 			isa = PBXGroup;
 			children = (
+				2E30107FE413D6EB813086FE /* ClipboardActivationRaceTests.swift */,
 				C35B87B58745836A08E4AEA7 /* ClipboardInfrastructureTests.swift */,
 				29283B0621FB7A82D99C80DB /* ClipboardRegressionTests.swift */,
 				B7AAA75CF0B5E940401B90DB /* ConnectionRecoveryPolicyTests.swift */,
@@ -952,6 +957,7 @@
 			children = (
 				0D8DF2D8E73D3C8DCBC0ACEF /* ClipboardContracts.swift */,
 				8D28B7447A19E823D3F993A1 /* ClipboardCoordinator.swift */,
+				91A21E5110283CC3B83681AE /* ClipboardDiagnostics.swift */,
 				AC72E0E969F746A48E24DD19 /* ClipboardFrameCodec.swift */,
 				0438FC6F9C7F8B08645047BA /* ClipboardStreamCodec.swift */,
 				380771ED9868DD227AD28128 /* ClipboardStreamCoordinator.swift */,
@@ -1375,6 +1381,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				E0966C5AE593E28DEE361078 /* ClipboardActivationRaceTests.swift in Sources */,
 				F92B301966AE215DCBC5CF6B /* ClipboardInfrastructureTests.swift in Sources */,
 				F9233243586A2AB3E26B715E /* ClipboardRegressionTests.swift in Sources */,
 				472578005136DD01F9572CCA /* ConnectionRecoveryPolicyTests.swift in Sources */,
@@ -1440,6 +1447,7 @@
 			files = (
 				FA7737690CF6168BB2FDEAA8 /* ClipboardContracts.swift in Sources */,
 				52FBED6818BA3CABD2037A7F /* ClipboardCoordinator.swift in Sources */,
+				633E6BA9ECBB4B274C4E3770 /* ClipboardDiagnostics.swift in Sources */,
 				0062445B03508AAB39A13C1E /* ClipboardFrameCodec.swift in Sources */,
 				56FFBB1A38FD1F1F99F99D44 /* ClipboardStreamCodec.swift in Sources */,
 				12E3194015B58E97DA7F570A /* ClipboardStreamCoordinator.swift in Sources */,

@@ -1,5 +1,6 @@
 import Combine
 import Foundation
+import OSLog
 import UniSpaceApplication
 import UniSpaceDomain
 import UniSpaceInfrastructure
@@ -7,6 +8,7 @@ import UniSpaceInfrastructure
 @MainActor
 final class ClipboardViewModel: ObservableObject {
     private static let sharingPreferenceKey = "continuity.clipboardSharingEnabled"
+    private static let logger = ClipboardDiagnostics.logger("clipboard.routing")
     private static let clipboardCapabilities: Set<DeviceCapability> = [.clipboardTextV1, .clipboardURLV1]
 
     @Published private(set) var connectedDeviceIDs = Set<DeviceID>()
@@ -167,6 +169,9 @@ final class ClipboardViewModel: ObservableObject {
             )
             if configuration != configuredWorkspace {
                 diagnostic?("Clipboard coordinator restart; workspace devices=\(workspace.devices.count)")
+                Self.logger.info(
+                    "Clipboard configuration changed; restarting coordinator (first start: \(self.configuredWorkspace == nil, privacy: .public))"
+                )
                 try await coordinator.start(
                     localDevice: configuration.localDevice,
                     workspace: configuration.workspace,
@@ -187,10 +192,11 @@ final class ClipboardViewModel: ObservableObject {
             return
         }
 
-        let inferredFromApp = inferredDestination(
+        let resolution = inferredDestination(
             context: context,
             localDeviceID: localDevice.id
         )
+        let inferredFromApp = resolution.destination
         let coordinatorDestination = await coordinator.automaticDestinationDeviceID()
         // A coordinator restart forgets its route. With two compatible peers
         // online the resolver has no idle choice, so fall back to the route this
@@ -208,6 +214,9 @@ final class ClipboardViewModel: ObservableObject {
             diagnostic?("Clipboard route \(activeDestinationID.map(\.description) ?? "none") -> "
                 + "\(inferred.map(\.description) ?? "none"); resolver=\(inferredFromApp.map(\.description) ?? "ambiguous"), "
                 + "connected=\(context.connectedDeviceIDs.count), remembered=\(remembered != nil)")
+            Self.logger.info(
+                "Clipboard inferred destination \(ClipboardDiagnostics.label(self.activeDestinationID), privacy: .public) -> \(ClipboardDiagnostics.label(inferred), privacy: .public) (resolver: \(resolution.reason.rawValue, privacy: .public); remembered: \(remembered != nil, privacy: .public))"
+            )
             activeDestinationID = inferred
         }
         // A workspace refresh restarts the coordinator and clears its route.
@@ -218,8 +227,8 @@ final class ClipboardViewModel: ObservableObject {
     private func inferredDestination(
         context: ContinuityContextSnapshot,
         localDeviceID: DeviceID
-    ) -> DeviceID? {
-        ContinuityDestinationResolver.resolve(
+    ) -> (destination: DeviceID?, reason: ContinuityDestinationResolver.Reason) {
+        ContinuityDestinationResolver.explain(
             localDeviceID: localDeviceID,
             controllerID: context.controllerID,
             controlSession: context.controlSession,
