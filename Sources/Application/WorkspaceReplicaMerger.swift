@@ -37,6 +37,15 @@ public enum WorkspaceReplicaMerger {
         merged.devices.append(contentsOf: current.devices.filter { !incomingIDs.contains($0.id) })
         merged.topology = incoming.topology
         merged.generation = max(current.generation, incoming.generation)
+        for change in incoming.membershipChanges {
+            merged.record(change)
+        }
+        let forgotten = merged.devices.filter { merged.isForgotten($0.id) }.map(\.id)
+        for deviceID in forgotten where deviceID != merged.localDeviceID {
+            if let stamp = merged.membershipChanges.first(where: { $0.deviceID == deviceID })?.stamp {
+                merged.forget(deviceID, stamp: stamp)
+            }
+        }
         return merged
     }
 

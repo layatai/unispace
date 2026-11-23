@@ -90,4 +90,70 @@ final class WorkspaceReplicaMergerTests: XCTestCase {
         XCTAssertEqual(merged.platform, .windows)
         XCTAssertEqual(merged.capabilities, hello.capabilities)
     }
+
+    // Regression: "Forget Device" removed the device locally, but the next
+    // snapshot from a peer that still listed it unioned it straight back.
+    func testForgottenDeviceIsNotResurrectedByStalePeerSnapshot() throws {
+        let fixture = ForgetFixture()
+        var current = fixture.snapshot(localDeviceID: fixture.localID, devices: [fixture.local, fixture.peer, fixture.forgotten])
+        current.forget(fixture.forgottenID, stamp: 1_000)
+        let stale = fixture.snapshot(localDeviceID: fixture.peerID, devices: [fixture.local, fixture.peer, fixture.forgotten])
+
+        let merged = try XCTUnwrap(WorkspaceReplicaMerger.mergeSnapshot(current, with: stale))
+
+        XCTAssertEqual(Set(merged.devices.map(\.id)), [fixture.localID, fixture.peerID])
+        XCTAssertTrue(merged.isForgotten(fixture.forgottenID))
+    }
+
+    func testForgetPropagatesToPeerReplicaThatStillListsTheDevice() throws {
+        let fixture = ForgetFixture()
+        var origin = fixture.snapshot(localDeviceID: fixture.localID, devices: [fixture.local, fixture.peer, fixture.forgotten])
+        origin.forget(fixture.forgottenID, stamp: 1_000)
+        let peerReplica = fixture.snapshot(localDeviceID: fixture.peerID, devices: [fixture.local, fixture.peer, fixture.forgotten])
+
+        let merged = try XCTUnwrap(WorkspaceReplicaMerger.mergeSnapshot(peerReplica, with: origin))
+
+        XCTAssertFalse(merged.devices.contains { $0.id == fixture.forgottenID })
+    }
+
+    func testPairingAgainAfterForgetWinsOverOlderTombstone() throws {
+        let fixture = ForgetFixture()
+        var stalePeer = fixture.snapshot(localDeviceID: fixture.peerID, devices: [fixture.local, fixture.peer])
+        stalePeer.record(DeviceMembershipChange(deviceID: fixture.forgottenID, removed: true, stamp: 1_000))
+        var host = fixture.snapshot(localDeviceID: fixture.localID, devices: [fixture.local, fixture.peer])
+        host.record(DeviceMembershipChange(deviceID: fixture.forgottenID, removed: true, stamp: 1_000))
+        host.admit(fixture.forgotten, stamp: 2_000)
+
+        let onHost = try XCTUnwrap(WorkspaceReplicaMerger.mergeSnapshot(host, with: stalePeer))
+        let onPeer = try XCTUnwrap(WorkspaceReplicaMerger.mergeSnapshot(stalePeer, with: host))
+
+        XCTAssertTrue(onHost.devices.contains { $0.id == fixture.forgottenID })
+        XCTAssertTrue(onPeer.devices.contains { $0.id == fixture.forgottenID })
+        XCTAssertFalse(onPeer.isForgotten(fixture.forgottenID))
+    }
+
+    func testSnapshotsWithoutMembershipChangesStillDecode() throws {
+        let fixture = ForgetFixture()
+        let snapshot = fixture.snapshot(localDeviceID: fixture.localID, devices: [fixture.local])
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(snapshot)) as? [String: Any])
+        json.removeValue(forKey: "membershipChanges")
+
+        let decoded = try JSONDecoder().decode(WorkspaceSnapshot.self, from: JSONSerialization.data(withJSONObject: json))
+
+        XCTAssertEqual(decoded, snapshot)
+    }
+}
+
+private struct ForgetFixture {
+    let workspaceID = WorkspaceID()
+    let localID = DeviceID()
+    let peerID = DeviceID()
+    let forgottenID = DeviceID()
+    var local: DeviceDescriptor { DeviceDescriptor(id: localID, name: "Local", platform: .macOS) }
+    var peer: DeviceDescriptor { DeviceDescriptor(id: peerID, name: "Peer", platform: .macOS) }
+    var forgotten: DeviceDescriptor { DeviceDescriptor(id: forgottenID, name: "Forgotten PC", platform: .windows) }
+
+    func snapshot(localDeviceID: DeviceID, devices: [DeviceDescriptor]) -> WorkspaceSnapshot {
+        WorkspaceSnapshot(id: workspaceID, name: "Workspace", localDeviceID: localDeviceID, devices: devices, generation: 5)
+    }
 }

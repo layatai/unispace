@@ -288,6 +288,32 @@ public struct DisplayTopology: Codable, Equatable, Sendable {
     }
 }
 
+/// The latest membership decision for one device. Forgetting a device and
+/// pairing it again are both recorded so replicas converge on whichever
+/// happened last instead of resurrecting a forgotten device on merge.
+public struct DeviceMembershipChange: Codable, Equatable, Sendable {
+    public let deviceID: DeviceID
+    public let removed: Bool
+    /// Milliseconds since 1970 on the Mac that made the change.
+    public let stamp: UInt64
+
+    public init(deviceID: DeviceID, removed: Bool, stamp: UInt64) {
+        self.deviceID = deviceID
+        self.removed = removed
+        self.stamp = stamp
+    }
+
+    public static func now() -> UInt64 {
+        UInt64(max(0, Date().timeIntervalSince1970 * 1000))
+    }
+
+    /// Later stamp wins; on a tie, removal wins so a forget is never undone
+    /// by a concurrent stale replica.
+    func supersedes(_ other: DeviceMembershipChange) -> Bool {
+        stamp != other.stamp ? stamp > other.stamp : removed && !other.removed
+    }
+}
+
 public struct WorkspaceSnapshot: Codable, Equatable, Sendable {
     public let id: WorkspaceID
     public var name: String
@@ -295,6 +321,7 @@ public struct WorkspaceSnapshot: Codable, Equatable, Sendable {
     public var devices: [DeviceDescriptor]
     public var topology: DisplayTopology
     public var generation: UInt64
+    public var membershipChanges: [DeviceMembershipChange]
 
     public init(
         id: WorkspaceID,
@@ -302,7 +329,8 @@ public struct WorkspaceSnapshot: Codable, Equatable, Sendable {
         localDeviceID: DeviceID,
         devices: [DeviceDescriptor],
         topology: DisplayTopology = .init(),
-        generation: UInt64 = 0
+        generation: UInt64 = 0,
+        membershipChanges: [DeviceMembershipChange] = []
     ) {
         self.id = id
         self.name = name
@@ -310,6 +338,66 @@ public struct WorkspaceSnapshot: Codable, Equatable, Sendable {
         self.devices = devices
         self.topology = topology
         self.generation = generation
+        self.membershipChanges = membershipChanges
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, localDeviceID, devices, topology, generation, membershipChanges
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(WorkspaceID.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        localDeviceID = try container.decode(DeviceID.self, forKey: .localDeviceID)
+        devices = try container.decode([DeviceDescriptor].self, forKey: .devices)
+        topology = try container.decode(DisplayTopology.self, forKey: .topology)
+        generation = try container.decode(UInt64.self, forKey: .generation)
+        membershipChanges = try container.decodeIfPresent(
+            [DeviceMembershipChange].self,
+            forKey: .membershipChanges
+        ) ?? []
+    }
+
+    public func isForgotten(_ deviceID: DeviceID) -> Bool {
+        membershipChanges.first { $0.deviceID == deviceID }?.removed == true
+    }
+
+    /// Removes a device and records the decision so merges, discovery and
+    /// hellos cannot add it back until it is paired again.
+    public mutating func forget(_ deviceID: DeviceID, stamp: UInt64 = DeviceMembershipChange.now()) {
+        let removedDisplays = Set(devices.first { $0.id == deviceID }?.displays.map(\.id) ?? [])
+        devices.removeAll { $0.id == deviceID }
+        topology.links.removeAll {
+            removedDisplays.contains($0.source.displayID) || removedDisplays.contains($0.destination.displayID)
+        }
+        record(DeviceMembershipChange(deviceID: deviceID, removed: true, stamp: stamp))
+    }
+
+    /// Adds or refreshes a device the user explicitly paired, clearing any
+    /// earlier forget.
+    public mutating func admit(_ device: DeviceDescriptor, stamp: UInt64 = DeviceMembershipChange.now()) {
+        if isForgotten(device.id) || membershipChanges.contains(where: { $0.deviceID == device.id }) {
+            record(DeviceMembershipChange(deviceID: device.id, removed: false, stamp: stamp))
+        }
+        if let index = devices.firstIndex(where: { $0.id == device.id }) {
+            devices[index] = device
+        } else {
+            devices.append(device)
+        }
+    }
+
+    /// Keeps the winning change per device. Returns false when the change
+    /// lost to a newer one already recorded.
+    @discardableResult
+    public mutating func record(_ change: DeviceMembershipChange) -> Bool {
+        if let index = membershipChanges.firstIndex(where: { $0.deviceID == change.deviceID }) {
+            guard change.supersedes(membershipChanges[index]) else { return false }
+            membershipChanges[index] = change
+        } else {
+            membershipChanges.append(change)
+        }
+        return true
     }
 
     /// Replaces one Mac's current displays and removes topology links that can
