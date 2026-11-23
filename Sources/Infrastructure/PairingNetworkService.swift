@@ -371,11 +371,7 @@ public final class PairingNetworkService: @unchecked Sendable {
             lock.unlock()
             return
         }
-        if let index = snapshot.devices.firstIndex(where: { $0.id == peerDevice.id }) {
-            snapshot.devices[index] = peerDevice
-        } else {
-            snapshot.devices.append(peerDevice)
-        }
+        snapshot.admit(peerDevice)
         workspace = snapshot
         let finalSnapshot = snapshot
         lock.unlock()

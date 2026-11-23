@@ -495,15 +495,11 @@ final class AppModel: ObservableObject {
     func removeDevice(_ deviceID: DeviceID) {
         guard deviceID != localDeviceID, var workspace else { return }
         Task {
-            let removedDisplays = Set(workspace.devices.first(where: { $0.id == deviceID })?.displays.map(\.id) ?? [])
-            workspace.devices.removeAll { $0.id == deviceID }
+            workspace.forget(deviceID)
             if currentControllerID == deviceID {
                 currentControllerID = nil
                 currentEpoch = nil
                 controllerIdentityStore.setControllerID(nil, for: workspace.id)
-            }
-            workspace.topology.links.removeAll {
-                removedDisplays.contains($0.source.displayID) || removedDisplays.contains($0.destination.displayID)
             }
             let newKey = PairingCryptoSession.randomData(count: 32)
             for peer in workspace.devices where peer.id != localDeviceID && connectedDevices.contains(peer.id) {
@@ -1193,7 +1189,7 @@ final class AppModel: ObservableObject {
         _ device: DeviceDescriptor,
         capabilitiesAreAuthoritative: Bool
     ) {
-        guard var workspace else { return }
+        guard var workspace, !workspace.isForgotten(device.id) else { return }
         if let index = workspace.devices.firstIndex(where: { $0.id == device.id }) {
             workspace.updateDevice(WorkspaceReplicaMerger.mergeDevice(
                 workspace.devices[index],
