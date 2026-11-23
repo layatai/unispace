@@ -268,6 +268,61 @@ final class ClipboardApplicationTests: XCTestCase {
     }
 
     @MainActor
+    func testCoordinatorKeepsPendingCopyAndDestinationAcrossSameWorkspaceRestart() async throws {
+        // Live repro: copy on the Mac while the peer is not connected, then the
+        // continuity context restarts the coordinator (device/display/address
+        // refresh) and activation connects the peer. The copy must still go out.
+        let fixture = ClipboardTestFixture()
+        try await fixture.start()
+        await fixture.coordinator.setSharingEnabled(true)
+        await fixture.coordinator.setAutomaticDestination(fixture.remote.id)
+
+        fixture.clipboard.emit(ClipboardObservation(
+            changeCount: 1,
+            representations: [ClipboardRepresentation(kind: .plainText, value: "copied on mac")]
+        ))
+        try? await Task.sleep(for: .milliseconds(100))
+        XCTAssertTrue(fixture.transport.sentEnvelopes.isEmpty)
+
+        try await fixture.start()
+        let destination = await fixture.coordinator.automaticDestinationDeviceID()
+        XCTAssertEqual(destination, fixture.remote.id)
+        XCTAssertEqual(fixture.transport.desiredPeers.last, fixture.remote.id)
+
+        fixture.transport.emit(.connected(fixture.remote.id))
+        let sent = await eventually {
+            fixture.transport.sentEnvelopes.first?.payload.plainText == "copied on mac"
+        }
+        XCTAssertTrue(sent)
+        await fixture.coordinator.stop()
+    }
+
+    @MainActor
+    func testCoordinatorSendsCopyMadeBeforeActivationOnceActivePeerConnects() async throws {
+        let fixture = ClipboardTestFixture()
+        try await fixture.start()
+        await fixture.coordinator.setSharingEnabled(true)
+
+        fixture.clipboard.emit(ClipboardObservation(
+            changeCount: 1,
+            representations: [ClipboardRepresentation(kind: .plainText, value: "before activation")]
+        ))
+        try? await Task.sleep(for: .milliseconds(50))
+        // Activation: the peer connects first, the Mac's routing catches up later.
+        fixture.transport.emit(.connected(fixture.remote.id))
+        try? await Task.sleep(for: .milliseconds(50))
+        XCTAssertTrue(fixture.transport.sentEnvelopes.isEmpty)
+        await fixture.coordinator.setAutomaticDestination(fixture.remote.id)
+
+        let sent = await eventually {
+            fixture.transport.sentEnvelopes.first?.payload.plainText == "before activation"
+        }
+        XCTAssertTrue(sent)
+        XCTAssertEqual(fixture.transport.desiredPeers.last, fixture.remote.id)
+        await fixture.coordinator.stop()
+    }
+
+    @MainActor
     func testCoordinatorClaimsFirstAuthenticatedSenderWhenNoPeerIsActive() async throws {
         let fixture = ClipboardTestFixture()
         try await fixture.start()
@@ -502,6 +557,7 @@ private final class ClipboardTransportSpy: ClipboardTransport, @unchecked Sendab
     private var sent: [ClipboardEnvelope] = []
     private var stops = 0
     private var eventSubscriptions = 0
+    private var desired: [DeviceID?] = []
     var failuresRemaining = 0
     var startError: Error?
 
@@ -515,6 +571,9 @@ private final class ClipboardTransportSpy: ClipboardTransport, @unchecked Sendab
     var sentEnvelopes: [ClipboardEnvelope] { lock.withLock { sent } }
     var stopCount: Int { lock.withLock { stops } }
     var eventSubscriptionCount: Int { lock.withLock { eventSubscriptions } }
+    var desiredPeers: [DeviceID?] { lock.withLock { desired } }
+
+    func setDesiredPeer(_ deviceID: DeviceID?) { lock.withLock { desired.append(deviceID) } }
 
     func start(localDevice: DeviceDescriptor, workspace: WorkspaceSnapshot, key: Data) async throws {
         if let startError { throw startError }

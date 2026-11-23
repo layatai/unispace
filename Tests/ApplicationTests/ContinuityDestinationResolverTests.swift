@@ -20,6 +20,35 @@ final class ContinuityDestinationResolverTests: XCTestCase {
         )
     }
 
+    func testExplainReportsWhyEachDestinationWasChosen() {
+        let local = device("00000000-0000-0000-0000-000000000001")
+        let peer = device("00000000-0000-0000-0000-000000000002")
+        let other = device("00000000-0000-0000-0000-000000000003")
+        let idle = ControlSessionSnapshot(phase: .idle, peerID: nil)
+
+        func explain(
+            _ session: ControlSessionSnapshot,
+            connected: Set<DeviceID>
+        ) -> (DeviceID?, ContinuityDestinationResolver.Reason) {
+            let value = ContinuityDestinationResolver.explain(
+                localDeviceID: local.id,
+                controllerID: local.id,
+                controlSession: session,
+                devices: [local, peer, other],
+                connectedDeviceIDs: connected
+            )
+            return (value.destination, value.reason)
+        }
+
+        XCTAssertTrue(explain(idle, connected: []) == (nil, .noCompatiblePeer))
+        XCTAssertTrue(explain(idle, connected: [peer.id]) == (peer.id, .onlyConnectedPeer))
+        XCTAssertTrue(explain(idle, connected: [peer.id, other.id]) == (nil, .ambiguous))
+        XCTAssertTrue(explain(
+            .init(phase: .controlling, peerID: other.id),
+            connected: [peer.id, other.id]
+        ) == (other.id, .activeControlSession))
+    }
+
     func testResolverUsesActiveSessionThenSoleCompatiblePeer() {
         let local = device("00000000-0000-0000-0000-000000000001")
         let activePeer = device("00000000-0000-0000-0000-000000000002")
