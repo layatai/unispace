@@ -46,6 +46,10 @@ public final class NetworkClipboardTransport: ClipboardTransport, @unchecked Sen
     /// peer, so the peer's first dial often wins that race. Parking keeps the
     /// authenticated channel open briefly instead of closing it.
     private var parkedConnections: [DeviceID: SecureClipboardConnection] = [:]
+    /// Updates that arrived on a parked connection. The peer already treats
+    /// them as sent, so they are delivered after promotion rather than dropped.
+    private var parkedUpdates: [ObjectIdentifier: [ClipboardEnvelope]] = [:]
+    private static let maximumParkedUpdates = 8
     private var retryAttempts: [DeviceID: Int] = [:]
     private var retryTokens: [DeviceID: UUID] = [:]
     private var desiredPeerID: DeviceID?
@@ -205,6 +209,7 @@ public final class NetworkClipboardTransport: ClipboardTransport, @unchecked Sen
             connections.removeAll()
             pendingConnections.removeAll()
             parkedConnections.removeAll()
+            parkedUpdates.removeAll()
             retryAttempts.removeAll()
             retryTokens.removeAll()
             desiredPeerID = nil
@@ -414,6 +419,19 @@ public final class NetworkClipboardTransport: ClipboardTransport, @unchecked Sen
                 guard envelope.senderDeviceID == deviceID else {
                     throw NetworkClipboardError.authenticationFailed
                 }
+                let parked = self.lock.clipboardWithLock { () -> Bool in
+                    guard self.parkedConnections[deviceID] === secure else { return false }
+                    var updates = self.parkedUpdates[objectID, default: []]
+                    updates.append(envelope)
+                    self.parkedUpdates[objectID] = Array(updates.suffix(Self.maximumParkedUpdates))
+                    return true
+                }
+                if parked {
+                    Self.logger.info(
+                        "Clipboard buffered an update from parked peer \(Self.label(deviceID), privacy: .public)"
+                    )
+                    return
+                }
                 self.emit(.update(deviceID, envelope))
             } catch {
                 self.emit(.failure(deviceID))
@@ -486,6 +504,7 @@ public final class NetworkClipboardTransport: ClipboardTransport, @unchecked Sen
                 let expired = self.lock.clipboardWithLock { () -> Bool in
                     guard self.parkedConnections[deviceID] === secure else { return false }
                     self.parkedConnections.removeValue(forKey: deviceID)
+                    self.parkedUpdates.removeValue(forKey: ObjectIdentifier(secure))
                     return true
                 }
                 guard expired else { return }
@@ -501,6 +520,10 @@ public final class NetworkClipboardTransport: ClipboardTransport, @unchecked Sen
             )
             replaced?.cancel()
             if newlyConnected { emit(.connected(deviceID)) }
+            let buffered = lock.clipboardWithLock {
+                parkedUpdates.removeValue(forKey: ObjectIdentifier(secure)) ?? []
+            }
+            for envelope in buffered { emit(.update(deviceID, envelope)) }
         }
         queue.asyncAfter(deadline: .now() + 10) { [weak self, weak secure] in
             guard let self, let secure else { return }
@@ -518,6 +541,7 @@ public final class NetworkClipboardTransport: ClipboardTransport, @unchecked Sen
     ) {
         let removedDeviceID: DeviceID? = lock.clipboardWithLock {
             pendingConnections.removeValue(forKey: objectID)
+            parkedUpdates.removeValue(forKey: ObjectIdentifier(secure))
             if let deviceID = secure.deviceID, parkedConnections[deviceID] === secure {
                 parkedConnections.removeValue(forKey: deviceID)
             }

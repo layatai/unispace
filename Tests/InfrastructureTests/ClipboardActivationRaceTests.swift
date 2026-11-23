@@ -50,6 +50,43 @@ final class ClipboardActivationRaceTests: XCTestCase {
         await macTransport.stop()
     }
 
+    func testUpdateSentOnParkedConnectionIsDeliveredAfterPromotion() async throws {
+        let macTransport = try await startMac(desiredPeer: nil)
+        let macEvents = EventRecorder(macTransport.events())
+        let peerTransport = try await startPeer(dialing: macTransport)
+        let peerEvents = EventRecorder(peerTransport.events())
+
+        let peerConnected = await peerEvents.waitFor { $0 == .connected(Self.mac.id) }
+        XCTAssertTrue(peerConnected)
+        // The peer flushes its pending copy as soon as it sees the channel up,
+        // while the Mac still has the connection parked.
+        try await peerTransport.send(envelope(from: peer, text: "peer to mac"), to: mac.id)
+        try await Task.sleep(for: .milliseconds(150))
+        let earlyUpdates = await macEvents.count {
+            if case .update = $0 { return true }
+            return false
+        }
+        XCTAssertEqual(earlyUpdates, 0, "Parked updates must not reach the coordinator before .connected")
+
+        macTransport.setDesiredPeer(peer.id)
+        let delivered = await macEvents.waitFor {
+            if case let .update(_, envelope) = $0 { return envelope.payload.plainText == "peer to mac" }
+            return false
+        }
+        XCTAssertTrue(delivered)
+        let events = await macEvents.snapshot()
+        let connectedIndex = events.firstIndex(of: .connected(Self.peer.id))
+        let updateIndex = events.firstIndex {
+            if case .update = $0 { return true }
+            return false
+        }
+        XCTAssertNotNil(connectedIndex)
+        XCTAssertLessThan(try XCTUnwrap(connectedIndex), try XCTUnwrap(updateIndex))
+
+        await peerTransport.stop()
+        await macTransport.stop()
+    }
+
     func testParkedInboundPeerIsClosedWhenItNeverBecomesTheDesiredPeer() async throws {
         let macTransport = try await startMac(desiredPeer: nil, parkingGrace: 0.2)
         let macEvents = EventRecorder(macTransport.events())
@@ -204,6 +241,8 @@ private final class EventRecorder: @unchecked Sendable {
         }
         return await storage.events.contains(where: predicate)
     }
+
+    func snapshot() async -> [ClipboardTransportEvent] { await storage.events }
 
     func count(_ predicate: @escaping @Sendable (ClipboardTransportEvent) -> Bool) async -> Int {
         await storage.events.filter(predicate).count
